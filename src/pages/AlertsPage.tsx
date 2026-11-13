@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import type { FormEvent } from 'react'
 import {
   BellRing,
   CircleCheck,
@@ -30,10 +29,6 @@ function formatPrice(price: number) {
 
 function getPriceChange(product: Product) {
   return ((product.price - product.previousPrice) / product.previousPrice) * 100
-}
-
-function isAlertType(value: string): value is AlertType {
-  return value === 'target-price' || value === 'percentage-drop'
 }
 
 function ProductThumbnail({ product }: { product: Product }) {
@@ -80,7 +75,7 @@ function AlertForm({
         : selectedProduct.price * (1 - numericThreshold / 100)
       : null
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
     if (!selectedProduct) {
@@ -139,12 +134,10 @@ function AlertForm({
           <select
             value={type}
             onChange={(event) => {
-              const nextType = event.currentTarget.value
-              if (isAlertType(nextType)) {
-                setType(nextType)
-                setThreshold(nextType === 'target-price' ? '300' : '10')
-                setError('')
-              }
+              const nextType = event.currentTarget.value as AlertType
+              setType(nextType)
+              setThreshold(nextType === 'target-price' ? '300' : '10')
+              setError('')
             }}
             className="mt-1.5 h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-200 outline-none transition focus:border-blue-400/40"
           >

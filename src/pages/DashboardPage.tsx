@@ -52,13 +52,10 @@ export function DashboardPage() {
         <div>
           <div className="mb-2 inline-flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.15em] text-emerald-300">
             <Sparkles size={13} />
-            Your overview
+            overview
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-[30px]">
-            Good morning, Jordan
-          </h1>
           <p className="mt-2 text-xs text-slate-500 sm:text-sm">
-            Here&apos;s what&apos;s happening with your tracked prices today.
+            Here&apos;s what&apos;s happening with tracked prices today.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
