@@ -16,60 +16,25 @@ import {
   getPriceChangePercent,
   matchesDemoProduct,
 } from './demoProducts'
+import { products as catalogProducts } from '../../data/products'
+import {
+  createStorePriceHistory,
+  priceHistoryPeriods,
+} from '../../data/priceHistory'
+import type {
+  PriceHistoryPeriod,
+  PriceHistoryPoint,
+} from '../../data/priceHistory'
 import {
   DashboardEmptyState,
   DashboardSkeleton,
 } from './DashboardDataState'
 
-const products: { name: string; basePrice: number }[] = demoProducts.map(
-  ({ name, currentPrice }) => ({
-    name,
-    basePrice: currentPrice,
-  }),
+const products = catalogProducts.filter((product) =>
+  demoProducts.some((demoProduct) => demoProduct.name === product.name),
 )
 
-const periods = {
-  '7D': { days: 7, points: 7 },
-  '30D': { days: 30, points: 15 },
-  '90D': { days: 90, points: 13 },
-  '1Y': { days: 365, points: 13 },
-} as const
-
-type Period = keyof typeof periods
-type PricePoint = { date: string; price: number }
-
-const demoEndDate = new Date(2026, 10, 11)
-
-function createDemoPrices(
-  product: (typeof products)[number],
-  period: Period,
-): PricePoint[] {
-  const { days, points } = periods[period]
-  const startPrice = product.basePrice * 1.08
-
-  return Array.from({ length: points }, (_, index) => {
-    const progress = index / (points - 1)
-    const date = new Date(demoEndDate)
-    date.setDate(date.getDate() - Math.round(days * (1 - progress)))
-    const wave =
-      Math.sin(index * 1.7) *
-      product.basePrice *
-      0.018 *
-      Math.sin(Math.PI * progress)
-    const price = startPrice + (product.basePrice - startPrice) * progress + wave
-
-    return {
-      date: formatDateKey(date),
-      price: Math.round(price * 100) / 100,
-    }
-  })
-}
-
-function formatDateKey(date: Date) {
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${date.getFullYear()}-${month}-${day}`
-}
+type Period = PriceHistoryPeriod
 
 export function PriceTrendChart({
   loading = false,
@@ -92,7 +57,10 @@ export function PriceTrendChart({
     matchingProducts.find((item) => item.name === selectedProduct) ??
     matchingProducts[0] ??
     products[0]
-  const data = useMemo(() => createDemoPrices(product, period), [product, period])
+  const data = useMemo(
+    () => createStorePriceHistory(product, product.price, period, 0),
+    [product, period],
+  )
   const firstPrice = data[0].price
   const currentPrice = data[data.length - 1].price
   const priceChange = getPriceChangePercent(firstPrice, currentPrice)
@@ -163,7 +131,7 @@ export function PriceTrendChart({
           aria-label="Select chart date range"
           className="flex items-center gap-0.5 rounded-xl border border-white/[0.07] bg-[#090e18] p-1"
         >
-          {(Object.keys(periods) as Period[]).map((range) => (
+          {(Object.keys(priceHistoryPeriods) as Period[]).map((range) => (
             <button
               key={range}
               type="button"
@@ -248,7 +216,7 @@ export function PriceTrendChart({
               cursor={{ stroke: 'rgba(148, 163, 184, 0.25)', strokeDasharray: '4 4' }}
               content={(props) => {
                 if (!props.active || !props.payload?.length) return null
-                const point = props.payload[0].payload as PricePoint
+                const point = props.payload[0].payload as PriceHistoryPoint
 
                 return (
                   <div className="rounded-xl border border-white/10 bg-[#111827] px-3 py-2 shadow-xl">
@@ -387,13 +355,9 @@ export function RecentPriceChanges({
             Updates across your tracked products
           </p>
         </div>
-        <button
-          type="button"
-          aria-label="More price change options"
-          className="rounded-lg p-2 text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-200"
-        >
+        <span aria-hidden="true" className="rounded-lg p-2 text-slate-500">
           <MoreHorizontal size={19} />
-        </button>
+        </span>
       </div>
       <div className="divide-y divide-white/[0.05]">
         {matchingChanges.map((item) => (

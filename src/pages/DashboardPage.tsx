@@ -12,6 +12,7 @@ import { PriceTrendChart, RecentPriceChanges } from '../components/dashboard/Pri
 import { PriceHighlights } from '../components/dashboard/PriceHighlights'
 import { StatCard } from '../components/dashboard/StatCard'
 import { DashboardErrorState } from '../components/dashboard/DashboardDataState'
+import type { AppOutletContext } from '../context/AppOutletContext'
 
 const dashboardDemoStates = ['loading', 'ready', 'empty', 'error'] as const
 type DashboardDemoState = (typeof dashboardDemoStates)[number]
@@ -21,7 +22,8 @@ function isDashboardDemoState(value: string): value is DashboardDemoState {
 }
 
 export function DashboardPage() {
-  const { searchQuery } = useOutletContext<{ searchQuery: string }>()
+  const { searchQuery, watchlistIds } =
+    useOutletContext<AppOutletContext>()
   const [demoState, setDemoState] = useState<DashboardDemoState>('loading')
 
   useEffect(() => {
@@ -121,9 +123,9 @@ export function DashboardPage() {
             />
             <StatCard
               label="Watchlist"
-              value={12}
-              change="+4"
-              detail="saved products"
+              value={watchlistIds.length}
+              change="Synced"
+              detail="with Watchlist"
               icon={Bookmark}
               tone="blue"
               loading={demoState === 'loading'}

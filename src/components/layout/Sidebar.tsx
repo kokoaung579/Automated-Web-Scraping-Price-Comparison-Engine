@@ -1,11 +1,14 @@
 import {
   Activity,
+  Bell,
   BellRing,
   Boxes,
   ChartNoAxesCombined,
+  History,
   LayoutDashboard,
   Radar,
   ScrollText,
+  Settings2,
   X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -15,18 +18,31 @@ const navigation: { label: string; to: string; icon: LucideIcon }[] = [
   { label: 'Dashboard', to: '/', icon: LayoutDashboard },
   { label: 'Products', to: '/products', icon: Boxes },
   { label: 'Price comparison', to: '/comparison', icon: ChartNoAxesCombined },
+  { label: 'Price history', to: '/price-history', icon: History },
   { label: 'Scraping Logs', to: '/scraping-logs', icon: ScrollText },
   { label: 'Watchlist', to: '/watchlist', icon: Activity },
   { label: 'Alerts', to: '/alerts', icon: BellRing },
+  { label: 'Notifications', to: '/notifications', icon: Bell },
+  { label: 'Settings', to: '/settings', icon: Settings2 },
 ]
 
 type SidebarProps = {
   isOpen: boolean
   isCollapsed: boolean
   onNavigate: () => void
+  watchlistCount: number
+  alertsCount: number
+  unreadNotificationCount: number
 }
 
-export function Sidebar({ isOpen, isCollapsed, onNavigate }: SidebarProps) {
+export function Sidebar({
+  isOpen,
+  isCollapsed,
+  onNavigate,
+  watchlistCount,
+  alertsCount,
+  unreadNotificationCount,
+}: SidebarProps) {
   return (
     <aside
       className={`fixed inset-y-0 left-0 z-50 flex w-[250px] flex-col border-r border-white/[0.07] bg-[#0b101b] px-4 py-5 transition-[width,transform] duration-300 ease-out ${
@@ -121,9 +137,19 @@ export function Sidebar({ isOpen, isCollapsed, onNavigate }: SidebarProps) {
                   }`}
                 >
                   {label}
+                  {label === 'Watchlist' && (
+                    <span className="ml-2 rounded-md bg-blue-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-blue-300">
+                      {watchlistCount}
+                    </span>
+                  )}
                   {label === 'Alerts' && (
                     <span className="ml-2 rounded-md bg-emerald-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">
-                      3
+                      {alertsCount}
+                    </span>
+                  )}
+                  {label === 'Notifications' && (
+                    <span className="ml-2 rounded-md bg-blue-400/10 px-1.5 py-0.5 text-[10px] font-semibold text-blue-300">
+                      {unreadNotificationCount}
                     </span>
                   )}
                 </span>

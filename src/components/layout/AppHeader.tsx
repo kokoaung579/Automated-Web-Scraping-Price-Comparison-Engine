@@ -1,38 +1,36 @@
 import { useState } from 'react'
 import {
   Bell,
-  ChevronDown,
   Menu,
   Search,
   Settings2,
   X,
 } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import type { DemoNotification } from '../../context/AppOutletContext'
+import { products } from '../../data/products'
 
 type AppHeaderProps = {
   onMenuClick: () => void
   onSearchChange: (query: string) => void
+  notifications: DemoNotification[]
+  unreadNotificationCount: number
 }
 
-const notifications = [
-  {
-    title: 'Sony WH-1000XM5 price dropped',
-    description: 'Now $328.00 at Amazon',
-    time: '12 min ago',
-  },
-  {
-    title: 'Price check completed',
-    description: 'Apple AirPods Pro 2 at Walmart',
-    time: '28 min ago',
-  },
-  {
-    title: 'Bose QuietComfort Ultra price increased',
-    description: 'Now $349.00 at Best Buy',
-    time: '1 hr ago',
-  },
-]
-
-export function AppHeader({ onMenuClick, onSearchChange }: AppHeaderProps) {
+export function AppHeader({
+  onMenuClick,
+  onSearchChange,
+  notifications,
+  unreadNotificationCount,
+}: AppHeaderProps) {
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const recentNotifications = [...notifications]
+    .sort(
+      (first, second) =>
+        new Date(second.createdAt).getTime() -
+        new Date(first.createdAt).getTime(),
+    )
+    .slice(0, 3)
 
   return (
     <header className="sticky top-0 z-30 border-b border-white/[0.07] bg-[#090e18]/90 backdrop-blur-xl">
@@ -65,20 +63,21 @@ export function AppHeader({ onMenuClick, onSearchChange }: AppHeaderProps) {
         </label>
 
         <div className="ml-auto flex items-center gap-2 sm:gap-3">
-          <button
-            type="button"
-            aria-label="Preferences"
+          <Link
+            to="/settings"
+            aria-label="Settings"
+            title="Settings"
             className="hidden rounded-xl p-2.5 text-slate-400 transition hover:bg-white/[0.05] hover:text-slate-100 sm:block"
           >
             <Settings2 size={18} />
-          </button>
+          </Link>
           <div className="relative">
             <button
               type="button"
               aria-label={
                 notificationsOpen
                   ? 'Close notifications'
-                  : 'Open notifications, 3 unread'
+                  : `Open notifications, ${unreadNotificationCount} unread`
               }
               aria-expanded={notificationsOpen}
               aria-controls={
@@ -88,7 +87,9 @@ export function AppHeader({ onMenuClick, onSearchChange }: AppHeaderProps) {
               className="relative rounded-xl border border-white/[0.08] p-2.5 text-slate-300 transition hover:bg-white/[0.05] hover:text-white"
             >
               <Bell size={18} />
-              <span className="absolute right-2 top-2 size-1.5 rounded-full bg-emerald-400 ring-2 ring-[#090e18]" />
+              {unreadNotificationCount > 0 && (
+                <span className="absolute right-2 top-2 size-1.5 rounded-full bg-emerald-400 ring-2 ring-[#090e18]" />
+              )}
             </button>
             {notificationsOpen && (
               <section
@@ -102,7 +103,7 @@ export function AppHeader({ onMenuClick, onSearchChange }: AppHeaderProps) {
                       Notifications
                     </h2>
                     <p className="mt-0.5 text-[10px] text-slate-500">
-                      Recent price activity
+                      {unreadNotificationCount} unread
                     </p>
                   </div>
                   <button
@@ -114,49 +115,61 @@ export function AppHeader({ onMenuClick, onSearchChange }: AppHeaderProps) {
                     <X size={15} />
                   </button>
                 </div>
-                <div className="divide-y divide-white/[0.05]">
-                  {notifications.map((notification) => (
-                    <article
-                      key={notification.title}
-                      className="flex gap-3 px-4 py-3 transition hover:bg-white/[0.025]"
-                    >
-                      <span className="mt-1.5 size-2 shrink-0 rounded-full bg-emerald-400" />
-                      <div className="min-w-0 flex-1">
-                        <h3 className="text-xs font-medium text-slate-200">
-                          {notification.title}
-                        </h3>
-                        <p className="mt-1 text-[11px] text-slate-400">
-                          {notification.description}
-                        </p>
-                        <p className="mt-1.5 text-[10px] text-slate-600">
-                          {notification.time}
-                        </p>
-                      </div>
-                    </article>
-                  ))}
-                </div>
+                {recentNotifications.length > 0 ? (
+                  <div className="divide-y divide-white/[0.05]">
+                    {recentNotifications.map((notification) => {
+                      const product = products.find(
+                        (item) => item.id === notification.productId,
+                      )
+                      const date = new Date(notification.createdAt)
+
+                      return (
+                        <article
+                          key={notification.id}
+                          className="flex gap-3 px-4 py-3 transition hover:bg-white/[0.025]"
+                        >
+                          <span
+                            className={`mt-1.5 size-2 shrink-0 rounded-full ${
+                              notification.isRead
+                                ? 'bg-slate-600'
+                                : 'bg-emerald-400'
+                            }`}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <h3 className="text-xs font-medium text-slate-200">
+                              {product?.name ?? 'PricePilot'}
+                            </h3>
+                            <p className="mt-1 text-[11px] text-slate-400">
+                              {notification.message}
+                            </p>
+                            <p className="mt-1.5 text-[10px] text-slate-600">
+                              {date.toLocaleString('en-US', {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: 'numeric',
+                                minute: '2-digit',
+                              })}
+                            </p>
+                          </div>
+                        </article>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <p className="px-4 py-6 text-center text-xs text-slate-500">
+                    No notifications yet.
+                  </p>
+                )}
+                <Link
+                  to="/notifications"
+                  onClick={() => setNotificationsOpen(false)}
+                  className="block border-t border-white/[0.06] px-4 py-3 text-center text-[11px] font-medium text-blue-300 transition hover:bg-white/[0.025] hover:text-blue-200"
+                >
+                  View all notifications
+                </Link>
               </section>
             )}
           </div>
-          <div className="mx-1 hidden h-8 w-px bg-white/[0.08] sm:block" />
-          <button
-            type="button"
-            aria-label="Open profile menu"
-            className="flex items-center gap-2.5 rounded-xl py-1 pl-1 pr-1.5 text-left transition hover:bg-white/[0.04]"
-          >
-            <span className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-400 to-emerald-400 text-xs font-bold text-slate-950">
-              JD
-            </span>
-            <span className="hidden sm:block">
-              <span className="block text-xs font-medium text-slate-200">
-                Jordan Davis
-              </span>
-              <span className="mt-0.5 block text-[10px] text-slate-500">
-                Workspace
-              </span>
-            </span>
-            <ChevronDown size={14} className="hidden text-slate-500 sm:block" />
-          </button>
         </div>
       </div>
     </header>

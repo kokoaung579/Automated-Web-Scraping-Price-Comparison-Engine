@@ -1,100 +1,16 @@
 import { useMemo, useState } from 'react'
 import {
   ArrowDown,
-  ArrowLeft,
   ArrowUp,
+  Bookmark,
   Boxes,
-  Camera,
-  Ear,
-  Gamepad2,
-  Headphones,
   Search,
-  Smartphone,
   Store,
 } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
-import { Link, Navigate, useOutletContext, useParams } from 'react-router-dom'
-
-type Product = {
-  id: string
-  name: string
-  category: string
-  store: string
-  price: number
-  previousPrice: number
-  updated: string
-  icon: LucideIcon
-  tone: string
-}
-
-const products: Product[] = [
-  {
-    id: 'sony-wh-1000xm5',
-    name: 'Sony WH-1000XM5',
-    category: 'Audio',
-    store: 'Amazon',
-    price: 328,
-    previousPrice: 379.99,
-    updated: '12 min ago',
-    icon: Headphones,
-    tone: 'text-blue-200 from-blue-400/20 to-blue-500/5',
-  },
-  {
-    id: 'bose-quietcomfort-ultra',
-    name: 'Bose QuietComfort Ultra',
-    category: 'Audio',
-    store: 'Best Buy',
-    price: 349,
-    previousPrice: 329,
-    updated: '18 min ago',
-    icon: Headphones,
-    tone: 'text-amber-200 from-amber-400/20 to-amber-500/5',
-  },
-  {
-    id: 'apple-airpods-pro-2',
-    name: 'Apple AirPods Pro 2',
-    category: 'Audio',
-    store: 'Walmart',
-    price: 189.99,
-    previousPrice: 199,
-    updated: '28 min ago',
-    icon: Ear,
-    tone: 'text-slate-200 from-slate-300/15 to-slate-500/5',
-  },
-  {
-    id: 'nintendo-switch-oled',
-    name: 'Nintendo Switch OLED',
-    category: 'Gaming',
-    store: 'Target',
-    price: 319.99,
-    previousPrice: 349.99,
-    updated: '42 min ago',
-    icon: Gamepad2,
-    tone: 'text-rose-200 from-rose-400/20 to-rose-500/5',
-  },
-  {
-    id: 'canon-eos-r50',
-    name: 'Canon EOS R50',
-    category: 'Cameras',
-    store: 'B&H Photo',
-    price: 679,
-    previousPrice: 699,
-    updated: '1 hr ago',
-    icon: Camera,
-    tone: 'text-violet-200 from-violet-400/20 to-violet-500/5',
-  },
-  {
-    id: 'samsung-galaxy-s24',
-    name: 'Samsung Galaxy S24',
-    category: 'Phones',
-    store: 'Amazon',
-    price: 699.99,
-    previousPrice: 749.99,
-    updated: '2 hrs ago',
-    icon: Smartphone,
-    tone: 'text-emerald-200 from-emerald-400/20 to-emerald-500/5',
-  },
-]
+import { Link, useNavigate, useOutletContext } from 'react-router-dom'
+import type { AppOutletContext } from '../context/AppOutletContext'
+import { products } from '../data/products'
+import type { Product } from '../data/products'
 
 type PriceRange = 'all' | 'under-200' | '200-400' | 'over-400'
 type SortOrder = 'recent' | 'price-low' | 'price-high' | 'name'
@@ -188,7 +104,50 @@ function PriceChange({ product }: { product: Product }) {
   )
 }
 
-function ProductCard({ product }: { product: Product }) {
+function BookmarkButton({
+  product,
+  isBookmarked,
+  onToggle,
+}: {
+  product: Product
+  isBookmarked: boolean
+  onToggle: (product: Product) => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={`${
+        isBookmarked ? 'Remove' : 'Add'
+      } ${product.name} ${isBookmarked ? 'from' : 'to'} Watchlist`}
+      aria-pressed={isBookmarked}
+      onClick={(event) => {
+        event.stopPropagation()
+        onToggle(product)
+      }}
+      className={`inline-flex size-8 shrink-0 items-center justify-center rounded-lg border transition ${
+        isBookmarked
+          ? 'border-blue-400/20 bg-blue-400/[0.08] text-blue-300 hover:bg-blue-400/[0.14]'
+          : 'border-white/[0.07] bg-white/[0.02] text-slate-500 hover:border-blue-400/20 hover:text-blue-300'
+      }`}
+    >
+      <Bookmark
+        aria-hidden="true"
+        size={15}
+        fill={isBookmarked ? 'currentColor' : 'none'}
+      />
+    </button>
+  )
+}
+
+function ProductCard({
+  product,
+  isBookmarked,
+  onToggleWatchlist,
+}: {
+  product: Product
+  isBookmarked: boolean
+  onToggleWatchlist: (product: Product) => void
+}) {
   return (
     <article className="group rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 transition duration-200 hover:-translate-y-0.5 hover:border-blue-400/20 hover:bg-[#101827] hover:shadow-lg hover:shadow-blue-950/20">
       <div className="flex items-start gap-3">
@@ -218,22 +177,88 @@ function ProductCard({ product }: { product: Product }) {
       </div>
       <div className="mt-3 flex items-center justify-between text-[10px] text-slate-600">
         <span>Updated {product.updated}</span>
-        <Link
-          to={`/products/${product.id}`}
-          className="font-medium text-blue-300 transition hover:text-blue-200"
+        <div className="flex items-center gap-2">
+          <Link
+            to={`/products/${product.id}`}
+            className="font-medium text-blue-300 transition hover:text-blue-200"
+          >
+            View details
+          </Link>
+          <BookmarkButton
+            product={product}
+            isBookmarked={isBookmarked}
+            onToggle={onToggleWatchlist}
+          />
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function WatchlistCard({
+  product,
+  addedAt,
+  onRemove,
+}: {
+  product: Product
+  addedAt: string
+  onRemove: (product: Product) => void
+}) {
+  return (
+    <article className="group rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 transition duration-200 hover:border-blue-400/20 hover:bg-[#101827]">
+      <div className="flex items-start gap-3">
+        <ProductThumbnail product={product} />
+        <div className="min-w-0 flex-1">
+          <Link
+            to={`/products/${product.id}`}
+            className="block truncate text-xs font-semibold text-slate-200 transition hover:text-blue-300"
+          >
+            {product.name}
+          </Link>
+          <p className="mt-1 inline-flex items-center gap-1 text-[10px] text-slate-500">
+            <Store aria-hidden="true" size={12} />
+            {product.store}
+          </p>
+        </div>
+        <PriceChange product={product} />
+      </div>
+      <div className="mt-4 flex flex-wrap items-end justify-between gap-3 border-t border-white/[0.06] pt-3">
+        <div>
+          <p className="text-[10px] text-slate-500">Current price</p>
+          <p className="mt-1 text-base font-semibold text-white">
+            {formatPrice(product.price)}
+          </p>
+        </div>
+        <p className="text-[10px] text-slate-500">
+          Added {new Date(addedAt).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          })}
+        </p>
+      </div>
+      <div className="mt-3 flex justify-end border-t border-white/[0.06] pt-3">
+        <button
+          type="button"
+          onClick={() => onRemove(product)}
+          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[10px] font-medium text-slate-400 transition hover:bg-rose-400/[0.08] hover:text-rose-300"
         >
-          View details
-        </Link>
+          <Bookmark aria-hidden="true" size={13} />
+          Remove from Watchlist
+        </button>
       </div>
     </article>
   )
 }
 
 export function ProductsPage() {
-  const { searchQuery: headerQuery, setSearchQuery } = useOutletContext<{
-    searchQuery: string
-    setSearchQuery: (query: string) => void
-  }>()
+  const navigate = useNavigate()
+  const {
+    searchQuery: headerQuery,
+    setSearchQuery,
+    watchlistIds,
+    toggleWatchlist,
+  } = useOutletContext<AppOutletContext>()
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
   const [priceRange, setPriceRange] = useState<PriceRange>('all')
@@ -367,7 +392,12 @@ export function ProductsPage() {
             className="grid gap-4 sm:grid-cols-2 lg:hidden"
           >
             {filteredProducts.map((product) => (
-              <ProductCard key={product.id} product={product} />
+              <ProductCard
+                key={product.id}
+                product={product}
+                isBookmarked={watchlistIds.includes(product.id)}
+                onToggleWatchlist={toggleWatchlist}
+              />
             ))}
           </section>
 
@@ -396,22 +426,35 @@ export function ProductsPage() {
                   <th scope="col" className="px-5 py-3 text-right">
                     Updated
                   </th>
+                  <th scope="col" className="px-4 py-3 text-right">
+                    Watchlist
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.05]">
                 {filteredProducts.map((product) => (
                   <tr
                     key={product.id}
-                    className="transition-colors hover:bg-white/[0.02]"
+                    role="link"
+                    tabIndex={0}
+                    aria-label={`View details for ${product.name}`}
+                    onClick={() => navigate(`/products/${product.id}`)}
+                    onKeyDown={(event) => {
+                      if (
+                        event.target === event.currentTarget &&
+                        event.key === 'Enter'
+                      ) {
+                        event.preventDefault()
+                        navigate(`/products/${product.id}`)
+                      }
+                    }}
+                    className="group cursor-pointer transition-colors hover:bg-white/[0.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400/40"
                   >
                     <td className="px-5 py-3.5">
-                      <Link
-                        to={`/products/${product.id}`}
-                        className="flex items-center gap-3 text-xs font-medium text-slate-200 transition hover:text-blue-300"
-                      >
+                      <span className="flex items-center gap-3 text-xs font-medium text-slate-200 transition group-hover:text-blue-300">
                         <ProductThumbnail product={product} />
                         {product.name}
-                      </Link>
+                      </span>
                     </td>
                     <td className="px-4 py-3.5 text-xs text-slate-400">
                       {product.category}
@@ -426,12 +469,16 @@ export function ProductsPage() {
                       <PriceChange product={product} />
                     </td>
                     <td className="px-5 py-3.5 text-right">
-                      <Link
-                        to={`/products/${product.id}`}
-                        className="text-[11px] text-slate-500 transition hover:text-blue-300"
-                      >
+                      <span className="text-[11px] text-slate-500">
                         {product.updated}
-                      </Link>
+                      </span>
+                    </td>
+                    <td className="px-4 py-3.5 text-right">
+                      <BookmarkButton
+                        product={product}
+                        isBookmarked={watchlistIds.includes(product.id)}
+                        onToggle={toggleWatchlist}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -472,65 +519,73 @@ export function ProductsPage() {
   )
 }
 
-export function ProductDetailsPage() {
-  const { productId } = useParams()
-  const product = products.find((item) => item.id === productId)
-
-  if (!product) return <Navigate to="/products" replace />
-
-  const Icon = product.icon
+export function WatchlistPage() {
+  const { watchlistEntries, toggleWatchlist } =
+    useOutletContext<AppOutletContext>()
+  const watchlistedProducts = products.flatMap((product) => {
+    const entry = watchlistEntries.find(
+      (watchlistEntry) => watchlistEntry.productId === product.id,
+    )
+    return entry ? [{ product, entry }] : []
+  })
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <Link
-        to="/products"
-        className="inline-flex items-center gap-2 text-xs font-medium text-slate-400 transition hover:text-white"
-      >
-        <ArrowLeft size={15} />
-        Back to products
-      </Link>
-      <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-7">
-        <div className="flex flex-wrap items-start gap-4">
-          <ProductThumbnail product={product} />
-          <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-medium uppercase tracking-[0.15em] text-blue-300">
-              {product.category}
-            </p>
-            <h1 className="mt-1 text-xl font-semibold tracking-tight text-white sm:text-2xl">
-              {product.name}
-            </h1>
-            <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-400">
-              <Store size={13} />
-              Tracked at {product.store}
-            </p>
+    <div className="space-y-6">
+      <section className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <div className="mb-2 inline-flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.15em] text-blue-300">
+            <Bookmark size={13} />
+            Saved products
           </div>
-          <PriceChange product={product} />
+          <h1 className="text-2xl font-semibold tracking-tight text-white sm:text-[30px]">
+            Watchlist
+          </h1>
+          <p className="mt-2 text-xs text-slate-500 sm:text-sm">
+            Keep an eye on products you want to track.
+          </p>
         </div>
-        <div className="mt-6 grid gap-3 border-t border-white/[0.06] pt-5 sm:grid-cols-3">
-          <div className="rounded-xl border border-white/[0.05] bg-[#0a101b]/70 p-4">
-            <p className="text-[10px] text-slate-500">Current price</p>
-            <p className="mt-2 text-lg font-semibold text-white">
-              {formatPrice(product.price)}
-            </p>
-          </div>
-          <div className="rounded-xl border border-white/[0.05] bg-[#0a101b]/70 p-4">
-            <p className="text-[10px] text-slate-500">Previous price</p>
-            <p className="mt-2 text-lg font-semibold text-slate-300">
-              {formatPrice(product.previousPrice)}
-            </p>
-          </div>
-          <div className="rounded-xl border border-white/[0.05] bg-[#0a101b]/70 p-4">
-            <p className="text-[10px] text-slate-500">Last updated</p>
-            <p className="mt-2 text-sm font-semibold text-slate-200">
-              {product.updated}
-            </p>
-          </div>
-        </div>
-        <div className="mt-4 flex items-center gap-2 rounded-xl border border-blue-400/10 bg-blue-400/[0.04] p-3 text-xs text-slate-400">
-          <Icon aria-hidden="true" size={16} className="text-blue-300" />
-          Demo product details — no store connection required.
-        </div>
+        <span className="rounded-xl border border-white/[0.07] bg-[#0d1320] px-3 py-2 text-[11px] text-slate-400">
+          {watchlistedProducts.length} saved
+        </span>
       </section>
+
+      {watchlistedProducts.length > 0 ? (
+        <section
+          aria-label="Watchlisted products"
+          className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"
+        >
+          {watchlistedProducts.map(({ product, entry }) => (
+            <WatchlistCard
+              key={product.id}
+              product={product}
+              addedAt={entry.addedAt}
+              onRemove={toggleWatchlist}
+            />
+          ))}
+        </section>
+      ) : (
+        <section
+          role="status"
+          className="flex min-h-[260px] flex-col items-center justify-center rounded-2xl border border-white/[0.07] bg-[#0d1320] px-5 text-center"
+        >
+          <span className="flex size-11 items-center justify-center rounded-xl bg-blue-400/[0.08] text-blue-300">
+            <Bookmark aria-hidden="true" size={20} />
+          </span>
+          <h2 className="mt-3 text-sm font-semibold text-white">
+            Your Watchlist is empty
+          </h2>
+          <p className="mt-1 max-w-xs text-[11px] leading-5 text-slate-500">
+            Bookmark products from the catalog to keep them close.
+          </p>
+          <Link
+            to="/products"
+            className="mt-4 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-xs font-medium text-slate-300 transition hover:bg-white/[0.07] hover:text-white"
+          >
+            Browse products
+          </Link>
+        </section>
+      )}
     </div>
   )
 }
+

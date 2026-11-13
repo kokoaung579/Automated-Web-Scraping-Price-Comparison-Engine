@@ -15,3 +15,153 @@ body {
   min-height: 100vh;
   margin: 0;
 }
+
+html[data-theme='light'] {
+  color-scheme: light;
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+html[data-theme='light'] body {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+html[data-theme='light'] [class*='bg-[#070b14'],
+html[data-theme='light'] [class*='bg-[#0b101b'] {
+  background-color: #f1f5f9 !important;
+}
+
+html[data-theme='light'] [class*='bg-[#0d1320'],
+html[data-theme='light'] [class*='bg-[#0d1720'],
+html[data-theme='light'] [class*='bg-[#111827'] {
+  background-color: #ffffff !important;
+}
+
+html[data-theme='light'] [class*='bg-[#090e18'],
+html[data-theme='light'] [class*='bg-[#0a101b'],
+html[data-theme='light'] [class*='bg-[#101827'],
+html[data-theme='light'] [class*='bg-[#111a29'] {
+  background-color: #f8fafc !important;
+}
+
+html[data-theme='light'] [class~='bg-slate-700'] {
+  background-color: #e2e8f0 !important;
+}
+
+html[data-theme='light'] [class*='bg-white/']:not([class*='hover:bg-white/']) {
+  background-color: #f1f5f9 !important;
+}
+
+html[data-theme='light'] [class*='hover:bg-white/']:hover {
+  background-color: #f1f5f9 !important;
+}
+
+html[data-theme='light'] [class*='via-[#'] {
+  --tw-gradient-via: #f8fafc !important;
+}
+
+html[data-theme='light'] [class*='border-white'],
+html[data-theme='light'] [class*='divide-white'] {
+  border-color: #d7e0eb !important;
+}
+
+html[data-theme='light'] [class*='ring-[#'] {
+  --tw-ring-color: #f8fafc !important;
+}
+
+html[data-theme='light'] [class~='text-white'],
+html[data-theme='light'] [class*='text-white/'] {
+  color: #0f172a !important;
+}
+
+html[data-theme='light'] [class*='bg-blue-500'][class~='text-white'] {
+  color: #ffffff !important;
+}
+
+html[data-theme='light'] [class*='hover:text-white']:hover {
+  color: #0f172a !important;
+}
+
+html[data-theme='light'] [class*='hover:text-slate-']:hover {
+  color: #1e293b !important;
+}
+
+html[data-theme='light'] .group:hover [class*='group-hover:text-blue-'] {
+  color: #1d4ed8 !important;
+}
+
+html[data-theme='light'] [class~='text-slate-100'],
+html[data-theme='light'] [class~='text-slate-200'],
+html[data-theme='light'] [class~='text-slate-300'] {
+  color: #1e293b !important;
+}
+
+html[data-theme='light'] [class~='text-slate-400'],
+html[data-theme='light'] [class~='text-slate-500'] {
+  color: #475569 !important;
+}
+
+html[data-theme='light'] [class~='text-slate-600'],
+html[data-theme='light'] [class~='text-slate-700'],
+html[data-theme='light'] [class~='text-slate-800'],
+html[data-theme='light'] [class~='text-slate-900'] {
+  color: #64748b !important;
+}
+
+html[data-theme='light'] [class~='text-blue-200'],
+html[data-theme='light'] [class~='text-blue-300'],
+html[data-theme='light'] [class*='text-blue-200/'],
+html[data-theme='light'] [class*='text-blue-300/'] {
+  color: #1d4ed8 !important;
+}
+
+html[data-theme='light'] [class~='text-emerald-200'],
+html[data-theme='light'] [class~='text-emerald-300'],
+html[data-theme='light'] [class~='text-emerald-400'],
+html[data-theme='light'] [class*='text-emerald-200/'],
+html[data-theme='light'] [class*='text-emerald-300/'] {
+  color: #047857 !important;
+}
+
+html[data-theme='light'] [class~='text-rose-200'],
+html[data-theme='light'] [class~='text-rose-300'],
+html[data-theme='light'] [class*='text-rose-200/'],
+html[data-theme='light'] [class*='text-rose-300/'] {
+  color: #be123c !important;
+}
+
+html[data-theme='light'] [class~='text-amber-200'],
+html[data-theme='light'] [class~='text-amber-300'],
+html[data-theme='light'] [class~='text-orange-300'],
+html[data-theme='light'] [class~='text-yellow-300'] {
+  color: #a16207 !important;
+}
+
+html[data-theme='light'] [class~='text-violet-200'],
+html[data-theme='light'] [class~='text-violet-300'] {
+  color: #6d28d9 !important;
+}
+
+html[data-theme='light'] input::placeholder,
+html[data-theme='light'] textarea::placeholder {
+  color: #64748b !important;
+  opacity: 1;
+}
+
+html[data-theme='light'] option {
+  background: #ffffff;
+  color: #0f172a;
+}
+
+html[data-theme='light'] .recharts-cartesian-grid line {
+  stroke: #d7e0eb !important;
+}
+
+html[data-theme='light'] .recharts-cartesian-axis-tick-value {
+  fill: #475569 !important;
+}
+
+html[data-theme='light'] .recharts-active-dot circle {
+  stroke: #f8fafc !important;
+}

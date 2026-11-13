@@ -1,34 +1,40 @@
-export const demoProducts = [
-  {
-    name: 'Sony WH-1000XM5',
-    category: 'Electronics',
-    storesTracked: 4,
-    store: 'Amazon',
-    previousPrice: 379.99,
-    currentPrice: 328,
-    thumbnail: 'headphones',
-  },
-  {
-    name: 'Bose QuietComfort Ultra',
-    category: 'Electronics',
-    storesTracked: 3,
-    store: 'Best Buy',
-    previousPrice: 329,
-    currentPrice: 349,
-    thumbnail: 'headphones',
-  },
-  {
-    name: 'Apple AirPods Pro 2',
-    category: 'Audio',
-    storesTracked: 5,
-    store: 'Walmart',
-    previousPrice: 199,
-    currentPrice: 189.99,
-    thumbnail: 'earbuds',
-  },
-] as const
+import { products } from '../../data/products'
 
-export type DemoProduct = (typeof demoProducts)[number]
+export type DemoProduct = {
+  name: string
+  category: string
+  storesTracked: number
+  store: string
+  previousPrice: number
+  currentPrice: number
+  thumbnail: 'headphones' | 'earbuds'
+}
+
+const dashboardProductDetails: Record<
+  string,
+  Pick<DemoProduct, 'storesTracked' | 'thumbnail'>
+> = {
+  'sony-wh-1000xm5': { storesTracked: 4, thumbnail: 'headphones' },
+  'bose-quietcomfort-ultra': { storesTracked: 3, thumbnail: 'headphones' },
+  'apple-airpods-pro-2': { storesTracked: 5, thumbnail: 'earbuds' },
+}
+
+export const demoProducts: DemoProduct[] = products.flatMap((product) => {
+  const details = dashboardProductDetails[product.id]
+  if (!details) return []
+
+  return [
+    {
+      name: product.name,
+      category: product.category,
+      storesTracked: details.storesTracked,
+      store: product.store,
+      previousPrice: product.previousPrice,
+      currentPrice: product.price,
+      thumbnail: details.thumbnail,
+    },
+  ]
+})
 
 export function getPriceChangePercent(previousPrice: number, currentPrice: number) {
   return ((currentPrice - previousPrice) / previousPrice) * 100
