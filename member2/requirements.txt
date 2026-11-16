@@ -21,6 +21,7 @@ pymongo==4.20.0
 pytest==9.2.0
 python-dotenv==1.2.4
 requests==2.34.2
+truststore==0.10.5
 soupsieve==4.1
 starlette==1.10.0
 typing-inspection==0.4.5

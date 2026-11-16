@@ -64,7 +64,9 @@ class FakePage:
 class FakeBrowser:
     def __init__(self, page):
         self.page = page
+        self.events = []
         self.close = MagicMock()
+        self.close.side_effect = lambda: self.events.append("browser.close")
 
     def new_page(self):
         return self.page
@@ -72,6 +74,7 @@ class FakeBrowser:
 
 class FakePlaywright:
     def __init__(self, browser):
+        self.browser = browser
         self.chromium = MagicMock()
         self.chromium.launch.return_value = browser
 
@@ -79,6 +82,7 @@ class FakePlaywright:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        self.browser.events.append("playwright.exit")
         return False
 
 
@@ -110,6 +114,7 @@ def test_scrape_quotes_extracts_quote_author_and_tags():
         headless=True,
     )
     browser.close.assert_called_once_with()
+    assert browser.events == ["browser.close", "playwright.exit"]
 
 
 def test_scrape_quotes_follows_next_page_until_finished():
@@ -175,3 +180,4 @@ def test_scrape_quotes_wraps_browser_errors_and_closes_browser():
             scrape_quotes()
 
     browser.close.assert_called_once_with()
+    assert browser.events == ["browser.close", "playwright.exit"]

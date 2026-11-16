@@ -40,46 +40,44 @@ def scrape_quotes() -> list[dict]:
     results = []
     visited_urls = set()
     current_url = BASE_URL
-    browser = None
-
     try:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(
                 channel="chrome",
                 headless=True,
             )
-            page = browser.new_page()
+            try:
+                page = browser.new_page()
 
-            while current_url not in visited_urls:
-                visited_urls.add(current_url)
+                while current_url not in visited_urls:
+                    visited_urls.add(current_url)
 
-                page.goto(
-                    current_url,
-                    wait_until="domcontentloaded",
-                    timeout=TIMEOUT,
-                )
-                page.wait_for_selector("div.quote", timeout=TIMEOUT)
+                    page.goto(
+                        current_url,
+                        wait_until="domcontentloaded",
+                        timeout=TIMEOUT,
+                    )
+                    page.wait_for_selector("div.quote", timeout=TIMEOUT)
 
-                quotes = page.locator("div.quote").all()
-                results.extend(_extract_quote(quote) for quote in quotes)
+                    quotes = page.locator("div.quote").all()
+                    results.extend(_extract_quote(quote) for quote in quotes)
 
-                next_locator = page.locator("li.next a")
-                if not next_locator.count():
-                    break
+                    next_locator = page.locator("li.next a")
+                    if not next_locator.count():
+                        break
 
-                next_href = next_locator.get_attribute("href")
-                if not next_href:
-                    break
+                    next_href = next_locator.get_attribute("href")
+                    if not next_href:
+                        break
 
-                next_url = urljoin(current_url, next_href)
-                if next_url in visited_urls:
-                    break
+                    next_url = urljoin(current_url, next_href)
+                    if next_url in visited_urls:
+                        break
 
-                current_url = next_url
+                    current_url = next_url
+            finally:
+                browser.close()
     except Exception as exc:
         raise RuntimeError("Failed to scrape quotes with Playwright.") from exc
-    finally:
-        if browser is not None:
-            browser.close()
 
     return results
