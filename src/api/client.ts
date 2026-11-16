@@ -1,5 +1,5 @@
 import { Camera, Ear, Gamepad2, Headphones, Smartphone } from 'lucide-react'
-import type { Product } from '../data/products'
+import type { DemoProduct } from '../data/products'
 import type {
   DemoNotification,
   PriceAlert,
@@ -8,7 +8,7 @@ import type {
 import type { PriceHistoryPeriod, PriceHistoryPoint } from '../data/priceHistory'
 import type { StoreOffer } from '../data/storeOffers'
 
-type ProductRecord = Omit<Product, 'icon'>
+type ProductRecord = Omit<DemoProduct, 'icon'>
 
 export type ScrapingLog = {
   id: string
@@ -65,7 +65,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
-function getProductIcon(product: ProductRecord): Product['icon'] {
+function getProductIcon(product: ProductRecord): DemoProduct['icon'] {
   switch (product.category.toLowerCase()) {
     case 'audio':
       return product.name.toLowerCase().includes('airpods') ? Ear : Headphones
@@ -80,13 +80,13 @@ function getProductIcon(product: ProductRecord): Product['icon'] {
   }
 }
 
-export function hydrateProduct(product: ProductRecord): Product {
+export function hydrateProduct(product: ProductRecord): DemoProduct {
   return { ...product, icon: getProductIcon(product) }
 }
 
 export function toChannel3CatalogProduct(
   product: Channel3Product,
-): Product | null {
+): DemoProduct | null {
   const offer = product.offers
     .filter((item) => item.currency.toUpperCase() === 'USD')
     .sort((first, second) => first.price - second.price)[0]

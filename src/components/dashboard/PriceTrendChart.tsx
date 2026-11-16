@@ -17,7 +17,7 @@ import {
   getPriceChangePercent,
   matchesDemoProduct,
 } from './demoProducts'
-import type { Product } from '../../data/products'
+import type { DemoProduct } from '../../data/products'
 import {
   createStorePriceHistory,
   priceHistoryPeriods,
@@ -39,7 +39,7 @@ export function PriceTrendChart({
   empty = false,
   searchQuery = '',
 }: {
-  products: Product[]
+  products: DemoProduct[]
   loading?: boolean
   empty?: boolean
   searchQuery?: string
@@ -309,7 +309,7 @@ export function RecentPriceChanges({
   empty = false,
   searchQuery = '',
 }: {
-  products: Product[]
+  products: DemoProduct[]
   loading?: boolean
   empty?: boolean
   searchQuery?: string

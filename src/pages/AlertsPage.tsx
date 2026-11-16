@@ -17,7 +17,7 @@ import type {
   PriceAlert,
   PriceAlertDraft,
 } from '../context/AppOutletContext'
-import type { Product } from '../data/products'
+import type { DemoProduct } from '../data/products'
 
 function formatPrice(price: number) {
   return new Intl.NumberFormat('en-US', {
@@ -26,11 +26,11 @@ function formatPrice(price: number) {
   }).format(price)
 }
 
-function getPriceChange(product: Product) {
+function getPriceChange(product: DemoProduct) {
   return ((product.price - product.previousPrice) / product.previousPrice) * 100
 }
 
-function ProductThumbnail({ product }: { product: Product }) {
+function ProductThumbnail({ product }: { product: DemoProduct }) {
   const Icon = product.icon
 
   return (
@@ -51,7 +51,7 @@ function AlertForm({
   onCancel,
 }: {
   alert: PriceAlert | null
-  products: Product[]
+  products: DemoProduct[]
   onSave: (draft: PriceAlertDraft, alertId?: string) => Promise<boolean>
   onCancel: () => void
 }) {
@@ -234,7 +234,7 @@ function AlertCard({
   onDelete,
 }: {
   alert: PriceAlert
-  product: Product
+  product: DemoProduct
   onEdit: () => void
   onDelete: () => void
 }) {

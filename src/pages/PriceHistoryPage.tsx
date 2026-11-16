@@ -24,7 +24,7 @@ import {
   createStorePriceHistory,
   priceHistoryPeriods,
 } from '../data/priceHistory'
-import type { Product } from '../data/products'
+import type { DemoProduct } from '../data/products'
 import type {
   PriceHistoryPeriod,
   PriceHistoryPoint,
@@ -91,7 +91,7 @@ function formatChange(change: number | null, changePercent: number | null) {
   return `${direction}${formatPrice(Math.abs(change))} (${direction}${Math.abs(changePercent).toFixed(1)}%)`
 }
 
-function ProductThumbnail({ product }: { product: Product }) {
+function ProductThumbnail({ product }: { product: DemoProduct }) {
   const Icon = product.icon
 
   return (

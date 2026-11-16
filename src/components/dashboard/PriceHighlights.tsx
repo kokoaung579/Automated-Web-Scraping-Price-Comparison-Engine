@@ -11,7 +11,7 @@ import {
   DashboardEmptyState,
   DashboardSkeleton,
 } from './DashboardDataState'
-import type { Product } from '../../data/products'
+import type { DemoProduct as CatalogProduct } from '../../data/products'
 
 function ProductThumbnail({
   product,
@@ -91,7 +91,7 @@ export function PriceHighlights({
   empty = false,
   searchQuery = '',
 }: {
-  products: Product[]
+  products: CatalogProduct[]
   loading?: boolean
   empty?: boolean
   searchQuery?: string

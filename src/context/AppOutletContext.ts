@@ -1,4 +1,4 @@
-import type { Product } from '../data/products'
+import type { DemoProduct } from '../data/products'
 
 export type WatchlistEntry = {
   productId: string
@@ -43,12 +43,12 @@ export type UserPreferences = {
 }
 
 export type AppOutletContext = {
-  products: Product[]
+  products: DemoProduct[]
   searchQuery: string
   setSearchQuery: (query: string) => void
   watchlistIds: string[]
   watchlistEntries: WatchlistEntry[]
-  toggleWatchlist: (product: Product) => void
+  toggleWatchlist: (product: DemoProduct) => void
   alerts: PriceAlert[]
   saveAlert: (draft: PriceAlertDraft, alertId?: string) => Promise<boolean>
   deleteAlert: (alertId: string) => void
