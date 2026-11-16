@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowDown,
   Check,
@@ -6,8 +6,9 @@ import {
   Store,
   Trophy,
 } from 'lucide-react'
-import { Link } from 'react-router-dom'
-import { products } from '../data/products'
+import { Link, useOutletContext } from 'react-router-dom'
+import type { AppOutletContext } from '../context/AppOutletContext'
+import { api } from '../api/client'
 import { getStoreOffers } from '../data/storeOffers'
 import type { StoreOffer } from '../data/storeOffers'
 import type { Product } from '../data/products'
@@ -155,12 +156,17 @@ function OfferCard({
 }
 
 export function PriceComparisonPage() {
+  const { products } = useOutletContext<AppOutletContext>()
   const [productSearch, setProductSearch] = useState('')
   const [selectedProductId, setSelectedProductId] = useState(
     products[0]?.id ?? '',
   )
   const [storeFilter, setStoreFilter] = useState('all')
   const [sortOrder, setSortOrder] = useState<SortOrder>('price-low')
+  const [remoteOffers, setRemoteOffers] = useState<{
+    productId: string
+    offers: StoreOffer[]
+  } | null>(null)
 
   const selectedProduct = products.find(
     (product) => product.id === selectedProductId,
@@ -174,9 +180,31 @@ export function PriceComparisonPage() {
     )
   })
 
+  useEffect(() => {
+    let active = true
+    const productId = selectedProduct?.id
+    if (!productId) return
+
+    api.offers(productId)
+      .then((offers) => {
+        if (active) setRemoteOffers({ productId, offers })
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to load product offers from the backend', error)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [selectedProduct?.id])
+
   const allOffers = useMemo(
-    () => (selectedProduct ? getStoreOffers(selectedProduct) : []),
-    [selectedProduct],
+    () =>
+      (remoteOffers && remoteOffers.productId === selectedProduct?.id
+        ? remoteOffers.offers
+        : null) ??
+      (selectedProduct ? getStoreOffers(selectedProduct) : []),
+    [remoteOffers, selectedProduct],
   )
   const stores = [...new Set(allOffers.map((offer) => offer.store))].sort()
   const lowestPrice = allOffers.length

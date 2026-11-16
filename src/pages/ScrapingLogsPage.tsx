@@ -1,18 +1,12 @@
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CircleCheck, CircleX, Clock3, Globe, ScrollText } from 'lucide-react'
+import { api } from '../api/client'
+import type { ScrapingLog } from '../api/client'
 
-type ScrapingLogStatus = 'success' | 'failure'
-
-type ScrapingLog = {
-  website: string
-  product: string
-  timestamp: string
-  status: ScrapingLogStatus
-  error: string
-}
-
-const logs: ScrapingLog[] = [
+const demoLogs: ScrapingLog[] = [
   {
+    id: 'demo-amazon-sony',
     website: 'amazon.com',
     product: 'Sony WH-1000XM5',
     timestamp: 'Nov 12, 2026 · 9:42 AM',
@@ -20,6 +14,7 @@ const logs: ScrapingLog[] = [
     error: '—',
   },
   {
+    id: 'demo-bestbuy-bose',
     website: 'bestbuy.com',
     product: 'Bose QuietComfort Ultra',
     timestamp: 'Nov 12, 2026 · 9:38 AM',
@@ -27,6 +22,7 @@ const logs: ScrapingLog[] = [
     error: 'Request timed out after 30 seconds.',
   },
   {
+    id: 'demo-walmart-airpods',
     website: 'walmart.com',
     product: 'Apple AirPods Pro 2',
     timestamp: 'Nov 12, 2026 · 9:31 AM',
@@ -34,6 +30,7 @@ const logs: ScrapingLog[] = [
     error: '—',
   },
   {
+    id: 'demo-target-switch',
     website: 'target.com',
     product: 'Nintendo Switch OLED',
     timestamp: 'Nov 12, 2026 · 9:24 AM',
@@ -60,6 +57,23 @@ function LogField({
 }
 
 export function ScrapingLogsPage() {
+  const [logs, setLogs] = useState(demoLogs)
+
+  useEffect(() => {
+    let active = true
+    api.scrapingLogs()
+      .then((items) => {
+        if (active) setLogs(items)
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to load scraping logs from the backend', error)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
   const successfulCount = logs.filter((log) => log.status === 'success').length
   const failedCount = logs.length - successfulCount
 

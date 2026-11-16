@@ -43,13 +43,14 @@ export type UserPreferences = {
 }
 
 export type AppOutletContext = {
+  products: Product[]
   searchQuery: string
   setSearchQuery: (query: string) => void
   watchlistIds: string[]
   watchlistEntries: WatchlistEntry[]
   toggleWatchlist: (product: Product) => void
   alerts: PriceAlert[]
-  saveAlert: (draft: PriceAlertDraft, alertId?: string) => void
+  saveAlert: (draft: PriceAlertDraft, alertId?: string) => Promise<boolean>
   deleteAlert: (alertId: string) => void
   notifications: DemoNotification[]
   markNotificationRead: (notificationId: string) => void

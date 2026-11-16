@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowDown,
   ArrowUp,
@@ -8,8 +8,8 @@ import {
   Store,
 } from 'lucide-react'
 import { Link, useNavigate, useOutletContext } from 'react-router-dom'
+import { api, toChannel3CatalogProduct } from '../api/client'
 import type { AppOutletContext } from '../context/AppOutletContext'
-import { products } from '../data/products'
 import type { Product } from '../data/products'
 
 type PriceRange = 'all' | 'under-200' | '200-400' | 'over-400'
@@ -55,6 +55,22 @@ function matchesSearch(product: Product, query: string) {
     product.name.toLocaleLowerCase().includes(normalizedQuery) ||
     product.category.toLocaleLowerCase().includes(normalizedQuery) ||
     product.store.toLocaleLowerCase().includes(normalizedQuery)
+  )
+}
+
+function matchesDatabaseProduct(databaseProduct: Product, channel3Product: Product) {
+  const normalizedName = (value: string) =>
+    value.toLocaleLowerCase().replace(/[^a-z0-9]/g, '')
+  const databaseName = normalizedName(databaseProduct.name)
+  const channel3Name = normalizedName(channel3Product.name)
+  const databaseBrand = normalizedName(databaseProduct.brand)
+  const channel3Brand = normalizedName(channel3Product.brand)
+
+  return (
+    (channel3Brand === databaseBrand ||
+      channel3Name.includes(databaseBrand)) &&
+    (channel3Name.includes(databaseName) ||
+      databaseName.includes(channel3Name))
   )
 }
 
@@ -153,12 +169,23 @@ function ProductCard({
       <div className="flex items-start gap-3">
         <ProductThumbnail product={product} />
         <div className="min-w-0 flex-1">
-          <Link
-            to={`/products/${product.id}`}
-            className="block truncate text-xs font-semibold text-slate-200 transition hover:text-blue-300"
-          >
-            {product.name}
-          </Link>
+          {product.externalOfferUrl ? (
+            <a
+              href={product.externalOfferUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="block truncate text-xs font-semibold text-slate-200 transition hover:text-blue-300"
+            >
+              {product.name}
+            </a>
+          ) : (
+            <Link
+              to={`/products/${product.id}`}
+              className="block truncate text-xs font-semibold text-slate-200 transition hover:text-blue-300"
+            >
+              {product.name}
+            </Link>
+          )}
           <p className="mt-1 text-[10px] text-slate-500">{product.category}</p>
         </div>
         <PriceChange product={product} />
@@ -178,17 +205,30 @@ function ProductCard({
       <div className="mt-3 flex items-center justify-between text-[10px] text-slate-600">
         <span>Updated {product.updated}</span>
         <div className="flex items-center gap-2">
-          <Link
-            to={`/products/${product.id}`}
-            className="font-medium text-blue-300 transition hover:text-blue-200"
-          >
-            View details
-          </Link>
-          <BookmarkButton
-            product={product}
-            isBookmarked={isBookmarked}
-            onToggle={onToggleWatchlist}
-          />
+          {product.externalOfferUrl ? (
+            <a
+              href={product.externalOfferUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="font-medium text-blue-300 transition hover:text-blue-200"
+            >
+              View offer
+            </a>
+          ) : (
+            <>
+              <Link
+                to={`/products/${product.id}`}
+                className="font-medium text-blue-300 transition hover:text-blue-200"
+              >
+                View details
+              </Link>
+              <BookmarkButton
+                product={product}
+                isBookmarked={isBookmarked}
+                onToggle={onToggleWatchlist}
+              />
+            </>
+          )}
         </div>
       </div>
     </article>
@@ -258,19 +298,90 @@ export function ProductsPage() {
     setSearchQuery,
     watchlistIds,
     toggleWatchlist,
+    products,
   } = useOutletContext<AppOutletContext>()
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
   const [priceRange, setPriceRange] = useState<PriceRange>('all')
   const [sortOrder, setSortOrder] = useState<SortOrder>('recent')
+  const query = search.trim() || headerQuery.trim()
+  const [channel3Result, setChannel3Result] = useState<{
+    query: string
+    products: Product[]
+  } | null>(null)
+
+  useEffect(() => {
+    if (query.length < 2) return
+
+    let active = true
+    const normalizedQuery = query.toLocaleLowerCase()
+    const timeoutId = window.setTimeout(() => {
+      api.searchChannel3Products(query, 10)
+        .then((response) => {
+          if (!active) return
+          setChannel3Result({
+            query: normalizedQuery,
+            products: response.products
+              .map(toChannel3CatalogProduct)
+              .filter((product): product is Product => product !== null),
+          })
+        })
+        .catch((error: unknown) => {
+          if (active) {
+            console.error('Unable to search Channel3 products', error)
+            setChannel3Result({ query: normalizedQuery, products: [] })
+          }
+        })
+    }, 350)
+
+    return () => {
+      active = false
+      window.clearTimeout(timeoutId)
+    }
+  }, [query])
+
+  const channel3Products = useMemo(
+    () =>
+      channel3Result?.query === query.toLocaleLowerCase()
+        ? channel3Result.products
+        : [],
+    [channel3Result, query],
+  )
+  const catalogProducts = useMemo(
+    () => {
+      const matchedChannel3Ids = new Set<string>()
+      const databaseProducts = products.map((databaseProduct) => {
+        const channel3Product = channel3Products.find((candidate) =>
+          matchesDatabaseProduct(databaseProduct, candidate),
+        )
+        if (!channel3Product) return databaseProduct
+
+        matchedChannel3Ids.add(channel3Product.id)
+        return {
+          ...databaseProduct,
+          price: channel3Product.price,
+          previousPrice: channel3Product.previousPrice,
+          store: channel3Product.store,
+        }
+      })
+
+      return [
+        ...databaseProducts,
+        ...channel3Products.filter(
+          (channel3Product) => !matchedChannel3Ids.has(channel3Product.id),
+        ),
+      ]
+    },
+    [channel3Products, products],
+  )
 
   const categories = useMemo(
-    () => [...new Set(products.map((product) => product.category))].sort(),
-    [],
+    () => [...new Set(catalogProducts.map((product) => product.category))].sort(),
+    [catalogProducts],
   )
 
   const filteredProducts = useMemo(() => {
-    const matching = products.filter(
+    const matching = catalogProducts.filter(
       (product) =>
         matchesSearch(product, headerQuery) &&
         matchesSearch(product, search) &&
@@ -290,7 +401,7 @@ export function ProductsPage() {
       default:
         return matching
     }
-  }, [category, headerQuery, priceRange, search, sortOrder])
+  }, [catalogProducts, category, headerQuery, priceRange, search, sortOrder])
 
   return (
     <div className="space-y-6">
@@ -308,7 +419,7 @@ export function ProductsPage() {
           </p>
         </div>
         <span className="rounded-xl border border-white/[0.07] bg-[#0d1320] px-3 py-2 text-[11px] text-slate-400">
-          {filteredProducts.length} of {products.length} products
+          {filteredProducts.length} of {catalogProducts.length} products
         </span>
       </section>
 
@@ -435,12 +546,23 @@ export function ProductsPage() {
                 {filteredProducts.map((product) => (
                   <tr
                     key={product.id}
-                    role="link"
-                    tabIndex={0}
-                    aria-label={`View details for ${product.name}`}
-                    onClick={() => navigate(`/products/${product.id}`)}
+                    role={
+                      product.externalOfferUrl ? undefined : 'link'
+                    }
+                    tabIndex={product.externalOfferUrl ? undefined : 0}
+                    aria-label={
+                      product.externalOfferUrl
+                        ? undefined
+                        : `View details for ${product.name}`
+                    }
+                    onClick={() => {
+                      if (!product.externalOfferUrl) {
+                        navigate(`/products/${product.id}`)
+                      }
+                    }}
                     onKeyDown={(event) => {
                       if (
+                        !product.externalOfferUrl &&
                         event.target === event.currentTarget &&
                         event.key === 'Enter'
                       ) {
@@ -448,13 +570,27 @@ export function ProductsPage() {
                         navigate(`/products/${product.id}`)
                       }
                     }}
-                    className="group cursor-pointer transition-colors hover:bg-white/[0.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400/40"
+                    className={`group transition-colors hover:bg-white/[0.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-400/40 ${
+                      product.externalOfferUrl ? '' : 'cursor-pointer'
+                    }`}
                   >
                     <td className="px-5 py-3.5">
-                      <span className="flex items-center gap-3 text-xs font-medium text-slate-200 transition group-hover:text-blue-300">
-                        <ProductThumbnail product={product} />
-                        {product.name}
-                      </span>
+                      {product.externalOfferUrl ? (
+                        <a
+                          href={product.externalOfferUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-3 text-xs font-medium text-slate-200 transition hover:text-blue-300"
+                        >
+                          <ProductThumbnail product={product} />
+                          {product.name}
+                        </a>
+                      ) : (
+                        <span className="flex items-center gap-3 text-xs font-medium text-slate-200 transition group-hover:text-blue-300">
+                          <ProductThumbnail product={product} />
+                          {product.name}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3.5 text-xs text-slate-400">
                       {product.category}
@@ -474,11 +610,13 @@ export function ProductsPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3.5 text-right">
-                      <BookmarkButton
-                        product={product}
-                        isBookmarked={watchlistIds.includes(product.id)}
-                        onToggle={toggleWatchlist}
-                      />
+                      {!product.externalOfferUrl && (
+                        <BookmarkButton
+                          product={product}
+                          isBookmarked={watchlistIds.includes(product.id)}
+                          onToggle={toggleWatchlist}
+                        />
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -520,7 +658,7 @@ export function ProductsPage() {
 }
 
 export function WatchlistPage() {
-  const { watchlistEntries, toggleWatchlist } =
+  const { products, watchlistEntries, toggleWatchlist } =
     useOutletContext<AppOutletContext>()
   const watchlistedProducts = products.flatMap((product) => {
     const entry = watchlistEntries.find(

@@ -13,7 +13,6 @@ import type {
   AppOutletContext,
   DemoNotification,
 } from '../context/AppOutletContext'
-import { products } from '../data/products'
 import type { Product } from '../data/products'
 
 type NotificationFilter = 'all' | 'unread' | 'read'
@@ -158,6 +157,7 @@ function NotificationCard({
 
 export function NotificationsPage() {
   const {
+    products,
     notifications,
     markNotificationRead,
     markAllNotificationsRead,
