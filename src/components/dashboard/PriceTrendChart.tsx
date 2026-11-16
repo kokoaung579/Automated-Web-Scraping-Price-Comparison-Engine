@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowDownRight, ArrowUpRight, MoreHorizontal } from 'lucide-react'
 import {
   Area,
@@ -10,13 +10,14 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { api } from '../../api/client'
 import {
-  demoProducts,
   formatDemoPrice,
+  getDemoProducts,
   getPriceChangePercent,
   matchesDemoProduct,
 } from './demoProducts'
-import { products as catalogProducts } from '../../data/products'
+import type { DemoProduct } from '../../data/products'
 import {
   createStorePriceHistory,
   priceHistoryPeriods,
@@ -30,25 +31,27 @@ import {
   DashboardSkeleton,
 } from './DashboardDataState'
 
-const products = catalogProducts.filter((product) =>
-  demoProducts.some((demoProduct) => demoProduct.name === product.name),
-)
-
 type Period = PriceHistoryPeriod
 
 export function PriceTrendChart({
+  products: catalogProducts,
   loading = false,
   empty = false,
   searchQuery = '',
 }: {
+  products: DemoProduct[]
   loading?: boolean
   empty?: boolean
   searchQuery?: string
 }) {
-  const [selectedProduct, setSelectedProduct] = useState(products[0].name)
+  const dashboardProducts = getDemoProducts(catalogProducts)
+  const products = catalogProducts.filter((product) =>
+    dashboardProducts.some((demoProduct) => demoProduct.name === product.name),
+  )
+  const [selectedProduct, setSelectedProduct] = useState(products[0]?.name ?? '')
   const [period, setPeriod] = useState<Period>('30D')
   const matchingProducts = products.filter((item) => {
-    const source = demoProducts.find(
+    const source = dashboardProducts.find(
       (demoProduct) => demoProduct.name === item.name,
     )
     return source ? matchesDemoProduct(source, searchQuery) : false
@@ -57,12 +60,47 @@ export function PriceTrendChart({
     matchingProducts.find((item) => item.name === selectedProduct) ??
     matchingProducts[0] ??
     products[0]
-  const data = useMemo(
-    () => createStorePriceHistory(product, product.price, period, 0),
-    [product, period],
-  )
-  const firstPrice = data[0].price
-  const currentPrice = data[data.length - 1].price
+  const [remoteHistory, setRemoteHistory] = useState<{
+    productId: string
+    period: Period
+    points: PriceHistoryPoint[]
+  } | null>(null)
+
+  useEffect(() => {
+    let active = true
+    const productId = product?.id
+    if (!productId) return
+
+    api.priceHistory(productId, period)
+      .then((histories) => {
+        if (active) {
+          setRemoteHistory({
+            productId,
+            period,
+            points: histories[0]?.points ?? [],
+          })
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to load dashboard price history from the backend', error)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [period, product?.id])
+
+  const fallbackData = product
+    ? createStorePriceHistory(product, product.price, period, 0)
+    : []
+  const data =
+    remoteHistory &&
+    remoteHistory.productId === product?.id &&
+    remoteHistory.period === period
+      ? remoteHistory.points
+      : fallbackData
+  const firstPrice = data[0]?.price ?? 0
+  const currentPrice = data[data.length - 1]?.price ?? 0
   const priceChange = getPriceChangePercent(firstPrice, currentPrice)
 
   if (loading) {
@@ -85,7 +123,7 @@ export function PriceTrendChart({
     )
   }
 
-  if (empty || matchingProducts.length === 0) {
+  if (empty || !product || matchingProducts.length === 0 || data.length === 0) {
     return (
       <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
         <h2 className="text-sm font-semibold text-white">Price trend</h2>
@@ -265,40 +303,42 @@ export function PriceTrendChart({
   )
 }
 
-const changes = demoProducts.map((product) => {
-  const priceChange = getPriceChangePercent(
-    product.previousPrice,
-    product.currentPrice,
-  )
-
-  return {
-    name: product.name,
-    detail: `${product.category} · ${product.storesTracked} stores`,
-    initials: product.name[0],
-    color:
-      product.thumbnail === 'earbuds'
-        ? 'bg-slate-200 text-slate-800'
-        : product.name.startsWith('Bose')
-          ? 'bg-amber-400/10 text-amber-200'
-          : 'bg-slate-700 text-slate-200',
-    price: formatDemoPrice(product.currentPrice),
-    previous: formatDemoPrice(product.previousPrice),
-    change: `${priceChange > 0 ? '+' : ''}${priceChange.toFixed(1)}%`,
-    down: priceChange < 0,
-  }
-})
-
 export function RecentPriceChanges({
+  products,
   loading = false,
   empty = false,
   searchQuery = '',
 }: {
+  products: DemoProduct[]
   loading?: boolean
   empty?: boolean
   searchQuery?: string
 }) {
+  const dashboardProducts = getDemoProducts(products)
+  const changes = dashboardProducts.map((product) => {
+    const priceChange = getPriceChangePercent(
+      product.previousPrice,
+      product.currentPrice,
+    )
+
+    return {
+      name: product.name,
+      detail: `${product.category} · ${product.storesTracked} stores`,
+      initials: product.name[0],
+      color:
+        product.thumbnail === 'earbuds'
+          ? 'bg-slate-200 text-slate-800'
+          : product.name.startsWith('Bose')
+            ? 'bg-amber-400/10 text-amber-200'
+            : 'bg-slate-700 text-slate-200',
+      price: formatDemoPrice(product.currentPrice),
+      previous: formatDemoPrice(product.previousPrice),
+      change: `${priceChange > 0 ? '+' : ''}${priceChange.toFixed(1)}%`,
+      down: priceChange < 0,
+    }
+  })
   const matchingChanges = changes.filter((item) => {
-    const product = demoProducts.find(
+    const product = dashboardProducts.find(
       (demoProduct) => demoProduct.name === item.name,
     )
     return product ? matchesDemoProduct(product, searchQuery) : false
