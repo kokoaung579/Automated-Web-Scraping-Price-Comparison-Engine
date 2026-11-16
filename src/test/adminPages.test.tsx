@@ -98,7 +98,9 @@ describe('admin and shared user pages', () => {
     await waitFor(() => {
       expect(screen.getByTestId('current-path').textContent).toBe('/admin/users')
     })
-    expect(screen.getAllByRole('heading', { name: 'User Management' }).length).toBeGreaterThan(0)
+    expect(
+      screen.getByRole('heading', { name: 'User Management', level: 2 }),
+    ).toBeDefined()
     adminPage.unmount()
 
     renderRoutes('/')

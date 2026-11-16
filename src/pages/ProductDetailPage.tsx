@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   ArrowDownRight,
@@ -26,14 +26,16 @@ import type {
   AlertType,
   AppOutletContext,
 } from '../context/AppOutletContext'
+import { api } from '../api/client'
+import type { Channel3Product } from '../api/client'
 import { createStorePriceHistory } from '../data/priceHistory'
 import type {
   PriceHistoryPeriod,
   PriceHistoryPoint,
 } from '../data/priceHistory'
-import { products } from '../data/products'
 import type { DemoProduct } from '../data/products'
 import { getStoreOffers } from '../data/storeOffers'
+import type { StoreOffer } from '../data/storeOffers'
 
 type StoreHistory = { store: string; points: PriceHistoryPoint[] }
 type ChartPoint = { date: string; [store: string]: number | string }
@@ -63,7 +65,10 @@ function normalizeProductSlug(value: string) {
     .replace(/^-|-$/g, '')
 }
 
-function findProductByRouteId(id: string | undefined) {
+function findProductByRouteId(
+  id: string | undefined,
+  products: DemoProduct[],
+) {
   if (!id) return undefined
 
   const routeId = id.trim()
@@ -302,24 +307,116 @@ export function ProductDetailPage() {
   const routeParams = useParams()
   const id = routeParams.id ?? routeParams.productId
   const {
+    products,
     watchlistIds,
     toggleWatchlist,
     saveAlert,
   } = useOutletContext<AppOutletContext>()
   const [period, setPeriod] = useState<PriceHistoryPeriod>('30D')
   const [alertDialogOpen, setAlertDialogOpen] = useState(false)
-  const product = findProductByRouteId(id)
-  const storeOffers = useMemo(
-    () => (product ? getStoreOffers(product) : []),
-    [product],
-  )
+  const product = findProductByRouteId(id, products)
+  const [remoteData, setRemoteData] = useState<{
+    productId: string
+    period: PriceHistoryPeriod
+    offers: StoreOffer[]
+    histories: StoreHistory[]
+  } | null>(null)
+  const [channel3Data, setChannel3Data] = useState<{
+    productId: string
+    product: Channel3Product | null
+    offers: StoreOffer[]
+  } | null>(null)
+
+  useEffect(() => {
+    let active = true
+    const productId = product?.id
+    if (!productId) return
+
+    Promise.all([
+      api.offers(productId),
+      api.priceHistory(productId, period),
+    ])
+      .then(([offers, histories]) => {
+        if (active) {
+          setRemoteData({
+            productId,
+            period,
+            offers,
+            histories,
+          })
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to load product price data from the backend', error)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [period, product?.id])
+
+  useEffect(() => {
+    let active = true
+    if (!product) return
+
+    api.channel3Product(product.id)
+      .then(({ product: channel3Product }) => {
+        if (!active) return
+
+        setChannel3Data({
+          productId: product.id,
+          product: channel3Product,
+          offers: (channel3Product?.offers ?? []).map((offer) => ({
+            store: offer.store,
+            price: offer.price,
+          })),
+        })
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to load Channel3 offers for product', error)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [product])
+
+  const storeOffers = useMemo(() => {
+    const databaseOffers =
+      remoteData && remoteData.productId === product?.id
+        ? remoteData.offers
+        : product
+          ? getStoreOffers(product)
+          : []
+    const channel3Offers =
+      channel3Data && channel3Data.productId === product?.id
+        ? channel3Data.offers
+        : []
+    const channel3Stores = new Set(
+      channel3Offers.map((offer) => offer.store.toLocaleLowerCase()),
+    )
+
+    return [
+      ...databaseOffers.filter(
+        (offer) => !channel3Stores.has(offer.store.toLocaleLowerCase()),
+      ),
+      ...channel3Offers,
+    ]
+  }, [channel3Data, product, remoteData])
   const sortedOffers = useMemo(
     () => [...storeOffers].sort((first, second) => first.price - second.price),
     [storeOffers],
   )
-  const histories = useMemo<StoreHistory[]>(
-    () =>
-      product
+  const histories = useMemo<StoreHistory[]>(() => {
+    if (
+      remoteData &&
+      remoteData.productId === product?.id &&
+      remoteData.period === period
+    ) {
+      return remoteData.histories
+    }
+
+    return product
         ? storeOffers.map((offer, index) => ({
             store: offer.store,
             points: createStorePriceHistory(
@@ -329,9 +426,8 @@ export function ProductDetailPage() {
               index,
             ),
           }))
-        : [],
-    [period, product, storeOffers],
-  )
+        : []
+  }, [period, product, remoteData, storeOffers])
 
   if (!product) {
     return (
@@ -360,6 +456,20 @@ export function ProductDetailPage() {
   }
 
   const productId = product.id
+  const channel3Product =
+    channel3Data && channel3Data.productId === product.id
+      ? channel3Data.product
+      : null
+  const specifications = [
+    ...product.specifications,
+    ...(channel3Product?.description
+      ? [{ label: 'Description', value: channel3Product.description }]
+      : []),
+    ...(channel3Product?.key_features.map((feature, index) => ({
+      label: `Channel3 feature ${index + 1}`,
+      value: feature,
+    })) ?? []),
+  ]
   const chartData: ChartPoint[] =
     histories[0]?.points.map((point, index) => {
       const row: ChartPoint = { date: point.date }
@@ -372,11 +482,16 @@ export function ProductDetailPage() {
   const historyPrices = histories.flatMap((history) =>
     history.points.map((point) => point.price),
   )
-  const lowestPrice = Math.min(...historyPrices)
-  const highestPrice = Math.max(...historyPrices)
-  const averagePrice =
-    historyPrices.reduce((total, price) => total + price, 0) /
-    historyPrices.length
+  const lowestPrice = historyPrices.length
+    ? Math.min(...historyPrices)
+    : product.price
+  const highestPrice = historyPrices.length
+    ? Math.max(...historyPrices)
+    : product.price
+  const averagePrice = historyPrices.length
+    ? historyPrices.reduce((total, price) => total + price, 0) /
+      historyPrices.length
+    : product.price
   const cheapestPrice = sortedOffers[0]?.price ?? product.price
   const cheapestStore = sortedOffers[0]?.store ?? product.store
   const isWatchlisted = watchlistIds.includes(product.id)
@@ -385,9 +500,10 @@ export function ProductDetailPage() {
     timeStyle: 'short',
   })
 
-  function handleCreateAlert(type: AlertType, threshold: number) {
-    saveAlert({ productId, type, threshold })
-    setAlertDialogOpen(false)
+  async function handleCreateAlert(type: AlertType, threshold: number) {
+    if (await saveAlert({ productId, type, threshold })) {
+      setAlertDialogOpen(false)
+    }
   }
 
   return (
@@ -497,11 +613,13 @@ export function ProductDetailPage() {
         <div className="mb-4">
           <h2 className="text-sm font-semibold text-white">Specifications</h2>
           <p className="mt-1 text-[10px] text-slate-500">
-            Product details from the demo catalog
+            {channel3Product
+              ? 'Product details from your catalog and Channel3'
+              : 'Product details from the demo catalog'}
           </p>
         </div>
         <dl className="grid gap-2 sm:grid-cols-2">
-          {product.specifications.map((specification) => (
+          {specifications.map((specification) => (
             <div
               key={specification.label}
               className="flex min-w-0 items-start justify-between gap-4 rounded-xl border border-white/[0.05] bg-[#0a101b]/70 px-3.5 py-3"

@@ -22,7 +22,7 @@ function isDashboardDemoState(value: string): value is DashboardDemoState {
 }
 
 export function DashboardPage() {
-  const { searchQuery, watchlistIds } =
+  const { products, searchQuery, watchlistIds } =
     useOutletContext<AppOutletContext>()
   const [demoState, setDemoState] = useState<DashboardDemoState>('loading')
 
@@ -45,6 +45,10 @@ export function DashboardPage() {
     empty: 'bg-slate-400',
     error: 'bg-rose-400',
   }[demoState]
+  const storeCount = new Set(products.map((product) => product.store)).size
+  const priceDropCount = products.filter(
+    (product) => product.price < product.previousPrice,
+  ).length
 
   return (
     <div className="space-y-7">
@@ -90,7 +94,7 @@ export function DashboardPage() {
           <section aria-label="Price tracking summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard
               label="Total Products"
-              value={128}
+              value={products.length}
               change="+12"
               detail="this month"
               icon={PackageSearch}
@@ -100,7 +104,7 @@ export function DashboardPage() {
             />
             <StatCard
               label="Total Stores"
-              value={18}
+              value={storeCount}
               change="+3"
               detail="being monitored"
               icon={Store}
@@ -110,7 +114,7 @@ export function DashboardPage() {
             />
             <StatCard
               label="Price Drops"
-              value={24}
+              value={priceDropCount}
               change="+18.2%"
               detail="this month"
               icon={ArrowDownRight}
@@ -132,11 +136,13 @@ export function DashboardPage() {
 
           <section className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,1fr)]">
             <PriceTrendChart
+              products={products}
               loading={demoState === 'loading'}
               empty={demoState === 'empty'}
               searchQuery={searchQuery}
             />
             <RecentPriceChanges
+              products={products}
               loading={demoState === 'loading'}
               empty={demoState === 'empty'}
               searchQuery={searchQuery}
@@ -144,6 +150,7 @@ export function DashboardPage() {
           </section>
 
           <PriceHighlights
+            products={products}
             loading={demoState === 'loading'}
             empty={demoState === 'empty'}
             searchQuery={searchQuery}

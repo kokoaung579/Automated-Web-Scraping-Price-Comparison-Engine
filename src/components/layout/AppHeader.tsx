@@ -12,13 +12,14 @@ import { Link, useNavigate } from 'react-router-dom'
 import type { LocalSession } from '../../auth/localAuth'
 import { clearLocalSession } from '../../auth/localAuth'
 import type { DemoNotification } from '../../context/AppOutletContext'
-import { products } from '../../data/products'
+import type { DemoProduct } from '../../data/products'
 
 type AppHeaderProps = {
   currentUser: LocalSession
   onMenuClick: () => void
   onSearchChange: (query: string) => void
   notifications: DemoNotification[]
+  products: DemoProduct[]
   unreadNotificationCount: number
 }
 
@@ -27,6 +28,7 @@ export function AppHeader({
   onMenuClick,
   onSearchChange,
   notifications,
+  products,
   unreadNotificationCount,
 }: AppHeaderProps) {
   const navigate = useNavigate()
