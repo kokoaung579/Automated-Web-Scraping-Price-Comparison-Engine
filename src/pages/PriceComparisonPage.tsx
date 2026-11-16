@@ -11,7 +11,7 @@ import type { AppOutletContext } from '../context/AppOutletContext'
 import { api } from '../api/client'
 import { getStoreOffers } from '../data/storeOffers'
 import type { StoreOffer } from '../data/storeOffers'
-import type { Product } from '../data/products'
+import type { DemoProduct } from '../data/products'
 
 type SortOrder = 'price-low' | 'price-high' | 'store'
 
@@ -22,7 +22,7 @@ function formatPrice(price: number) {
   }).format(price)
 }
 
-function ProductThumbnail({ product }: { product: Product }) {
+function ProductThumbnail({ product }: { product: DemoProduct }) {
   const Icon = product.icon
 
   return (

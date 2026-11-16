@@ -10,7 +10,7 @@ import {
 import { Link, useNavigate, useOutletContext } from 'react-router-dom'
 import { api, toChannel3CatalogProduct } from '../api/client'
 import type { AppOutletContext } from '../context/AppOutletContext'
-import type { Product } from '../data/products'
+import type { DemoProduct } from '../data/products'
 
 type PriceRange = 'all' | 'under-200' | '200-400' | 'over-400'
 type SortOrder = 'recent' | 'price-low' | 'price-high' | 'name'
@@ -44,11 +44,11 @@ function formatPrice(price: number) {
   }).format(price)
 }
 
-function getPriceChange(product: Product) {
+function getPriceChange(product: DemoProduct) {
   return ((product.price - product.previousPrice) / product.previousPrice) * 100
 }
 
-function matchesSearch(product: Product, query: string) {
+function matchesSearch(product: DemoProduct, query: string) {
   const normalizedQuery = query.trim().toLocaleLowerCase()
   return (
     normalizedQuery.length === 0 ||
@@ -58,7 +58,10 @@ function matchesSearch(product: Product, query: string) {
   )
 }
 
-function matchesDatabaseProduct(databaseProduct: Product, channel3Product: Product) {
+function matchesDatabaseProduct(
+  databaseProduct: DemoProduct,
+  channel3Product: DemoProduct,
+) {
   const normalizedName = (value: string) =>
     value.toLocaleLowerCase().replace(/[^a-z0-9]/g, '')
   const databaseName = normalizedName(databaseProduct.name)
@@ -87,7 +90,7 @@ function inPriceRange(price: number, range: PriceRange) {
   }
 }
 
-function ProductThumbnail({ product }: { product: Product }) {
+function ProductThumbnail({ product }: { product: DemoProduct }) {
   const Icon = product.icon
 
   return (
@@ -101,7 +104,7 @@ function ProductThumbnail({ product }: { product: Product }) {
   )
 }
 
-function PriceChange({ product }: { product: Product }) {
+function PriceChange({ product }: { product: DemoProduct }) {
   const change = getPriceChange(product)
   const priceDropped = change < 0
   const ChangeIcon = priceDropped ? ArrowDown : ArrowUp
@@ -125,9 +128,9 @@ function BookmarkButton({
   isBookmarked,
   onToggle,
 }: {
-  product: Product
+  product: DemoProduct
   isBookmarked: boolean
-  onToggle: (product: Product) => void
+  onToggle: (product: DemoProduct) => void
 }) {
   return (
     <button
@@ -160,9 +163,9 @@ function ProductCard({
   isBookmarked,
   onToggleWatchlist,
 }: {
-  product: Product
+  product: DemoProduct
   isBookmarked: boolean
-  onToggleWatchlist: (product: Product) => void
+  onToggleWatchlist: (product: DemoProduct) => void
 }) {
   return (
     <article className="group rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 transition duration-200 hover:-translate-y-0.5 hover:border-blue-400/20 hover:bg-[#101827] hover:shadow-lg hover:shadow-blue-950/20">
@@ -240,9 +243,9 @@ function WatchlistCard({
   addedAt,
   onRemove,
 }: {
-  product: Product
+  product: DemoProduct
   addedAt: string
-  onRemove: (product: Product) => void
+  onRemove: (product: DemoProduct) => void
 }) {
   return (
     <article className="group rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 transition duration-200 hover:border-blue-400/20 hover:bg-[#101827]">
@@ -307,7 +310,7 @@ export function ProductsPage() {
   const query = search.trim() || headerQuery.trim()
   const [channel3Result, setChannel3Result] = useState<{
     query: string
-    products: Product[]
+    products: DemoProduct[]
   } | null>(null)
 
   useEffect(() => {
@@ -323,7 +326,7 @@ export function ProductsPage() {
             query: normalizedQuery,
             products: response.products
               .map(toChannel3CatalogProduct)
-              .filter((product): product is Product => product !== null),
+              .filter((product): product is DemoProduct => product !== null),
           })
         })
         .catch((error: unknown) => {

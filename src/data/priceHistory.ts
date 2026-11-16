@@ -1,4 +1,4 @@
-import type { Product } from './products'
+import type { DemoProduct } from './products'
 
 export const priceHistoryPeriods = {
   '7D': { days: 7, points: 8 },
@@ -19,7 +19,7 @@ function formatDateKey(date: Date) {
 }
 
 export function createStorePriceHistory(
-  product: Product,
+  product: DemoProduct,
   currentPrice: number,
   period: PriceHistoryPeriod,
   storeIndex: number,

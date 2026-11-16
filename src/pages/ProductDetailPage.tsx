@@ -33,7 +33,7 @@ import type {
   PriceHistoryPeriod,
   PriceHistoryPoint,
 } from '../data/priceHistory'
-import type { Product } from '../data/products'
+import type { DemoProduct } from '../data/products'
 import { getStoreOffers } from '../data/storeOffers'
 import type { StoreOffer } from '../data/storeOffers'
 
@@ -65,7 +65,10 @@ function normalizeProductSlug(value: string) {
     .replace(/^-|-$/g, '')
 }
 
-function findProductByRouteId(id: string | undefined, products: Product[]) {
+function findProductByRouteId(
+  id: string | undefined,
+  products: DemoProduct[],
+) {
   if (!id) return undefined
 
   const routeId = id.trim()
@@ -80,7 +83,7 @@ function findProductByRouteId(id: string | undefined, products: Product[]) {
   )
 }
 
-function ProductImage({ product }: { product: Product }) {
+function ProductImage({ product }: { product: DemoProduct }) {
   const Icon = product.icon
   const model =
     product.specifications.find((specification) => specification.label === 'Model')
@@ -123,7 +126,7 @@ function ProductImage({ product }: { product: Product }) {
   )
 }
 
-function PriceChange({ product }: { product: Product }) {
+function PriceChange({ product }: { product: DemoProduct }) {
   const change =
     ((product.price - product.previousPrice) / product.previousPrice) * 100
   const dropped = change < 0
@@ -148,7 +151,7 @@ function AlertDialog({
   onClose,
   onSave,
 }: {
-  product: Product
+  product: DemoProduct
   onClose: () => void
   onSave: (type: AlertType, threshold: number) => void
 }) {
