@@ -14,8 +14,9 @@ import type {
   UserPreferences,
   WatchlistEntry,
 } from '../../context/AppOutletContext'
+import type { LocalSession } from '../../auth/localAuth'
 import { products } from '../../data/products'
-import type { Product } from '../../data/products'
+import type { DemoProduct } from '../../data/products'
 import { AppHeader } from './AppHeader'
 import { Sidebar } from './Sidebar'
 
@@ -32,10 +33,14 @@ type AppState = {
   toast: Toast | null
 }
 
+type AppLayoutProps = {
+  currentUser: LocalSession
+}
+
 type AppAction =
   | {
       type: 'toggle-watchlist'
-      product: Product
+      product: DemoProduct
       toastId: number
       addedAt: string
     }
@@ -290,7 +295,7 @@ function appReducer(state: AppState, action: AppAction): AppState {
   }
 }
 
-export function AppLayout() {
+export function AppLayout({ currentUser }: AppLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -319,7 +324,7 @@ export function AppLayout() {
     }
   }, [theme])
 
-  function toggleWatchlist(product: Product) {
+  function toggleWatchlist(product: DemoProduct) {
     dispatch({
       type: 'toggle-watchlist',
       product,
@@ -526,6 +531,7 @@ export function AppLayout() {
         }`}
       >
         <AppHeader
+          currentUser={currentUser}
           onMenuClick={toggleSidebar}
           onSearchChange={setSearchQuery}
           notifications={notifications}

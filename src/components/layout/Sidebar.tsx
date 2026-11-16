@@ -7,7 +7,6 @@ import {
   History,
   LayoutDashboard,
   Radar,
-  ScrollText,
   Settings2,
   X,
 } from 'lucide-react'
@@ -19,7 +18,6 @@ const navigation: { label: string; to: string; icon: LucideIcon }[] = [
   { label: 'Products', to: '/products', icon: Boxes },
   { label: 'Price comparison', to: '/comparison', icon: ChartNoAxesCombined },
   { label: 'Price history', to: '/price-history', icon: History },
-  { label: 'Scraping Logs', to: '/scraping-logs', icon: ScrollText },
   { label: 'Watchlist', to: '/watchlist', icon: Activity },
   { label: 'Alerts', to: '/alerts', icon: BellRing },
   { label: 'Notifications', to: '/notifications', icon: Bell },

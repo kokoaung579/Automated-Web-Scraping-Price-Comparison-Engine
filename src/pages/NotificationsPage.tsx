@@ -14,7 +14,7 @@ import type {
   DemoNotification,
 } from '../context/AppOutletContext'
 import { products } from '../data/products'
-import type { Product } from '../data/products'
+import type { DemoProduct } from '../data/products'
 
 type NotificationFilter = 'all' | 'unread' | 'read'
 
@@ -25,7 +25,7 @@ function formatPrice(price: number) {
   }).format(price)
 }
 
-function ProductThumbnail({ product }: { product: Product }) {
+function ProductThumbnail({ product }: { product: DemoProduct }) {
   const Icon = product.icon
 
   return (
@@ -39,7 +39,7 @@ function ProductThumbnail({ product }: { product: Product }) {
   )
 }
 
-function NotificationVisual({ product }: { product?: Product }) {
+function NotificationVisual({ product }: { product?: DemoProduct }) {
   if (product) return <ProductThumbnail product={product} />
 
   return (
@@ -60,7 +60,7 @@ function NotificationCard({
   onDelete,
 }: {
   notification: DemoNotification
-  product?: Product
+  product?: DemoProduct
   onMarkRead: () => void
   onDelete: () => void
 }) {

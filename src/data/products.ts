@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
-export type Product = {
+export type DemoProduct = {
   id: string
   name: string
   brand: string
@@ -22,7 +22,7 @@ export type Product = {
   tone: string
 }
 
-export const products: Product[] = [
+export const products: DemoProduct[] = [
   {
     id: 'sony-wh-1000xm5',
     name: 'Sony WH-1000XM5',
