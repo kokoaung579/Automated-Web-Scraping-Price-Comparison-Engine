@@ -8,12 +8,13 @@ import {
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import type { DemoNotification } from '../../context/AppOutletContext'
-import { products } from '../../data/products'
+import type { Product } from '../../data/products'
 
 type AppHeaderProps = {
   onMenuClick: () => void
   onSearchChange: (query: string) => void
   notifications: DemoNotification[]
+  products: Product[]
   unreadNotificationCount: number
 }
 
@@ -21,6 +22,7 @@ export function AppHeader({
   onMenuClick,
   onSearchChange,
   notifications,
+  products,
   unreadNotificationCount,
 }: AppHeaderProps) {
   const [notificationsOpen, setNotificationsOpen] = useState(false)

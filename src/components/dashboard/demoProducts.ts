@@ -19,22 +19,26 @@ const dashboardProductDetails: Record<
   'apple-airpods-pro-2': { storesTracked: 5, thumbnail: 'earbuds' },
 }
 
-export const demoProducts: DemoProduct[] = products.flatMap((product) => {
-  const details = dashboardProductDetails[product.id]
-  if (!details) return []
+export function getDemoProducts(catalog: typeof products): DemoProduct[] {
+  return catalog.flatMap((product) => {
+    const details = dashboardProductDetails[product.id]
+    if (!details) return []
 
-  return [
-    {
-      name: product.name,
-      category: product.category,
-      storesTracked: details.storesTracked,
-      store: product.store,
-      previousPrice: product.previousPrice,
-      currentPrice: product.price,
-      thumbnail: details.thumbnail,
-    },
-  ]
-})
+    return [
+      {
+        name: product.name,
+        category: product.category,
+        storesTracked: details.storesTracked,
+        store: product.store,
+        previousPrice: product.previousPrice,
+        currentPrice: product.price,
+        thumbnail: details.thumbnail,
+      },
+    ]
+  })
+}
+
+export const demoProducts = getDemoProducts(products)
 
 export function getPriceChangePercent(previousPrice: number, currentPrice: number) {
   return ((currentPrice - previousPrice) / previousPrice) * 100

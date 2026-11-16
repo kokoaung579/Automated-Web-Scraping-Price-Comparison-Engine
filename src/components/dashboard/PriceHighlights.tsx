@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { ArrowDownRight, Ear, Headphones, Store } from 'lucide-react'
 import {
-  demoProducts,
+  getDemoProducts,
   formatDemoPrice,
   getPriceChangePercent,
   matchesDemoProduct,
@@ -11,6 +11,7 @@ import {
   DashboardEmptyState,
   DashboardSkeleton,
 } from './DashboardDataState'
+import type { Product } from '../../data/products'
 
 function ProductThumbnail({
   product,
@@ -85,15 +86,18 @@ function CheapestProductCard({ product }: { product: DemoProduct }) {
 }
 
 export function PriceHighlights({
+  products,
   loading = false,
   empty = false,
   searchQuery = '',
 }: {
+  products: Product[]
   loading?: boolean
   empty?: boolean
   searchQuery?: string
 }) {
-  const matchingProducts = demoProducts.filter((product) =>
+  const dashboardProducts = getDemoProducts(products)
+  const matchingProducts = dashboardProducts.filter((product) =>
     matchesDemoProduct(product, searchQuery),
   )
   const priceDrops = matchingProducts.filter(

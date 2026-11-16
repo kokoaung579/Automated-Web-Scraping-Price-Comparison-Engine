@@ -20,6 +20,7 @@ export type Product = {
   specifications: { label: string; value: string }[]
   icon: LucideIcon
   tone: string
+  externalOfferUrl?: string
 }
 
 export const products: Product[] = [
