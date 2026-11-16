@@ -1,4 +1,5 @@
 import { loadAdminStores } from './adminStores'
+import type { AdminStore } from './adminStores'
 
 export type ScrapingJobStatus =
   | 'queued'
@@ -19,11 +20,23 @@ export type ScrapingExecution = {
   logs: string[]
 }
 
+export type ScrapingJobConfiguration = {
+  interval_minutes: number
+  scheduled_at: string
+  request_timeout_seconds: number
+  retry_attempts: number
+}
+
+export type CreateScrapingJobInput = ScrapingJobConfiguration & {
+  store_id: string
+}
+
 export type ScrapingJob = {
   id: string
   store_id: string
   store_name: string
   website_url: string
+  configuration?: ScrapingJobConfiguration
   status: ScrapingJobStatus
   last_run: string | null
   next_run: string | null
@@ -45,7 +58,7 @@ const statuses: readonly ScrapingJobStatus[] = [
   'cancelled',
 ]
 
-function isScrapingExecution(value: unknown): value is ScrapingExecution {
+export function isScrapingExecution(value: unknown): value is ScrapingExecution {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false
   }
@@ -73,7 +86,29 @@ function isScrapingExecution(value: unknown): value is ScrapingExecution {
   )
 }
 
-function isScrapingJob(value: unknown): value is ScrapingJob {
+function isScrapingJobConfiguration(
+  value: unknown,
+): value is ScrapingJobConfiguration {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false
+  }
+  const configuration = value as Record<string, unknown>
+  return (
+    Number.isInteger(configuration.interval_minutes) &&
+    Number(configuration.interval_minutes) >= 1 &&
+    Number(configuration.interval_minutes) <= 10080 &&
+    typeof configuration.scheduled_at === 'string' &&
+    Number.isFinite(Date.parse(configuration.scheduled_at)) &&
+    Number.isInteger(configuration.request_timeout_seconds) &&
+    Number(configuration.request_timeout_seconds) >= 1 &&
+    Number(configuration.request_timeout_seconds) <= 300 &&
+    Number.isInteger(configuration.retry_attempts) &&
+    Number(configuration.retry_attempts) >= 0 &&
+    Number(configuration.retry_attempts) <= 10
+  )
+}
+
+export function isScrapingJob(value: unknown): value is ScrapingJob {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false
   }
@@ -83,6 +118,8 @@ function isScrapingJob(value: unknown): value is ScrapingJob {
     typeof job.store_id === 'string' &&
     typeof job.store_name === 'string' &&
     typeof job.website_url === 'string' &&
+    (job.configuration === undefined ||
+      isScrapingJobConfiguration(job.configuration)) &&
     typeof job.status === 'string' &&
     statuses.includes(job.status as ScrapingJobStatus) &&
     (job.last_run === null ||
@@ -176,6 +213,12 @@ export function getSeedScrapingJobs(): ScrapingJob[] {
       store_id: store.store_id,
       store_name: store.store_name,
       website_url: store.website_url,
+      configuration: {
+        interval_minutes: 60,
+        scheduled_at: nextRun ?? getDemoDate(-index - 1),
+        request_timeout_seconds: 30,
+        retry_attempts: 3,
+      },
       status,
       last_run: execution.started_at,
       next_run: nextRun,
@@ -216,6 +259,76 @@ export function saveScrapingJobs(jobs: ScrapingJob[]): void {
 
 export function clearScrapingJobData(): void {
   window.localStorage.removeItem(scrapingStorageKey)
+}
+
+export function validateScrapingJobInput(
+  input: CreateScrapingJobInput,
+  stores: AdminStore[],
+  now = Date.now(),
+): string[] {
+  const errors: string[] = []
+  if (!stores.some((store) => store.store_id === input.store_id)) {
+    errors.push('Select a managed store.')
+  }
+  if (
+    !Number.isInteger(input.interval_minutes) ||
+    input.interval_minutes < 1 ||
+    input.interval_minutes > 10080
+  ) {
+    errors.push('Scraping interval must be between 1 and 10,080 minutes.')
+  }
+  if (!Number.isFinite(Date.parse(input.scheduled_at))) {
+    errors.push('Choose a valid first run date and time.')
+  } else if (Date.parse(input.scheduled_at) <= now) {
+    errors.push('The first run must be scheduled in the future.')
+  }
+  if (
+    !Number.isInteger(input.request_timeout_seconds) ||
+    input.request_timeout_seconds < 1 ||
+    input.request_timeout_seconds > 300
+  ) {
+    errors.push('Request timeout must be between 1 and 300 seconds.')
+  }
+  if (
+    !Number.isInteger(input.retry_attempts) ||
+    input.retry_attempts < 0 ||
+    input.retry_attempts > 10
+  ) {
+    errors.push('Retry attempts must be between 0 and 10.')
+  }
+  return errors
+}
+
+export function createDemoScrapingJob(
+  input: CreateScrapingJobInput,
+  stores: AdminStore[],
+  now = new Date().toISOString(),
+): ScrapingJob {
+  const errors = validateScrapingJobInput(input, stores, Date.parse(now))
+  if (errors.length > 0) throw new Error(errors.join(' '))
+
+  const store = stores.find((item) => item.store_id === input.store_id)
+  if (!store) throw new Error('The selected managed store could not be found.')
+
+  return {
+    id: `scrape-${store.store_id}-${Date.parse(now)}-${Math.random().toString(36).slice(2, 8)}`,
+    store_id: store.store_id,
+    store_name: store.store_name,
+    website_url: store.website_url,
+    configuration: {
+      interval_minutes: input.interval_minutes,
+      scheduled_at: input.scheduled_at,
+      request_timeout_seconds: input.request_timeout_seconds,
+      retry_attempts: input.retry_attempts,
+    },
+    status: 'queued',
+    last_run: null,
+    next_run: input.scheduled_at,
+    products_found: 0,
+    success_rate: 0,
+    executions: [],
+    updated_at: now,
+  }
 }
 
 export function applyDemoJobAction(

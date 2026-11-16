@@ -9,10 +9,12 @@ import {
   loadAdminStores,
 } from '../data/adminStores'
 import {
+  createDemoScrapingJob,
   applyDemoJobAction,
   getSeedScrapingJobs,
   loadScrapingJobs,
   saveScrapingJobs,
+  validateScrapingJobInput,
 } from '../data/adminScraping'
 import {
   DEFAULT_ADMIN_SETTINGS,
@@ -113,6 +115,36 @@ describe('admin demo data rules', () => {
 
     saveScrapingJobs([cancelled])
     expect(loadScrapingJobs()).toEqual([cancelled])
+  })
+
+  it('validates and creates a scheduled job using an active managed store', () => {
+    const stores = getSeedAdminStores()
+    const input = {
+      store_id: stores[0].store_id,
+      interval_minutes: 45,
+      scheduled_at: new Date(Date.now() + 60_000).toISOString(),
+      request_timeout_seconds: 45,
+      retry_attempts: 2,
+    }
+
+    expect(validateScrapingJobInput(input, stores)).toEqual([])
+    const created = createDemoScrapingJob(input, stores)
+    expect(created).toMatchObject({
+      store_id: stores[0].store_id,
+      store_name: stores[0].store_name,
+      status: 'queued',
+      next_run: input.scheduled_at,
+      configuration: {
+        interval_minutes: input.interval_minutes,
+        scheduled_at: input.scheduled_at,
+        request_timeout_seconds: input.request_timeout_seconds,
+        retry_attempts: input.retry_attempts,
+      },
+    })
+    expect(validateScrapingJobInput(
+      { ...input, interval_minutes: 0, request_timeout_seconds: 301, retry_attempts: 11 },
+      stores,
+    )).toHaveLength(3)
   })
 
   it('persists settings and resets only the demo setting values', () => {

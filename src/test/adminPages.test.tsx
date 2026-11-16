@@ -98,7 +98,7 @@ describe('admin and shared user pages', () => {
     await waitFor(() => {
       expect(screen.getByTestId('current-path').textContent).toBe('/admin/users')
     })
-    expect(screen.getByRole('heading', { name: 'User Management' })).toBeDefined()
+    expect(screen.getAllByRole('heading', { name: 'User Management' }).length).toBeGreaterThan(0)
     adminPage.unmount()
 
     renderRoutes('/')
@@ -264,13 +264,37 @@ describe('admin and shared user pages', () => {
     render(<AdminScrapingPage />)
 
     await user.click(screen.getByRole('button', { name: `Pause ${initialJob.store_name} job` }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Pause job' }))
     expect(loadScrapingJobs().find((job) => job.id === initialJob.id)?.status).toBe('paused')
     await user.click(screen.getByRole('button', { name: `Resume ${initialJob.store_name} job` }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Resume job' }))
     expect(loadScrapingJobs().find((job) => job.id === initialJob.id)?.status).toBe('running')
     await user.click(screen.getByRole('button', { name: `Cancel ${initialJob.store_name} job` }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel job' }))
     expect(loadScrapingJobs().find((job) => job.id === initialJob.id)?.status).toBe('cancelled')
     await user.click(screen.getByRole('button', { name: `Start ${initialJob.store_name} job` }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start job' }))
     expect(loadScrapingJobs().find((job) => job.id === initialJob.id)?.status).toBe('running')
+  })
+
+  it('creates a validated demo job for an active managed store', async () => {
+    const user = userEvent.setup()
+    const store = getSeedAdminStores()[0]
+    render(<AdminScrapingPage />)
+
+    await user.click(screen.getByRole('button', { name: 'Create Scraping Job' }))
+    const dialog = screen.getByRole('dialog')
+    await user.selectOptions(within(dialog).getByLabelText('Managed store'), store.store_id)
+    await user.click(within(dialog).getByRole('button', { name: 'Create job' }))
+
+    await waitFor(() => {
+      expect(loadScrapingJobs().some((job) =>
+        job.store_id === store.store_id &&
+        job.status === 'queued' &&
+        job.configuration?.interval_minutes === 60,
+      )).toBe(true)
+    })
+    expect(screen.getByRole('status').textContent).toContain('no scraping was executed')
   })
 
   it('filters audit records, paginates, and presents details as read-only', async () => {
