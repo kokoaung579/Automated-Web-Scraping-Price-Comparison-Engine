@@ -1,4 +1,4 @@
-import type { Product } from './products'
+import type { DemoProduct } from './products'
 
 export type StoreOffer = {
   store: string
@@ -44,7 +44,7 @@ const additionalOffers: Record<string, StoreOffer[]> = {
   ],
 }
 
-export function getStoreOffers(product: Product): StoreOffer[] {
+export function getStoreOffers(product: DemoProduct): StoreOffer[] {
   const otherOffers = additionalOffers[product.id] ?? []
   return [
     { store: product.store, price: product.price },

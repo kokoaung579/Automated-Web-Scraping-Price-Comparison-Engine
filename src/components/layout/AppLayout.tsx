@@ -14,8 +14,10 @@ import type {
   UserPreferences,
   WatchlistEntry,
 } from '../../context/AppOutletContext'
-import { products } from '../../data/products'
-import type { Product } from '../../data/products'
+import { products as demoProducts } from '../../data/products'
+import { api } from '../../api/client'
+import type { LocalSession } from '../../auth/localAuth'
+import type { DemoProduct } from '../../data/products'
 import { AppHeader } from './AppHeader'
 import { Sidebar } from './Sidebar'
 
@@ -32,10 +34,20 @@ type AppState = {
   toast: Toast | null
 }
 
+type AppLayoutProps = {
+  currentUser: LocalSession
+}
+
 type AppAction =
   | {
+      type: 'hydrate'
+      watchlistEntries: WatchlistEntry[]
+      alerts: PriceAlert[]
+      notifications: DemoNotification[]
+    }
+  | {
       type: 'toggle-watchlist'
-      product: Product
+      product: DemoProduct
       toastId: number
       addedAt: string
     }
@@ -156,6 +168,15 @@ function formatPrice(price: number) {
 }
 
 function appReducer(state: AppState, action: AppAction): AppState {
+  if (action.type === 'hydrate') {
+    return {
+      ...state,
+      watchlistEntries: action.watchlistEntries,
+      alerts: action.alerts,
+      notifications: action.notifications,
+    }
+  }
+
   if (action.type === 'dismiss-toast') {
     return state.toast?.id === action.toastId ? { ...state, toast: null } : state
   }
@@ -290,12 +311,13 @@ function appReducer(state: AppState, action: AppAction): AppState {
   }
 }
 
-export function AppLayout() {
+export function AppLayout({ currentUser }: AppLayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [preferences, setPreferences] = useState(createInitialPreferences)
   const [theme, setTheme] = useState(preferences.theme)
+  const [products, setProducts] = useState(demoProducts)
   const [{ watchlistEntries, alerts, notifications, toast }, dispatch] =
     useReducer(appReducer, {
       watchlistEntries: [],
@@ -308,6 +330,41 @@ export function AppLayout() {
   const alertSequence = useRef(0)
   const notificationSequence = useRef(0)
 
+  useEffect(() => {
+    let active = true
+
+    Promise.all([
+      api.products(),
+      api.alerts(),
+      api.watchlist(),
+      api.notifications(),
+    ])
+      .then(([remoteProducts, remoteAlerts, remoteWatchlist, remoteNotifications]) => {
+        if (!active) return
+        setProducts(remoteProducts)
+        dispatch({
+          type: 'hydrate',
+          watchlistEntries: remoteWatchlist,
+          alerts: remoteAlerts,
+          notifications: remoteNotifications,
+        })
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to load application data from the backend', error)
+        if (active) {
+          dispatch({
+            type: 'notify',
+            message: 'Backend unavailable; showing demo data.',
+            toastId: ++toastSequence.current,
+          })
+        }
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme
     document.documentElement.style.colorScheme = theme
@@ -319,7 +376,26 @@ export function AppLayout() {
     }
   }, [theme])
 
-  function toggleWatchlist(product: Product) {
+  async function toggleWatchlist(product: DemoProduct) {
+    const alreadySaved = watchlistEntries.some(
+      (entry) => entry.productId === product.id,
+    )
+    try {
+      if (alreadySaved) {
+        await api.removeFromWatchlist(product.id)
+      } else {
+        await api.addToWatchlist(product.id, new Date().toISOString())
+      }
+    } catch (error) {
+      console.error('Unable to update the backend watchlist', error)
+      dispatch({
+        type: 'notify',
+        message: 'Could not update your watchlist. Please try again.',
+        toastId: ++toastSequence.current,
+      })
+      return
+    }
+
     dispatch({
       type: 'toggle-watchlist',
       product,
@@ -358,7 +434,7 @@ export function AppLayout() {
     setTheme(nextTheme)
   }
 
-  function saveAlert(draft: PriceAlertDraft, alertId?: string) {
+  async function saveAlert(draft: PriceAlertDraft, alertId?: string) {
     const product = products.find((item) => item.id === draft.productId)
     if (!product) {
       dispatch({
@@ -366,7 +442,7 @@ export function AppLayout() {
         message: 'Choose a product from the catalog before saving.',
         toastId: ++toastSequence.current,
       })
-      return
+      return false
     }
 
     if (
@@ -379,7 +455,7 @@ export function AppLayout() {
         message: 'Enter a valid alert threshold before saving.',
         toastId: ++toastSequence.current,
       })
-      return
+      return false
     }
 
     const existingAlert = alertId
@@ -391,7 +467,7 @@ export function AppLayout() {
         message: 'That alert is no longer available.',
         toastId: ++toastSequence.current,
       })
-      return
+      return false
     }
 
     const targetPrice =
@@ -428,16 +504,59 @@ export function AppLayout() {
           isRead: false,
         }
         : undefined
+    let savedAlert: PriceAlert
+    try {
+      savedAlert = await api.saveAlert(alert, Boolean(existingAlert))
+    } catch (error) {
+      console.error('Unable to save the alert to the backend', error)
+      dispatch({
+        type: 'notify',
+        message: 'Could not save your alert. Please try again.',
+        toastId: ++toastSequence.current,
+      })
+      return false
+    }
+
+    let notificationFailed = false
+    if (notification) {
+      try {
+        await api.createNotification(notification)
+      } catch (error) {
+        console.error('Unable to save the alert notification to the backend', error)
+        notificationFailed = true
+      }
+    }
+
     dispatch({
       type: 'save-alert',
-      alert,
+      alert: savedAlert,
       notification,
       toastId: ++toastSequence.current,
       message: existingAlert ? 'Alert updated' : 'Alert created',
     })
+    if (notificationFailed) {
+      dispatch({
+        type: 'notify',
+        message: 'Alert saved, but its notification could not be saved.',
+        toastId: ++toastSequence.current,
+      })
+    }
+    return true
   }
 
-  function deleteAlert(alertId: string) {
+  async function deleteAlert(alertId: string) {
+    try {
+      await api.deleteAlert(alertId)
+    } catch (error) {
+      console.error('Unable to delete the alert from the backend', error)
+      dispatch({
+        type: 'notify',
+        message: 'Could not delete your alert. Please try again.',
+        toastId: ++toastSequence.current,
+      })
+      return
+    }
+
     dispatch({
       type: 'delete-alert',
       alertId,
@@ -445,7 +564,19 @@ export function AppLayout() {
     })
   }
 
-  function markNotificationRead(notificationId: string) {
+  async function markNotificationRead(notificationId: string) {
+    try {
+      await api.markNotificationRead(notificationId)
+    } catch (error) {
+      console.error('Unable to update the backend notification', error)
+      dispatch({
+        type: 'notify',
+        message: 'Could not update the notification. Please try again.',
+        toastId: ++toastSequence.current,
+      })
+      return
+    }
+
     dispatch({
       type: 'mark-notification-read',
       notificationId,
@@ -453,14 +584,38 @@ export function AppLayout() {
     })
   }
 
-  function markAllNotificationsRead() {
+  async function markAllNotificationsRead() {
+    try {
+      await api.markAllNotificationsRead()
+    } catch (error) {
+      console.error('Unable to update backend notifications', error)
+      dispatch({
+        type: 'notify',
+        message: 'Could not update notifications. Please try again.',
+        toastId: ++toastSequence.current,
+      })
+      return
+    }
+
     dispatch({
       type: 'mark-all-notifications-read',
       toastId: ++toastSequence.current,
     })
   }
 
-  function deleteNotification(notificationId: string) {
+  async function deleteNotification(notificationId: string) {
+    try {
+      await api.deleteNotification(notificationId)
+    } catch (error) {
+      console.error('Unable to delete the backend notification', error)
+      dispatch({
+        type: 'notify',
+        message: 'Could not delete the notification. Please try again.',
+        toastId: ++toastSequence.current,
+      })
+      return
+    }
+
     dispatch({
       type: 'delete-notification',
       notificationId,
@@ -468,7 +623,19 @@ export function AppLayout() {
     })
   }
 
-  function clearNotifications() {
+  async function clearNotifications() {
+    try {
+      await api.clearNotifications()
+    } catch (error) {
+      console.error('Unable to clear backend notifications', error)
+      dispatch({
+        type: 'notify',
+        message: 'Could not clear notifications. Please try again.',
+        toastId: ++toastSequence.current,
+      })
+      return
+    }
+
     dispatch({
       type: 'clear-notifications',
       toastId: ++toastSequence.current,
@@ -526,14 +693,17 @@ export function AppLayout() {
         }`}
       >
         <AppHeader
+          currentUser={currentUser}
           onMenuClick={toggleSidebar}
           onSearchChange={setSearchQuery}
           notifications={notifications}
+          products={products}
           unreadNotificationCount={unreadNotificationCount}
         />
         <main className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
           <Outlet
             context={{
+              products,
               searchQuery,
               setSearchQuery,
               watchlistIds,

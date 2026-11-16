@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -17,17 +17,20 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { products } from '../data/products'
+import { useOutletContext } from 'react-router-dom'
+import type { AppOutletContext } from '../context/AppOutletContext'
+import { api } from '../api/client'
 import {
   createStorePriceHistory,
   priceHistoryPeriods,
 } from '../data/priceHistory'
-import type { Product } from '../data/products'
+import type { DemoProduct } from '../data/products'
 import type {
   PriceHistoryPeriod,
   PriceHistoryPoint,
 } from '../data/priceHistory'
 import { getStoreOffers } from '../data/storeOffers'
+import type { StoreOffer } from '../data/storeOffers'
 
 type Period = PriceHistoryPeriod
 type StoreHistory = { store: string; points: PriceHistoryPoint[] }
@@ -88,7 +91,7 @@ function formatChange(change: number | null, changePercent: number | null) {
   return `${direction}${formatPrice(Math.abs(change))} (${direction}${Math.abs(changePercent).toFixed(1)}%)`
 }
 
-function ProductThumbnail({ product }: { product: Product }) {
+function ProductThumbnail({ product }: { product: DemoProduct }) {
   const Icon = product.icon
 
   return (
@@ -195,16 +198,56 @@ function HistoryTableRow({ row }: { row: HistoryRow }) {
 }
 
 export function PriceHistoryPage() {
+  const { products } = useOutletContext<AppOutletContext>()
   const [selectedProductId, setSelectedProductId] = useState(
     products[0]?.id ?? '',
   )
   const [period, setPeriod] = useState<Period>('30D')
   const [storeFilter, setStoreFilter] = useState('all')
   const product = products.find((item) => item.id === selectedProductId)
+  const [remoteData, setRemoteData] = useState<{
+    productId: string
+    period: Period
+    offers: StoreOffer[]
+    histories: StoreHistory[]
+  } | null>(null)
+
+  useEffect(() => {
+    let active = true
+    const productId = product?.id
+    if (!productId) return
+
+    Promise.all([
+      api.offers(productId),
+      api.priceHistory(productId, period),
+    ])
+      .then(([offers, histories]) => {
+        if (active) {
+          setRemoteData({
+            productId,
+            period,
+            offers,
+            histories,
+          })
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to load price history from the backend', error)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [period, product?.id])
 
   const storeOffers = useMemo(
-    () => (product ? getStoreOffers(product) : []),
-    [product],
+    () =>
+      remoteData && remoteData.productId === product?.id
+        ? remoteData.offers
+        : product
+          ? getStoreOffers(product)
+          : [],
+    [product, remoteData],
   )
   const visibleOffers = useMemo(
     () =>
@@ -214,8 +257,18 @@ export function PriceHistoryPage() {
     [storeFilter, storeOffers],
   )
   const histories = useMemo(
-    () =>
-      product
+    () => {
+      if (
+        remoteData &&
+        remoteData.productId === product?.id &&
+        remoteData.period === period
+      ) {
+        return remoteData.histories.filter((history) =>
+          visibleOffers.some((offer) => offer.store === history.store),
+        )
+      }
+
+      return product
         ? visibleOffers.map((offer, index) => ({
             store: offer.store,
             points: createStorePriceHistory(
@@ -225,8 +278,9 @@ export function PriceHistoryPage() {
               index,
             ),
           }))
-        : [],
-    [period, product, visibleOffers],
+        : []
+    },
+    [period, product, remoteData, visibleOffers],
   )
   const chartData: ChartPoint[] = histories[0]?.points.map((point, index) => {
     const row: ChartPoint = { date: point.date }

@@ -1,6 +1,16 @@
 import { Component, lazy, Suspense } from 'react'
 import type { ReactNode } from 'react'
-import { Link, Navigate, Route, Routes, useParams } from 'react-router-dom'
+import {
+  Link,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useParams,
+} from 'react-router-dom'
+import { getCurrentSession } from '../auth/localAuth'
+import type { LocalSession } from '../auth/localAuth'
+import { AdminLayout } from '../components/admin/AdminLayout'
 import { AppLayout } from '../components/layout/AppLayout'
 import { AlertsPage } from '../pages/AlertsPage'
 import { DashboardPage } from '../pages/DashboardPage'
@@ -8,8 +18,16 @@ import { NotificationsPage } from '../pages/NotificationsPage'
 import { ProductsPage, WatchlistPage } from '../pages/ProductsPage'
 import { PriceComparisonPage } from '../pages/PriceComparisonPage'
 import { PriceHistoryPage } from '../pages/PriceHistoryPage'
-import { ScrapingLogsPage } from '../pages/ScrapingLogsPage'
 import { SettingsPage } from '../pages/SettingsPage'
+import { AuthPage } from '../pages/AuthPage'
+import { AdminOverviewPage } from '../pages/admin/AdminOverviewPage'
+import { AdminCategoriesPage } from '../pages/admin/AdminCategoriesPage'
+import { AdminProductsPage } from '../pages/admin/AdminProductsPage'
+import { AdminStoresPage } from '../pages/admin/AdminStoresPage'
+import { AdminScrapingPage } from '../pages/admin/AdminScrapingPage'
+import { AdminAuditLogsPage } from '../pages/admin/AdminAuditLogsPage'
+import { AdminSettingsPage } from '../pages/admin/AdminSettingsPage'
+import { AdminUsersPage } from '../pages/admin/AdminUsersPage'
 
 const ProductDetailPage = lazy(() =>
   import('../pages/ProductDetailPage').then((module) => ({
@@ -116,10 +134,142 @@ function ProductDetailLoading() {
   )
 }
 
+function ProtectedAppLayout() {
+  const location = useLocation()
+  let currentUser: LocalSession | null
+
+  try {
+    currentUser = getCurrentSession()
+  } catch (error) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#070b14] px-5 font-sans text-slate-100">
+        <section
+          role="alert"
+          className="max-w-md rounded-2xl border border-rose-400/15 bg-[#0d1320] p-6"
+        >
+          <h1 className="text-base font-semibold text-white">
+            Could not verify your login
+          </h1>
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            {error instanceof Error
+              ? error.message
+              : 'Please try signing in again.'}
+          </p>
+          <Link
+            to="/login"
+            className="mt-5 inline-flex rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-500"
+          >
+            Go to login
+          </Link>
+        </section>
+      </main>
+    )
+  }
+
+  if (!currentUser) {
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{ from: location.pathname }}
+      />
+    )
+  }
+
+  if (currentUser.role === 'Admin') {
+    return <Navigate to="/admin" replace />
+  }
+
+  return <AppLayout currentUser={currentUser} />
+}
+
+function ProtectedAdminLayout() {
+  const location = useLocation()
+  let currentUser: LocalSession | null
+
+  try {
+    currentUser = getCurrentSession()
+  } catch (error) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-[#070b14] px-5 font-sans text-slate-100">
+        <section
+          role="alert"
+          className="max-w-md rounded-2xl border border-rose-400/15 bg-[#0d1320] p-6"
+        >
+          <h1 className="text-base font-semibold text-white">
+            Could not verify your admin access
+          </h1>
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            {error instanceof Error
+              ? error.message
+              : 'Please sign in again to continue.'}
+          </p>
+          <Link
+            to="/login"
+            className="mt-5 inline-flex rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-500"
+          >
+            Go to login
+          </Link>
+        </section>
+      </main>
+    )
+  }
+
+  if (!currentUser) {
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{ from: location.pathname }}
+      />
+    )
+  }
+
+  if (currentUser.role !== 'Admin') {
+    return <Navigate to="/" replace />
+  }
+
+  return <AdminLayout currentUser={currentUser} />
+}
+
 export function AppRoutes() {
   return (
     <Routes>
-      <Route element={<AppLayout />}>
+      <Route path="signup" element={<AuthPage mode="signup" />} />
+      <Route path="login" element={<AuthPage mode="login" />} />
+      <Route path="admin" element={<ProtectedAdminLayout />}>
+        <Route index element={<AdminOverviewPage />} />
+        <Route
+          path="users"
+          element={<AdminUsersPage />}
+        />
+        <Route
+          path="products"
+          element={<AdminProductsPage />}
+        />
+        <Route
+          path="categories"
+          element={<AdminCategoriesPage />}
+        />
+        <Route
+          path="stores"
+          element={<AdminStoresPage />}
+        />
+        <Route
+          path="scraping"
+          element={<AdminScrapingPage />}
+        />
+        <Route
+          path="audit-logs"
+          element={<AdminAuditLogsPage />}
+        />
+        <Route
+          path="settings"
+          element={<AdminSettingsPage />}
+        />
+        <Route path="*" element={<Navigate to="/admin" replace />} />
+      </Route>
+      <Route element={<ProtectedAppLayout />}>
         <Route index element={<DashboardPage />} />
         <Route path="products" element={<ProductsPage />} />
         <Route
@@ -128,7 +278,6 @@ export function AppRoutes() {
         />
         <Route path="comparison" element={<PriceComparisonPage />} />
         <Route path="price-history" element={<PriceHistoryPage />} />
-        <Route path="scraping-logs" element={<ScrapingLogsPage />} />
         <Route path="watchlist" element={<WatchlistPage />} />
         <Route path="alerts" element={<AlertsPage />} />
         <Route path="notifications" element={<NotificationsPage />} />

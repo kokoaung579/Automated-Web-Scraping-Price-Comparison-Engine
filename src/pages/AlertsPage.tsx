@@ -17,8 +17,7 @@ import type {
   PriceAlert,
   PriceAlertDraft,
 } from '../context/AppOutletContext'
-import { products } from '../data/products'
-import type { Product } from '../data/products'
+import type { DemoProduct } from '../data/products'
 
 function formatPrice(price: number) {
   return new Intl.NumberFormat('en-US', {
@@ -27,11 +26,11 @@ function formatPrice(price: number) {
   }).format(price)
 }
 
-function getPriceChange(product: Product) {
+function getPriceChange(product: DemoProduct) {
   return ((product.price - product.previousPrice) / product.previousPrice) * 100
 }
 
-function ProductThumbnail({ product }: { product: Product }) {
+function ProductThumbnail({ product }: { product: DemoProduct }) {
   const Icon = product.icon
 
   return (
@@ -47,11 +46,13 @@ function ProductThumbnail({ product }: { product: Product }) {
 
 function AlertForm({
   alert,
+  products,
   onSave,
   onCancel,
 }: {
   alert: PriceAlert | null
-  onSave: (draft: PriceAlertDraft, alertId?: string) => void
+  products: DemoProduct[]
+  onSave: (draft: PriceAlertDraft, alertId?: string) => Promise<boolean>
   onCancel: () => void
 }) {
   const [productId, setProductId] = useState(
@@ -233,7 +234,7 @@ function AlertCard({
   onDelete,
 }: {
   alert: PriceAlert
-  product: Product
+  product: DemoProduct
   onEdit: () => void
   onDelete: () => void
 }) {
@@ -310,7 +311,7 @@ function AlertCard({
 }
 
 export function AlertsPage() {
-  const { alerts, saveAlert, deleteAlert } =
+  const { products, alerts, saveAlert, deleteAlert } =
     useOutletContext<AppOutletContext>()
   const [filter, setFilter] = useState<AlertStatus | 'all'>('all')
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -334,9 +335,10 @@ export function AlertsPage() {
     setEditingAlertId(null)
   }
 
-  function handleSave(draft: PriceAlertDraft, alertId?: string) {
-    saveAlert(draft, alertId)
-    closeForm()
+  async function handleSave(draft: PriceAlertDraft, alertId?: string) {
+    const saved = await saveAlert(draft, alertId)
+    if (saved) closeForm()
+    return saved
   }
 
   function handleDelete(alertId: string) {
@@ -380,6 +382,7 @@ export function AlertsPage() {
         <AlertForm
           key={editingAlert?.id ?? 'new'}
           alert={editingAlert}
+          products={products}
           onSave={handleSave}
           onCancel={closeForm}
         />
