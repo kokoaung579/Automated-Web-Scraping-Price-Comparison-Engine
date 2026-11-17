@@ -1,4 +1,4 @@
-import { createElement, useMemo, useState } from 'react'
+import { createElement, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   ArrowDown,
@@ -23,8 +23,6 @@ import {
   PRODUCT_AVAILABILITIES,
   PRODUCT_REQUIRED_FIELDS,
   PRODUCT_SCHEMA_FIELDS,
-  loadAdminProducts,
-  saveAdminProducts,
   validateProductImportRows,
 } from '../../data/adminProducts'
 import {
@@ -36,6 +34,7 @@ import type {
   ProductImportRow,
 } from '../../data/adminProducts'
 import type { Product } from '../../types/product'
+import { api } from '../../api/client'
 import { products as demoProducts } from '../../data/products'
 
 type ProductFormValues = Pick<
@@ -556,7 +555,7 @@ function DeleteProductDialog({
           <span className="font-medium text-slate-200">
             {product.product_name}
           </span>{' '}
-          will be removed from this demo catalog.
+          will be removed from the product catalog.
         </p>
         <div className="mt-5 flex justify-end gap-2">
           <button
@@ -836,19 +835,11 @@ async function parseImportRows(file: File): Promise<ProductImportRow[]> {
 }
 
 export function AdminProductsPage() {
-  const [catalog, setCatalog] = useState(() => {
-    try {
-      return { products: loadAdminProducts(), error: '' }
-    } catch (error) {
-      return {
-        products: [] as Product[],
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Could not load saved Admin product data.',
-      }
-    }
-  })
+  const [catalog, setCatalog] = useState<{
+    products: Product[]
+    error: string
+  }>({ products: [], error: '' })
+  const [loading, setLoading] = useState(true)
   const products = catalog.products
   const [searchQuery, setSearchQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -869,6 +860,37 @@ export function AdminProductsPage() {
   } | null>(null)
   const [feedback, setFeedback] = useState('')
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadProducts() {
+      try {
+        const loadedProducts = await api.adminProducts()
+        if (!cancelled) {
+          setCatalog({ products: loadedProducts, error: '' })
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setCatalog({
+            products: [],
+            error:
+              error instanceof Error
+                ? `Could not load products from the backend: ${error.message}`
+                : 'Could not load products from the backend.',
+          })
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    void loadProducts()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const categories = useMemo(
     () => [...new Set(products.map((product) => product.category))].sort(),
@@ -913,20 +935,6 @@ export function AdminProductsPage() {
     storeFilter,
   ])
 
-  function persistProducts(nextProducts: Product[], message: string) {
-    try {
-      saveAdminProducts(nextProducts)
-      setCatalog({ products: nextProducts, error: '' })
-      setFeedback(message)
-    } catch (error) {
-      setFeedback(
-        error instanceof Error
-          ? `Could not save product changes: ${error.message}`
-          : 'Could not save product changes.',
-      )
-    }
-  }
-
   function openCreateForm() {
     setEditingProduct(null)
     setFormOpen(true)
@@ -939,34 +947,59 @@ export function AdminProductsPage() {
     setFeedback('')
   }
 
-  function saveProduct(product: Product) {
+  async function saveProduct(product: Product) {
     const existing = editingProduct
-    const nextProducts = existing
-      ? products.map((item) =>
-          item.product_id === existing.product_id ? product : item,
-        )
-      : [product, ...products]
+    setBusy(true)
+    setFeedback('')
 
-    persistProducts(
-      nextProducts,
-      existing
-        ? `${product.product_name} updated.`
-        : `${product.product_name} added as a manual product.`,
-    )
-    setFormOpen(false)
-    setEditingProduct(null)
+    try {
+      if (existing) {
+        await api.updateAdminProduct(existing.product_id, product)
+      } else {
+        await api.createAdminProduct(product)
+      }
+
+      const refreshedProducts = await api.adminProducts()
+      setCatalog({ products: refreshedProducts, error: '' })
+      setFeedback(
+        existing
+          ? `${product.product_name} updated.`
+          : `${product.product_name} added as a manual product.`,
+      )
+      setFormOpen(false)
+      setEditingProduct(null)
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? `Could not save product changes: ${error.message}`
+          : 'Could not save product changes.',
+      )
+    } finally {
+      setBusy(false)
+    }
   }
 
-  function confirmDelete() {
+  async function confirmDelete() {
     if (!deletingProduct) return
-    const nextProducts = products.filter(
-      (product) => product.product_id !== deletingProduct.product_id,
-    )
-    persistProducts(
-      nextProducts,
-      `${deletingProduct.product_name} removed from the demo catalog.`,
-    )
-    setDeletingProduct(null)
+    const productToDelete = deletingProduct
+    setBusy(true)
+    setFeedback('')
+
+    try {
+      await api.deleteAdminProduct(productToDelete.product_id)
+      const refreshedProducts = await api.adminProducts()
+      setCatalog({ products: refreshedProducts, error: '' })
+      setFeedback(`${productToDelete.product_name} removed from the catalog.`)
+      setDeletingProduct(null)
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? `Could not delete product: ${error.message}`
+          : 'Could not delete product.',
+      )
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function exportProducts() {
@@ -1061,18 +1094,50 @@ export function AdminProductsPage() {
     }
   }
 
-  function confirmImport() {
+  async function confirmImport() {
     if (!importPreview) return
     const validProducts = importPreview.results.flatMap((row) =>
       row.product ? [row.product] : [],
     )
     if (!validProducts.length) return
-    const nextProducts = [...validProducts, ...products]
-    persistProducts(
-      nextProducts,
-      `Imported ${validProducts.length} valid products. Invalid rows were skipped.`,
-    )
-    setImportPreview(null)
+
+    setBusy(true)
+    setFeedback('')
+    let importedCount = 0
+    const failedIds: string[] = []
+
+    try {
+      for (const product of validProducts) {
+        try {
+          await api.createAdminProduct(product)
+          importedCount += 1
+        } catch {
+          failedIds.push(product.product_id)
+        }
+      }
+
+      const refreshedProducts = await api.adminProducts()
+      setCatalog({ products: refreshedProducts, error: '' })
+      setImportPreview(null)
+
+      if (failedIds.length > 0) {
+        setFeedback(
+          `Imported ${importedCount} products. ${failedIds.length} failed: ${failedIds.slice(0, 5).join(', ')}${failedIds.length > 5 ? ', …' : ''}.`,
+        )
+      } else {
+        setFeedback(
+          `Imported ${importedCount} valid products. Invalid rows were skipped.`,
+        )
+      }
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? `Import completed with a refresh error: ${error.message}`
+          : 'Import completed, but the product list could not be refreshed.',
+      )
+    } finally {
+      setBusy(false)
+    }
   }
 
   const availableCount = products.filter(
@@ -1096,15 +1161,14 @@ export function AdminProductsPage() {
             Product Management
           </h2>
           <p className="mt-1.5 max-w-2xl text-xs leading-5 text-slate-500 sm:text-[13px]">
-            Manage the shared product schema and import or export your local
-            demo catalog.
+            Manage the shared product schema and import or export products stored in the backend.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={downloadTemplate}
-            disabled={Boolean(catalog.error)}
+            disabled={Boolean(catalog.error) || loading || busy}
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.025] px-3.5 py-2.5 text-[11px] font-medium text-slate-300 transition hover:bg-white/[0.06] disabled:opacity-40"
           >
             <FileSpreadsheet aria-hidden="true" size={14} />
@@ -1113,21 +1177,21 @@ export function AdminProductsPage() {
           <button
             type="button"
             onClick={exportProducts}
-            disabled={Boolean(catalog.error)}
+            disabled={Boolean(catalog.error) || loading || busy}
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-300/10 bg-cyan-400/[0.05] px-3.5 py-2.5 text-[11px] font-medium text-cyan-200 transition hover:bg-cyan-400/[0.1] disabled:opacity-40"
           >
             <Download aria-hidden="true" size={14} />
             Export Products
           </button>
           <label
-            className={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-blue-300/10 bg-blue-400/[0.06] px-3.5 py-2.5 text-[11px] font-medium text-blue-200 transition hover:bg-blue-400/[0.12] ${catalog.error || busy ? 'pointer-events-none opacity-40' : ''}`}
+            className={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-blue-300/10 bg-blue-400/[0.06] px-3.5 py-2.5 text-[11px] font-medium text-blue-200 transition hover:bg-blue-400/[0.12] ${catalog.error || loading || busy ? 'pointer-events-none opacity-40' : ''}`}
           >
             <Upload aria-hidden="true" size={14} />
             {busy ? 'Reading workbook…' : 'Import Excel'}
             <input
               type="file"
               accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              disabled={Boolean(catalog.error) || busy}
+              disabled={Boolean(catalog.error) || loading || busy}
               onChange={(event) => {
                 void handleImportFile(event.currentTarget.files?.[0])
                 event.currentTarget.value = ''
@@ -1138,7 +1202,7 @@ export function AdminProductsPage() {
           <button
             type="button"
             onClick={openCreateForm}
-            disabled={Boolean(catalog.error)}
+            disabled={Boolean(catalog.error) || loading || busy}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-950/20 transition hover:bg-blue-400 disabled:opacity-40"
           >
             <Plus aria-hidden="true" size={15} />
@@ -1206,7 +1270,7 @@ export function AdminProductsPage() {
               </p>
             </div>
             <span className="rounded-full border border-white/[0.07] bg-white/[0.025] px-2.5 py-1 text-[9px] font-medium text-slate-500">
-              Local demo data · Persisted in this browser
+              Backend catalog · Stored in MongoDB
             </span>
           </div>
 
@@ -1431,7 +1495,7 @@ export function AdminProductsPage() {
 
       <p className="flex items-center justify-center gap-1.5 pb-1 text-[9px] text-slate-600">
         <Package aria-hidden="true" size={12} />
-        Product records are stored in local browser storage for this demo.
+        Product records are loaded from and saved to the backend catalog.
       </p>
 
       {formOpen && (
