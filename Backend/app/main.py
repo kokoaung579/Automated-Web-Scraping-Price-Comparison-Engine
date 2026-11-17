@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from app.routers.channel3 import router as channel3_router
 from app.routers.apify import router as apify_router
+from app.routers.stores import router as stores_router
 from app.services.channel3_services import (
     find_matching_channel3_product,
     search_channel3_products,
@@ -59,6 +60,7 @@ app.add_middleware(
 
 app.include_router(channel3_router)
 app.include_router(apify_router)
+app.include_router(stores_router)
 
 
 def get_database():
