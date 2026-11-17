@@ -19,3 +19,11 @@ def get_mongodb_url() -> str:
 
 def get_database_name() -> str:
     return os.getenv("DATABASE_NAME", "PriceComparison")
+
+
+def get_apify_api_token() -> str:
+    return os.getenv("APIFY_API_TOKEN", "").strip()
+
+
+def get_apify_actor_id() -> str:
+    return os.getenv("APIFY_ACTOR_ID", "").strip()

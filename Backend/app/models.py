@@ -24,6 +24,27 @@ class Product(APIModel):
     updatedAt: str
     specifications: list[Specification]
     tone: str
+class AdminProduct(APIModel):
+    product_id: str = Field(min_length=1)
+    product_name: str = Field(min_length=1)
+    category: str = Field(min_length=1)
+    brand: str | None = None
+    model: str | None = None
+    description: str | None = None
+    image_url: str | None = None
+    product_url: str | None = None
+    store_id: str | None = None
+    price: float = Field(gt=0)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    availability: Literal[
+        "in_stock",
+        "out_of_stock",
+        "preorder",
+        "unknown",
+    ]
+    source_type: Literal["scraped", "manual"]
+    created_at: str = Field(min_length=1)
+    updated_at: str = Field(min_length=1)
 
 
 class StoreOffer(APIModel):
