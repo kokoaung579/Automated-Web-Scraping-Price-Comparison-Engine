@@ -47,6 +47,20 @@ class AdminProduct(APIModel):
     updated_at: str = Field(min_length=1)
 
 
+class Store(APIModel):
+    store_id: str = Field(
+        min_length=1,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    store_name: str = Field(min_length=1)
+    website_url: str = Field(min_length=1)
+    logo_url: str | None = None
+    status: Literal["Active", "Inactive"]
+    created_at: str = Field(min_length=1)
+    updated_at: str = Field(min_length=1)
+
+
+
 class StoreOffer(APIModel):
     store: str
     price: float = Field(ge=0)
