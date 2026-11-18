@@ -1,5 +1,7 @@
+
 import { Camera, Ear, Gamepad2, Headphones, Smartphone } from 'lucide-react'
 import type { DemoProduct } from '../data/products'
+import type { Product } from '../types/product'
 import type {
   DemoNotification,
   PriceAlert,
@@ -90,7 +92,9 @@ export function toChannel3CatalogProduct(
   const offer = product.offers
     .filter((item) => item.currency.toUpperCase() === 'USD')
     .sort((first, second) => first.price - second.price)[0]
+
   if (!offer) return null
+
   const previousPrice =
     offer.compare_at_price && offer.compare_at_price > 0
       ? offer.compare_at_price
@@ -124,13 +128,37 @@ export function toChannel3CatalogProduct(
 
 export const api = {
   health: () => request<{ status: string }>('/health'),
+
+  // Admin Products CRUD
+  adminProducts: () => request<Product[]>('/admin/products'),
+
+  createAdminProduct: (product: Product) =>
+    request<Product>('/admin/products', {
+      method: 'POST',
+      body: JSON.stringify(product),
+    }),
+
+  updateAdminProduct: (productId: string, product: Product) =>
+    request<Product>(`/admin/products/${encodeURIComponent(productId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(product),
+    }),
+
+  deleteAdminProduct: (productId: string) =>
+    request<void>(`/admin/products/${encodeURIComponent(productId)}`, {
+      method: 'DELETE',
+    }),
+
+  // Existing APIs
   products: async () =>
     (await request<ProductRecord[]>('/products')).map(hydrateProduct),
+
   channel3Product: (productId: string) =>
     request<{
       productId: string
       product: Channel3Product | null
     }>(`/products/${encodeURIComponent(productId)}/channel3`),
+
   searchChannel3Products: (query: string, limit = 10) => {
     const params = new URLSearchParams({ q: query, limit: String(limit) })
     return request<{
@@ -140,47 +168,62 @@ export const api = {
       products: Channel3Product[]
     }>(`/channel3/search?${params}`)
   },
+
   alerts: () => request<PriceAlert[]>('/alerts'),
+
   saveAlert: (alert: PriceAlert, existing: boolean) =>
     request<PriceAlert>(existing ? `/alerts/${alert.id}` : '/alerts', {
       method: existing ? 'PUT' : 'POST',
       body: JSON.stringify(alert),
     }),
+
   deleteAlert: (alertId: string) =>
     request<void>(`/alerts/${encodeURIComponent(alertId)}`, {
       method: 'DELETE',
     }),
+
   watchlist: () => request<WatchlistEntry[]>('/watchlist'),
+
   addToWatchlist: (productId: string, addedAt: string) =>
     request<WatchlistEntry>(`/watchlist/${encodeURIComponent(productId)}`, {
       method: 'PUT',
       body: JSON.stringify({ addedAt }),
     }),
+
   removeFromWatchlist: (productId: string) =>
     request<void>(`/watchlist/${encodeURIComponent(productId)}`, {
       method: 'DELETE',
     }),
+
   notifications: () => request<DemoNotification[]>('/notifications'),
+
   createNotification: (notification: DemoNotification) =>
     request<DemoNotification>('/notifications', {
       method: 'POST',
       body: JSON.stringify(notification),
     }),
+
   markNotificationRead: (notificationId: string) =>
     request<void>(`/notifications/${encodeURIComponent(notificationId)}/read`, {
       method: 'PUT',
     }),
+
   markAllNotificationsRead: () =>
     request<void>('/notifications/read-all', { method: 'POST' }),
+
   deleteNotification: (notificationId: string) =>
     request<void>(`/notifications/${encodeURIComponent(notificationId)}`, {
       method: 'DELETE',
     }),
+
   clearNotifications: () =>
     request<void>('/notifications', { method: 'DELETE' }),
+
   scrapingLogs: () => request<ScrapingLog[]>('/scraping-logs'),
+
   offers: (productId: string) =>
     request<StoreOffer[]>(`/products/${encodeURIComponent(productId)}/offers`),
+
   priceHistory: (productId: string, period: PriceHistoryPeriod) =>
     request<StoreHistory[]>(
       `/products/${encodeURIComponent(productId)}/history?period=${period}`,
