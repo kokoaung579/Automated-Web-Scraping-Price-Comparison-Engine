@@ -149,7 +149,7 @@ export const api = {
   health: () => request<{ status: string }>('/health'),
 
   registerAccount: (email: string, username: string, password: string) =>
-    request<AuthUser>('/auth/register', {
+    request<{ message: string }>('/auth/register', {
       method: 'POST',
       body: JSON.stringify({ email, username, password }),
     }),
@@ -172,6 +172,32 @@ export const api = {
       body: JSON.stringify({ email }),
     }),
 
+  forgotPassword: (email: string) =>
+    request<{ message: string }>('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  verifyResetOtp: (email: string, otp: string) =>
+    request<{ resetToken: string }>('/auth/verify-reset-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email, otp }),
+    }),
+
+  resetPassword: (
+    resetToken: string,
+    newPassword: string,
+    confirmPassword: string,
+  ) =>
+    request<{ message: string }>('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        reset_token: resetToken,
+        new_password: newPassword,
+        confirm_password: confirmPassword,
+      }),
+    }),
+
   currentSession: () => request<AuthUser | null>('/auth/session'),
 
   logout: () =>
@@ -190,6 +216,12 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify({ status }),
       },
+    ),
+
+  deleteAdminUser: (userId: string) =>
+    request<{ message: string }>(
+      `/admin/users/${encodeURIComponent(userId)}`,
+      { method: 'DELETE' },
     ),
 
   importBrowserUsers: (accounts: BrowserAccountImport[]) =>
