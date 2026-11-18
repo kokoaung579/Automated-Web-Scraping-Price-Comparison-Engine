@@ -10,6 +10,7 @@ import {
   Search,
   Shield,
   ShieldCheck,
+  Trash2,
   UserRound,
   Users,
   X,
@@ -208,6 +209,87 @@ function UserDetailsDialog({
   )
 }
 
+function DeleteUserDialog({
+  user,
+  isDeleting,
+  onCancel,
+  onConfirm,
+}: {
+  user: AuthUser
+  isDeleting: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+      <button
+        type="button"
+        aria-label="Cancel account deletion"
+        onClick={onCancel}
+        disabled={isDeleting}
+        className="absolute inset-0 cursor-default"
+      />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-user-title"
+        className="relative z-10 w-full max-w-md overflow-hidden rounded-2xl border border-rose-300/15 bg-[#0d1320] shadow-2xl shadow-black/50"
+      >
+        <div className="flex items-start gap-3 border-b border-white/[0.06] px-5 py-4 sm:px-6">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-rose-300/15 bg-rose-400/[0.08] text-rose-300">
+            <Trash2 aria-hidden="true" size={18} />
+          </span>
+          <div>
+            <h2
+              id="delete-user-title"
+              className="text-base font-semibold text-white"
+            >
+              Delete User Account?
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-slate-400">
+              Are you sure you want to permanently delete this user account?
+            </p>
+          </div>
+        </div>
+        <div className="px-5 py-4 sm:px-6">
+          <dl className="space-y-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-3">
+            <div className="flex flex-wrap justify-between gap-2 text-xs">
+              <dt className="text-slate-500">Username</dt>
+              <dd className="font-medium text-slate-200">{user.username}</dd>
+            </div>
+            <div className="flex flex-wrap justify-between gap-2 text-xs">
+              <dt className="text-slate-500">Email</dt>
+              <dd className="break-all font-medium text-slate-200">{user.email}</dd>
+            </div>
+          </dl>
+          <p className="mt-3 text-xs font-medium text-rose-300">
+            This action cannot be undone.
+          </p>
+          <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={isDeleting}
+              className="rounded-xl border border-white/[0.08] px-4 py-2.5 text-xs font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:cursor-wait disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={isDeleting}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300/15 bg-rose-500/15 px-4 py-2.5 text-xs font-semibold text-rose-200 transition hover:bg-rose-500/25 disabled:cursor-wait disabled:opacity-60"
+            >
+              <Trash2 aria-hidden="true" size={14} />
+              {isDeleting ? 'Deleting…' : 'Delete Account'}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 export function AdminUsersPage() {
   const { user: currentUser } = useAuth()
   const [pageState, setPageState] = useState<PageState>({
@@ -224,6 +306,9 @@ export function AdminUsersPage() {
     null,
   )
   const [actionError, setActionError] = useState('')
+  const [actionSuccess, setActionSuccess] = useState('')
+  const [userToDelete, setUserToDelete] = useState<AuthUser | null>(null)
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null)
   const currentUserEmail = currentUser?.email.toLowerCase() ?? ''
 
   useEffect(() => {
@@ -307,8 +392,37 @@ export function AdminUsersPage() {
         selected?.email === updatedUser.email ? updatedUser : selected,
       )
       setActionError('')
+      setActionSuccess('')
     } catch (error) {
       setActionError(getErrorMessage(error))
+    }
+  }
+
+  async function deleteUser(user: AuthUser) {
+    if (deletingUserId) return
+
+    setDeletingUserId(user.id)
+    setActionError('')
+    setActionSuccess('')
+    try {
+      await api.deleteAdminUser(user.id)
+      setPageState((current) => ({
+        ...current,
+        users: current.users.filter(
+          (currentUser) => currentUser.id !== user.id,
+        ),
+        error: '',
+      }))
+      setSelectedUser((selected) =>
+        selected?.id === user.id ? null : selected,
+      )
+      setUserToDelete(null)
+      setActionSuccess(`${user.username}’s account was deleted.`)
+    } catch (error) {
+      setActionError(getErrorMessage(error))
+      setUserToDelete(null)
+    } finally {
+      setDeletingUserId(null)
     }
   }
 
@@ -399,6 +513,14 @@ export function AdminUsersPage() {
           className="rounded-xl border border-rose-300/15 bg-rose-400/[0.05] px-4 py-3 text-xs text-rose-200"
         >
           {pageState.migrationError}
+        </p>
+      )}
+      {actionSuccess && (
+        <p
+          role="status"
+          className="rounded-xl border border-emerald-300/10 bg-emerald-400/[0.06] px-4 py-3 text-xs text-emerald-200"
+        >
+          {actionSuccess}
         </p>
       )}
 
@@ -620,6 +742,25 @@ export function AdminUsersPage() {
                                 ? 'Deactivate'
                                 : 'Activate'}
                             </button>
+                            <button
+                              type="button"
+                              disabled={isCurrentUser || deletingUserId !== null}
+                              title={
+                                isCurrentUser
+                                  ? 'You cannot delete the account currently in use'
+                                  : undefined
+                              }
+                              onClick={() => {
+                                setActionError('')
+                                setActionSuccess('')
+                                setUserToDelete(user)
+                              }}
+                              aria-label={`Delete ${user.username}`}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300/10 px-2.5 py-1.5 text-[10px] font-medium text-rose-300 transition hover:border-rose-300/20 hover:bg-rose-400/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <Trash2 aria-hidden="true" size={13} />
+                              Delete
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -707,6 +848,14 @@ export function AdminUsersPage() {
         <UserDetailsDialog
           user={selectedUser}
           onClose={() => setSelectedUser(null)}
+        />
+      )}
+      {userToDelete && (
+        <DeleteUserDialog
+          user={userToDelete}
+          isDeleting={deletingUserId === userToDelete.id}
+          onCancel={() => setUserToDelete(null)}
+          onConfirm={() => void deleteUser(userToDelete)}
         />
       )}
     </div>
