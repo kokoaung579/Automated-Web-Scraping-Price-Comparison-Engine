@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
-import type { LocalSession } from '../../auth/localAuth'
+import type { AuthUser } from '../../types/auth'
 
 const adminNavigation: {
   label: string
@@ -73,7 +73,7 @@ const adminNavigation: {
 ]
 
 type AdminSidebarProps = {
-  currentUser: LocalSession
+  currentUser: AuthUser
   isOpen: boolean
   onClose: () => void
 }

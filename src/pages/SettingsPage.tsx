@@ -106,7 +106,7 @@ export function SettingsPage() {
         <SettingsCardHeader
           icon={Bell}
           title="Preferences"
-          description="Choose your appearance and demo notification options."
+          description="Choose how PricePilot handles appearance and notifications."
         />
         <div className="grid gap-6 lg:grid-cols-2">
           <fieldset>
@@ -147,7 +147,7 @@ export function SettingsPage() {
             </legend>
             <PreferenceToggle
               label="Email price alerts"
-              description="Demo preference only; no email is sent."
+              description="Preference only; email delivery is not configured."
               checked={preferencesDraft.emailPriceAlerts}
               onChange={(checked) =>
                 updatePreference('emailPriceAlerts', checked)
@@ -155,7 +155,7 @@ export function SettingsPage() {
             />
             <PreferenceToggle
               label="In-app price alerts"
-              description="Show generated price alert activity in notifications."
+              description="Create a notification when an active price target is reached."
               checked={preferencesDraft.inAppPriceAlerts}
               onChange={(checked) =>
                 updatePreference('inAppPriceAlerts', checked)
@@ -163,7 +163,7 @@ export function SettingsPage() {
             />
             <PreferenceToggle
               label="System updates"
-              description="Demo preference for product and workspace announcements."
+              description="Show system and workspace updates in Notifications."
               checked={preferencesDraft.systemUpdates}
               onChange={(checked) =>
                 updatePreference('systemUpdates', checked)

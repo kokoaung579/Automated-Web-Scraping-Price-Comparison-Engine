@@ -9,13 +9,13 @@ import {
   X,
 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import type { LocalSession } from '../../auth/localAuth'
-import { clearLocalSession } from '../../auth/localAuth'
+import { useAuth } from '../../auth/useAuth'
+import type { AuthUser } from '../../types/auth'
 import type { DemoNotification } from '../../context/AppOutletContext'
 import type { DemoProduct } from '../../data/products'
 
 type AppHeaderProps = {
-  currentUser: LocalSession
+  currentUser: AuthUser
   onMenuClick: () => void
   onSearchChange: (query: string) => void
   notifications: DemoNotification[]
@@ -32,6 +32,7 @@ export function AppHeader({
   unreadNotificationCount,
 }: AppHeaderProps) {
   const navigate = useNavigate()
+  const { signOut } = useAuth()
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [logoutError, setLogoutError] = useState('')
@@ -55,12 +56,12 @@ export function AppHeader({
           .toUpperCase()
       : currentUser.username.slice(0, 2).toUpperCase()
 
-  function handleLogout() {
+  async function handleLogout() {
     try {
-      clearLocalSession()
+      await signOut()
       navigate('/login', { replace: true })
     } catch (error) {
-      console.error('Unable to clear the PricePilot login session', error)
+      console.error('Unable to end the PricePilot session', error)
       setLogoutError('Could not log out. Please try again.')
     }
   }
@@ -258,7 +259,7 @@ export function AppHeader({
                 )}
                 <button
                   type="button"
-                  onClick={handleLogout}
+                  onClick={() => void handleLogout()}
                   className="flex w-full items-center gap-2.5 px-4 py-3 text-left text-xs font-medium text-slate-300 transition hover:bg-rose-400/[0.07] hover:text-rose-200 focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-rose-400"
                 >
                   <LogOut aria-hidden="true" size={15} />
