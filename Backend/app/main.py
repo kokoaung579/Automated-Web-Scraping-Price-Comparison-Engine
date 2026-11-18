@@ -11,12 +11,13 @@ from app.routers.auth import (
     router as auth_router,
 )
 from app.routers.stores import router as stores_router
+from app.routers.audit import router as audit_router
 from app.services.channel3_services import (
     find_matching_channel3_product,
     search_channel3_products,
 )
 
-from fastapi import FastAPI, HTTPException, Query, Response, status
+from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo.errors import DuplicateKeyError
 
@@ -80,6 +81,7 @@ app.include_router(channel3_router)
 app.include_router(apify_router)
 app.include_router(auth_router)
 app.include_router(stores_router)
+app.include_router(audit_router)
 
 
 def get_database():
@@ -179,7 +181,7 @@ async def list_admin_products():
     response_model=AdminProduct,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_admin_product(product: AdminProduct):
+async def create_admin_product(product: AdminProduct, request: Request):
     try:
         await get_database().products.insert_one(
             {
@@ -194,6 +196,21 @@ async def create_admin_product(product: AdminProduct):
         )
 
     await upsert_admin_product_offer(get_database(), product)
+    try:
+        from app.routers.audit import record_audit_log
+
+        await record_audit_log(
+            get_database(),
+            user_id="admin",
+            user_email="admin",
+            action="CREATE",
+            module="PRODUCT_MANAGEMENT",
+            description=f"Created product {product.product_name}.",
+            ip_address=request.client.host if request.client else "",
+            status="SUCCESS",
+        )
+    except Exception:
+        pass
     return product
 
 

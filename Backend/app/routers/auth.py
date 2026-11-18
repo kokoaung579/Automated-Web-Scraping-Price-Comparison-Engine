@@ -417,6 +417,7 @@ async def register(
 async def login(
     payload: LoginRequest,
     response: Response,
+    request: Request,
     database=Depends(get_database),
 ):
     identifier = payload.identifier.strip().casefold()
@@ -453,6 +454,21 @@ async def login(
         )
 
     await _create_session(database, user, response)
+    try:
+        from app.routers.audit import record_audit_log
+
+        await record_audit_log(
+            database,
+            user_id=str(user["_id"]),
+            user_email=user["email"],
+            action="SIGN_IN",
+            module="USER_MANAGEMENT",
+            description="Signed in to the admin workspace.",
+            ip_address=request.client.host if request.client else "",
+            status="SUCCESS",
+        )
+    except Exception:
+        pass
     return _public_user(user)
 
 
@@ -520,6 +536,7 @@ async def list_users(
 async def update_user_status(
     email: str,
     payload: UserStatusRequest,
+    request: Request,
     database=Depends(get_database),
     admin: dict = Depends(require_admin),
 ):
@@ -546,6 +563,21 @@ async def update_user_status(
     if payload.status == "Inactive":
         await database.sessions.delete_many({"userId": user["_id"]})
     user["status"] = payload.status
+    try:
+        from app.routers.audit import record_audit_log
+
+        await record_audit_log(
+            database,
+            user_id=str(admin["_id"]),
+            user_email=admin["email"],
+            action="STATUS_CHANGE",
+            module="USER_MANAGEMENT",
+            description=f"Changed {email} to {payload.status}.",
+            ip_address=request.client.host if request.client else "",
+            status="SUCCESS",
+        )
+    except Exception:
+        pass
     return _public_user(user)
 
 

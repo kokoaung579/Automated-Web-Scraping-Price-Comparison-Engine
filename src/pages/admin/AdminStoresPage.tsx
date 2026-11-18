@@ -671,8 +671,7 @@ async function confirmDelete() {
   )
 }
 
-    if (saveError) setDeleteError(saveError)
-    else setDeletingStore(null)
+    setDeletingStore(null)
   }
 
   return (

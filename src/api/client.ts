@@ -181,6 +181,8 @@ export const api = {
 
   adminUsers: () => request<AuthUser[]>('/admin/users'),
 
+  auditLogs: () => request<any[]>('/admin/audit-logs'),
+
   updateAdminUserStatus: (email: string, status: UserStatus) =>
     request<AuthUser>(
       `/admin/users/${encodeURIComponent(email)}/status`,
