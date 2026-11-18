@@ -10,6 +10,7 @@ from app.routers.auth import (
     initialize_auth_database,
     router as auth_router,
 )
+from app.routers.stores import router as stores_router
 from app.services.channel3_services import (
     find_matching_channel3_product,
     search_channel3_products,
@@ -78,6 +79,7 @@ app.add_middleware(
 app.include_router(channel3_router)
 app.include_router(apify_router)
 app.include_router(auth_router)
+app.include_router(stores_router)
 
 
 def get_database():

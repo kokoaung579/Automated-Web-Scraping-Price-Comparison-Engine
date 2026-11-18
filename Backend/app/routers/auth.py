@@ -391,6 +391,7 @@ async def require_admin(user: dict = Depends(require_user)) -> dict:
 )
 async def register(
     payload: RegisterRequest,
+    response: Response,
     database=Depends(get_database),
 ):
     document = _new_user(
@@ -408,6 +409,7 @@ async def register(
             detail="An account with that email or username already exists.",
         )
 
+    await _create_session(database, document, response)
     return _public_user(document)
 
 
