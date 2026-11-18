@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -16,9 +16,7 @@ import {
   CircleAlert,
   Activity,
 } from 'lucide-react'
-import {
-  loadAuditLogs,
-} from '../../data/adminAuditLogs'
+import { api } from '../../api/client'
 import type {
   AuditActionType,
   AuditLog,
@@ -61,16 +59,9 @@ const inputClassName =
   'h-10 w-full rounded-xl border border-white/[0.07] bg-[#090e18] px-3 text-xs text-slate-200 outline-none transition focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10'
 
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Unable to load audit demo data.'
+  return error instanceof Error ? error.message : 'Unable to load audit data.'
 }
 
-function loadAuditPageState(): AuditPageState {
-  try {
-    return { logs: loadAuditLogs(), error: '' }
-  } catch (error) {
-    return { logs: [], error: getErrorMessage(error) }
-  }
-}
 
 function formatTimestamp(value: string): string {
   const date = new Date(value)
@@ -177,7 +168,7 @@ function AuditDetailsDialog({
     { label: 'Status', value: log.status[0].toUpperCase() + log.status.slice(1) },
     { label: 'IP address', value: log.ip_address },
     { label: 'Record ID', value: log.id },
-    { label: 'Record source', value: log.source === 'demo' ? 'Demo audit data' : 'Backend' },
+    { label: 'Record source', value: log.source === 'demo' ? ' Audit data' : 'Backend' },
   ]
 
   return (
@@ -197,7 +188,7 @@ function AuditDetailsDialog({
         <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4 sm:px-6">
           <div>
             <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-blue-300">
-              Read-only · Demo audit record
+              Read-only · Audit record
             </p>
             <h2 id="audit-details-title" className="mt-1 text-base font-semibold text-white">
               Activity details
@@ -252,7 +243,7 @@ function AuditDetailsDialog({
             </div>
           )}
           <p className="text-[10px] leading-5 text-slate-600">
-            Audit records are read-only in this demo. No edit or delete actions are available.
+            Audit records are read-only. No edit or delete actions are available.
           </p>
         </div>
         <div className="flex justify-end border-t border-white/[0.06] px-5 py-3.5">
@@ -270,7 +261,20 @@ function AuditDetailsDialog({
 }
 
 export function AdminAuditLogsPage() {
-  const [pageState, setPageState] = useState(loadAuditPageState)
+  const [pageState, setPageState] = useState<AuditPageState>({ logs: [], error: '' })
+  useEffect(() => {
+    let active = true
+    api.auditLogs()
+      .then((result: any) => {
+        if (active) setPageState({ logs: (result.logs ?? []) as AuditLog[], error: '' })
+      })
+      .catch((error: unknown) => {
+        if (active) setPageState({ logs: [], error: getErrorMessage(error) })
+      })
+    return () => {
+      active = false
+    }
+  }, [])
   const [searchQuery, setSearchQuery] = useState('')
   const [moduleFilter, setModuleFilter] = useState<ModuleFilter>('all')
   const [actionFilter, setActionFilter] = useState<ActionFilter>('all')
@@ -336,7 +340,9 @@ export function AdminAuditLogsPage() {
   }
 
   function reloadLogs() {
-    setPageState(loadAuditPageState())
+    api.auditLogs()
+      .then((result: any) => setPageState({ logs: (result.logs ?? []) as AuditLog[], error: '' }))
+      .catch((error: unknown) => setPageState({ logs: [], error: getErrorMessage(error) }))
     setPage(1)
   }
 
@@ -359,7 +365,7 @@ export function AdminAuditLogsPage() {
         </div>
         <span className="inline-flex items-center gap-2 self-start rounded-xl border border-amber-300/10 bg-amber-400/[0.05] px-3 py-2 text-[10px] font-medium text-amber-100">
           <ShieldCheck aria-hidden="true" size={14} />
-          Demo audit data · Read-only
+           Audit data · Read-only
         </span>
       </section>
 
@@ -396,7 +402,7 @@ export function AdminAuditLogsPage() {
             <div>
               <h3 className="text-sm font-semibold text-white">Activity history</h3>
               <p className="mt-1 text-[10px] text-slate-500">
-                Showing {filteredLogs.length ? startIndex + 1 : 0}–{Math.min(startIndex + pageSize, filteredLogs.length)} of {filteredLogs.length} matching demo records
+                Showing {filteredLogs.length ? startIndex + 1 : 0}–{Math.min(startIndex + pageSize, filteredLogs.length)} of {filteredLogs.length} matching audit records
               </p>
             </div>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.07] bg-white/[0.025] px-2.5 py-1 text-[9px] font-medium text-slate-500">
@@ -529,7 +535,7 @@ export function AdminAuditLogsPage() {
 
         {pageState.error ? (
           <div className="px-5 py-10 text-center text-xs text-slate-500">
-            Audit records are unavailable until the saved demo data can be loaded.
+            Audit records are unavailable until the saved audit data can be loaded.
           </div>
         ) : (
           <>
@@ -640,7 +646,7 @@ export function AdminAuditLogsPage() {
       </section>
 
       <p className="text-center text-[9px] leading-4 text-slate-600">
-        Demo audit data is stored in this browser. Records are read-only and can’t be edited or deleted.
+        Audit data is stored in this browser. Records are read-only and can’t be edited or deleted.
       </p>
 
       {selectedLog && (
