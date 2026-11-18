@@ -1,11 +1,12 @@
 import hashlib
 import hmac
+import logging
 import os
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import smtplib
 from email.message import EmailMessage
@@ -17,13 +18,34 @@ from app.config import (
     get_gmail_smtp_port,
 )
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 from pymongo.errors import DuplicateKeyError
 
 router = APIRouter(prefix="/api")
+logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "pricepilot_session"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 14
+PASSWORD_RESET_OTP_COOLDOWN_SECONDS = 60
+PASSWORD_RESET_OTP_WINDOW_SECONDS = 15 * 60
+PASSWORD_RESET_MAX_OTP_REQUESTS = 5
+PASSWORD_RESET_MAX_OTP_ATTEMPTS = 5
+PASSWORD_RESET_TOKEN_TTL_SECONDS = 5 * 60
+PASSWORD_RESET_REQUEST_MESSAGE = (
+    "If an account exists for this email, a password reset code has been sent."
+)
+PASSWORD_RESET_INVALID_CODE_MESSAGE = (
+    "The reset code is invalid or expired. Request a new code."
+)
+PASSWORD_RESET_INVALID_TOKEN_MESSAGE = (
+    "The password reset authorization is invalid or expired. Request a new code."
+)
 PASSWORD_ITERATIONS = 310_000
 LEGACY_PASSWORD_ITERATIONS = 120_000
 LOCAL_USER_MIGRATION_ID = "browser-local-users-to-mongodb-v1"
@@ -138,6 +160,18 @@ class VerifyOtpRequest(APIModel):
         return normalized
 
 
+class ResetPasswordRequest(APIModel):
+    reset_token: str = Field(min_length=32, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+    confirm_password: str = Field(min_length=8, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_password_confirmation(self):
+        if self.new_password != self.confirm_password:
+            raise ValueError("Passwords do not match.")
+        return self
+
+
 class PublicUser(APIModel):
     id: str
     email: str
@@ -152,6 +186,10 @@ class LegacyImportResult(APIModel):
     imported: int
     skipped: int
     completed: bool
+
+
+class RegistrationPending(APIModel):
+    message: str
 
 
 def _password_hash(password: str, salt: bytes, iterations: int) -> bytes:
@@ -235,14 +273,29 @@ def _new_user(
 
 async def initialize_auth_database(database) -> None:
     await database.users.create_index(
-    [("email", 1)],
-    unique=True,
-    name="email_1",
-)
+        [("email", 1)],
+        unique=True,
+        name="email_1",
+    )
     await database.users.create_index(
         "usernameKey",
         unique=True,
         partialFilterExpression={"usernameKey": {"$type": "string"}},
+    )
+    await database.pending_verifications.create_index(
+        "email",
+        unique=True,
+        name="pending_verification_email_1",
+    )
+    await database.pending_verifications.create_index(
+        "usernameKey",
+        unique=True,
+        name="pending_verification_username_1",
+    )
+    await database.pending_verifications.create_index(
+        "expiresAt",
+        expireAfterSeconds=0,
+        name="pending_verification_expiry_ttl",
     )
     await database.sessions.create_index(
         "expiresAt",
@@ -386,31 +439,61 @@ async def require_admin(user: dict = Depends(require_user)) -> dict:
 
 @router.post(
     "/auth/register",
-    response_model=PublicUser,
-    status_code=status.HTTP_201_CREATED,
+    response_model=RegistrationPending,
+    status_code=status.HTTP_202_ACCEPTED,
 )
 async def register(
     payload: RegisterRequest,
-    response: Response,
     database=Depends(get_database),
 ):
-    document = _new_user(
-        payload.email,
-        payload.username,
-        payload.password,
-    )
-    document["emailVerified"] = True
-    document["email_verified"] = True
-    try:
-        await database.users.insert_one(document)
-    except DuplicateKeyError:
+    duplicate = await database.users.find_one({
+        "$or": [
+            {"email": payload.email},
+            {"usernameKey": payload.username.casefold()},
+        ]
+    })
+    if duplicate is None:
+        duplicate = await database.pending_verifications.find_one({
+            "$or": [
+                {"email": payload.email},
+                {"usernameKey": payload.username.casefold()},
+            ]
+        })
+    if duplicate is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with that email or username already exists.",
         )
 
-    await _create_session(database, document, response)
-    return _public_user(document)
+    created_at = datetime.now(timezone.utc)
+    pending = {
+        "_id": str(uuid4()),
+        "email": payload.email,
+        "username": payload.username,
+        "usernameKey": payload.username.casefold(),
+        **_create_password_fields(payload.password),
+        "createdAt": created_at,
+        "expiresAt": created_at + timedelta(minutes=5),
+        "otpRequestCount": 0,
+        "otpAttempts": 0,
+    }
+    try:
+        await database.pending_verifications.insert_one(pending)
+    except DuplicateKeyError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with that email or username already exists.",
+        ) from None
+
+    try:
+        await _issue_otp(database, pending, pending_registration=True)
+    except HTTPException:
+        await database.pending_verifications.delete_one({"_id": pending["_id"]})
+        raise
+
+    return RegistrationPending(
+        message="Verification code sent. Enter it to complete registration."
+    )
 
 
 @router.post("/auth/login", response_model=PublicUser)
@@ -549,6 +632,53 @@ async def update_user_status(
     return _public_user(user)
 
 
+@router.delete("/admin/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    database=Depends(get_database),
+    admin: dict = Depends(require_admin),
+):
+    try:
+        normalized_user_id = str(UUID(user_id))
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User ID must be a valid UUID.",
+        ) from error
+
+    user = await database.users.find_one({"_id": normalized_user_id})
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User account not found.",
+        )
+    if user["_id"] == admin["_id"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You cannot delete the account currently in use.",
+        )
+
+    protected_admin_email = os.getenv(
+        "BOOTSTRAP_ADMIN_EMAIL", ""
+    ).strip().casefold()
+    if (
+        protected_admin_email
+        and user.get("email", "").casefold() == protected_admin_email
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The configured main administrator account cannot be deleted.",
+        )
+
+    result = await database.users.delete_one({"_id": normalized_user_id})
+    if result.deleted_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User account not found.",
+        )
+    return {"message": "User account deleted."}
+
+
 @router.post(
     "/admin/users/import-browser",
     response_model=LegacyImportResult,
@@ -644,11 +774,11 @@ def _send_otp_email(recipient: str, otp: str) -> None:
     host = get_gmail_smtp_host()
     port = get_gmail_smtp_port()
     message = EmailMessage()
-    message["Subject"] = "Your SmartPrice verification code"
+    message["Subject"] = "Your PricePilot verification code"
     message["From"] = sender
     message["To"] = recipient
     message.set_content(
-        f"Your SmartPrice verification code is {otp}. "
+        f"Your PricePilot verification code is {otp}. "
         "It expires in 5 minutes."
     )
 
@@ -677,7 +807,55 @@ def _hash_otp(otp: str) -> str:
     return hashlib.sha256(otp.encode("utf-8")).hexdigest()
 
 
-async def _issue_otp(database, user: dict) -> None:
+def _hash_reset_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+async def _issue_password_reset_otp(database, user: dict) -> None:
+    now = datetime.now(timezone.utc)
+    last_sent = _parse_datetime(user.get("passwordResetOtpCreatedAt"))
+    request_count = int(user.get("passwordResetOtpRequestCount") or 0)
+
+    if last_sent is not None:
+        elapsed = (now - last_sent).total_seconds()
+        if elapsed < PASSWORD_RESET_OTP_COOLDOWN_SECONDS:
+            return
+        if elapsed > PASSWORD_RESET_OTP_WINDOW_SECONDS:
+            request_count = 0
+    if request_count >= PASSWORD_RESET_MAX_OTP_REQUESTS:
+        return
+
+    otp = _generate_otp()
+    try:
+        _send_otp_email(user["email"], otp)
+    except HTTPException:
+        logger.warning("Password reset email delivery failed.")
+        return
+
+    await database.users.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "passwordResetOtpHash": _hash_otp(otp),
+                "passwordResetOtpExpiresAt": now + timedelta(minutes=5),
+                "passwordResetOtpCreatedAt": now,
+                "passwordResetOtpRequestCount": request_count + 1,
+                "passwordResetOtpAttempts": 0,
+            }
+        },
+    )
+
+
+async def _issue_otp(
+    database,
+    user: dict,
+    pending_registration: bool = False,
+) -> None:
+    collection = (
+        database.pending_verifications
+        if pending_registration
+        else database.users
+    )
     now = datetime.now(timezone.utc)
     last_sent = _parse_datetime(
         user.get("otpCreatedAt") or user.get("otp_created_at")
@@ -706,31 +884,39 @@ async def _issue_otp(database, user: dict) -> None:
     hashed = _hash_otp(otp)
     expires_at = now + timedelta(minutes=5)
 
-    await database.users.update_one(
+    update_fields = {
+        "otpHash": hashed,
+        "otp_hash": hashed,
+        "otpExpiresAt": expires_at,
+        "otp_expires_at": expires_at,
+        "otpCreatedAt": now,
+        "otp_created_at": now,
+        "otpRequestCount": request_count + 1,
+        "otp_request_count": request_count + 1,
+        "otpAttempts": 0,
+        "otp_attempts": 0,
+    }
+    if pending_registration:
+        update_fields["expiresAt"] = expires_at
+
+    await collection.update_one(
         {"_id": user["_id"]},
         {
-            "$set": {
-                "otpHash": hashed,
-                "otp_hash": hashed,
-                "otpExpiresAt": expires_at,
-                "otp_expires_at": expires_at,
-                "otpCreatedAt": now,
-                "otp_created_at": now,
-                "otpRequestCount": request_count + 1,
-                "otp_request_count": request_count + 1,
-                "otpAttempts": 0,
-                "otp_attempts": 0,
-            }
+            "$set": update_fields
         },
     )
 
 
 async def _verify_otp(database, email: str, otp: str) -> dict:
+    pending = await database.pending_verifications.find_one({"email": email})
+    if pending is not None:
+        return await _verify_pending_registration(database, pending, otp)
+
     user = await database.users.find_one({"email": email})
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="User account not found.",
+            detail="No pending verification found. Please register again.",
         )
 
     stored_hash = user.get("otpHash") or user.get("otp_hash")
@@ -799,6 +985,82 @@ async def _verify_otp(database, email: str, otp: str) -> dict:
     return user
 
 
+async def _verify_pending_registration(
+    database,
+    pending: dict,
+    otp: str,
+) -> dict:
+    collection = database.pending_verifications
+    stored_hash = pending.get("otpHash") or pending.get("otp_hash")
+    expires_at = _parse_datetime(
+        pending.get("otpExpiresAt") or pending.get("otp_expires_at")
+    )
+    now = datetime.now(timezone.utc)
+    if not stored_hash or expires_at is None or expires_at <= now:
+        await collection.delete_one({"_id": pending["_id"]})
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OTP expired or invalid. Please register again.",
+        )
+
+    attempts = int(
+        pending.get("otpAttempts") or pending.get("otp_attempts") or 0
+    )
+    if attempts >= 5:
+        await collection.delete_one({"_id": pending["_id"]})
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Too many incorrect attempts. Please register again.",
+        )
+
+    if not hmac.compare_digest(_hash_otp(otp), stored_hash):
+        await collection.update_one(
+            {"_id": pending["_id"]},
+            {
+                "$inc": {
+                    "otpAttempts": 1,
+                    "otp_attempts": 1,
+                }
+            },
+        )
+        if attempts + 1 >= 5:
+            await collection.delete_one({"_id": pending["_id"]})
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Too many incorrect attempts. Please register again.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incorrect OTP.",
+        )
+
+    user = {
+        "_id": str(uuid4()),
+        "email": pending["email"],
+        "username": pending["username"],
+        "usernameKey": pending["usernameKey"],
+        "passwordSalt": pending["passwordSalt"],
+        "passwordHash": pending["passwordHash"],
+        "passwordIterations": pending["passwordIterations"],
+        "role": "User",
+        "status": "Active",
+        "registeredAt": now.isoformat(),
+        "emailVerified": True,
+        "email_verified": True,
+    }
+    try:
+        await database.users.insert_one(user)
+    except DuplicateKeyError:
+        await collection.delete_one({"_id": pending["_id"]})
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with that email or username already exists.",
+        ) from None
+
+    await collection.delete_one({"_id": pending["_id"]})
+    return user
+
+
 @router.post("/auth/verify-otp")
 @router.post("/auth/otp/verify")
 async def verify_otp_endpoint(
@@ -817,11 +1079,29 @@ async def resend_otp_endpoint(
     payload: OtpRequest,
     database=Depends(get_database),
 ):
+    pending = await database.pending_verifications.find_one(
+        {"email": payload.email}
+    )
+    if pending is not None:
+        expires_at = _parse_datetime(
+            pending.get("otpExpiresAt") or pending.get("otp_expires_at")
+        )
+        if expires_at is None or expires_at <= datetime.now(timezone.utc):
+            await database.pending_verifications.delete_one(
+                {"_id": pending["_id"]}
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Verification expired. Please register again.",
+            )
+        await _issue_otp(database, pending, pending_registration=True)
+        return {"message": "OTP sent."}
+
     user = await database.users.find_one({"email": payload.email})
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="User account not found.",
+            detail="No pending verification found. Please register again.",
         )
 
     email_verified = user.get(
@@ -833,3 +1113,185 @@ async def resend_otp_endpoint(
 
     await _issue_otp(database, user)
     return {"message": "OTP sent."}
+
+
+@router.post(
+    "/auth/forgot-password",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def forgot_password(
+    payload: OtpRequest,
+    database=Depends(get_database),
+):
+    user = await database.users.find_one({"email": payload.email})
+    if user is not None:
+        await _issue_password_reset_otp(database, user)
+    return {"message": PASSWORD_RESET_REQUEST_MESSAGE}
+
+
+@router.post("/auth/verify-reset-otp")
+async def verify_reset_otp(
+    payload: VerifyOtpRequest,
+    database=Depends(get_database),
+):
+    user = await database.users.find_one({"email": payload.email})
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=PASSWORD_RESET_INVALID_CODE_MESSAGE,
+        )
+
+    stored_hash = user.get("passwordResetOtpHash")
+    expires_at = _parse_datetime(user.get("passwordResetOtpExpiresAt"))
+    now = datetime.now(timezone.utc)
+    attempts = int(user.get("passwordResetOtpAttempts") or 0)
+    if (
+        not stored_hash
+        or expires_at is None
+        or expires_at <= now
+        or attempts >= PASSWORD_RESET_MAX_OTP_ATTEMPTS
+    ):
+        if stored_hash and (
+            attempts >= PASSWORD_RESET_MAX_OTP_ATTEMPTS
+            or expires_at is None
+            or expires_at <= now
+        ):
+            await database.users.update_one(
+                {
+                    "_id": user["_id"],
+                    "passwordResetOtpHash": stored_hash,
+                },
+                {
+                    "$set": {
+                        "passwordResetOtpHash": None,
+                        "passwordResetOtpExpiresAt": None,
+                    }
+                },
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=PASSWORD_RESET_INVALID_CODE_MESSAGE,
+        )
+
+    if not hmac.compare_digest(_hash_otp(payload.otp), stored_hash):
+        attempt = await database.users.update_one(
+            {
+                "_id": user["_id"],
+                "passwordResetOtpHash": stored_hash,
+                "passwordResetOtpExpiresAt": {"$gt": now},
+                "passwordResetOtpAttempts": {"$lt": PASSWORD_RESET_MAX_OTP_ATTEMPTS},
+            },
+            {"$inc": {"passwordResetOtpAttempts": 1}},
+        )
+        if attempt.matched_count == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=PASSWORD_RESET_INVALID_CODE_MESSAGE,
+            )
+        if attempts + 1 >= PASSWORD_RESET_MAX_OTP_ATTEMPTS:
+            await database.users.update_one(
+                {
+                    "_id": user["_id"],
+                    "passwordResetOtpHash": stored_hash,
+                    "passwordResetOtpAttempts": PASSWORD_RESET_MAX_OTP_ATTEMPTS,
+                },
+                {
+                    "$set": {
+                        "passwordResetOtpHash": None,
+                        "passwordResetOtpExpiresAt": None,
+                    }
+                },
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=PASSWORD_RESET_INVALID_CODE_MESSAGE,
+        )
+
+    reset_token = secrets.token_urlsafe(32)
+    result = await database.users.update_one(
+        {
+            "_id": user["_id"],
+            "passwordResetOtpHash": stored_hash,
+            "passwordResetOtpExpiresAt": {"$gt": now},
+            "passwordResetOtpAttempts": {"$lt": PASSWORD_RESET_MAX_OTP_ATTEMPTS},
+        },
+        {
+            "$set": {
+                "passwordResetOtpHash": None,
+                "passwordResetOtpExpiresAt": None,
+                "passwordResetOtpAttempts": 0,
+                "passwordResetTokenHash": _hash_reset_token(reset_token),
+                "passwordResetTokenExpiresAt": now + timedelta(
+                    seconds=PASSWORD_RESET_TOKEN_TTL_SECONDS
+                ),
+            }
+        },
+    )
+    if result.matched_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=PASSWORD_RESET_INVALID_CODE_MESSAGE,
+        )
+    return {"resetToken": reset_token}
+
+
+@router.post("/auth/reset-password")
+async def reset_password(
+    payload: ResetPasswordRequest,
+    database=Depends(get_database),
+):
+    token_hash = _hash_reset_token(payload.reset_token)
+    user = await database.users.find_one(
+        {"passwordResetTokenHash": token_hash}
+    )
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=PASSWORD_RESET_INVALID_TOKEN_MESSAGE,
+        )
+
+    now = datetime.now(timezone.utc)
+    expires_at = _parse_datetime(user.get("passwordResetTokenExpiresAt"))
+    if expires_at is None or expires_at <= now:
+        await database.users.update_one(
+            {
+                "_id": user["_id"],
+                "passwordResetTokenHash": token_hash,
+            },
+            {
+                "$set": {
+                    "passwordResetTokenHash": None,
+                    "passwordResetTokenExpiresAt": None,
+                }
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=PASSWORD_RESET_INVALID_TOKEN_MESSAGE,
+        )
+
+    result = await database.users.update_one(
+        {
+            "_id": user["_id"],
+            "passwordResetTokenHash": token_hash,
+            "passwordResetTokenExpiresAt": {"$gt": now},
+        },
+        {
+            "$set": {
+                **_create_password_fields(payload.new_password),
+                "passwordResetTokenHash": None,
+                "passwordResetTokenExpiresAt": None,
+                "passwordResetOtpHash": None,
+                "passwordResetOtpExpiresAt": None,
+                "passwordResetOtpAttempts": 0,
+            }
+        },
+    )
+    if result.matched_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=PASSWORD_RESET_INVALID_TOKEN_MESSAGE,
+        )
+
+    await database.sessions.delete_many({"userId": user["_id"]})
+    return {"message": "Password reset successfully. Please sign in."}
