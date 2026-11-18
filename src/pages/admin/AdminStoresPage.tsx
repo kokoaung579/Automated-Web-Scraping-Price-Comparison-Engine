@@ -1,5 +1,12 @@
-import { useMemo, useState } from 'react'
+
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import {
+  createStore,
+  deleteStore,
+  getStores,
+  updateStore,
+} from '../../services/storesApi'
 import {
   Check,
   Globe2,
@@ -31,7 +38,9 @@ type StoreValues = Pick<
 
 const fieldClassName =
   'h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10'
-const labelClassName = 'mb-1.5 block text-[11px] font-medium text-slate-300'
+
+const labelClassName =
+  'mb-1.5 block text-[11px] font-medium text-slate-300'
 
 function StoreDialog({
   store,
@@ -42,8 +51,7 @@ function StoreDialog({
   store: AdminStore | null
   stores: AdminStore[]
   onClose: () => void
-  onSave: (values: StoreValues) => string | null
-}) {
+  onSave: (values: StoreValues) => Promise<string | null>}) {
   const [storeName, setStoreName] = useState(store?.store_name ?? '')
   const [websiteUrl, setWebsiteUrl] = useState(store?.website_url ?? '')
   const [logoUrl, setLogoUrl] = useState(store?.logo_url ?? '')
@@ -52,8 +60,9 @@ function StoreDialog({
   )
   const [error, setError] = useState('')
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  event.preventDefault()
+
     const normalizedName = storeName.trim()
     const normalizedWebsite = websiteUrl.trim()
     const normalizedLogo = logoUrl.trim()
@@ -62,21 +71,27 @@ function StoreDialog({
       setError('Store name is required.')
       return
     }
+
     if (!isValidStoreWebsiteUrl(normalizedWebsite)) {
-      setError('Enter a valid website URL beginning with http:// or https://.')
+      setError(
+        'Enter a valid website URL beginning with http:// or https://.',
+      )
       return
     }
+
     if (normalizedLogo && !isValidStoreWebsiteUrl(normalizedLogo)) {
       setError('Logo URL must be a valid HTTP or HTTPS URL.')
       return
     }
 
     const normalizedUrl = normalizeStoreWebsiteUrl(normalizedWebsite)
+
     const duplicateUrl = stores.some(
       (item) =>
         item.store_id !== store?.store_id &&
         normalizeStoreWebsiteUrl(item.website_url) === normalizedUrl,
     )
+
     if (duplicateUrl) {
       setError('A store with this website URL already exists.')
       return
@@ -88,19 +103,21 @@ function StoreDialog({
         item.store_name.toLocaleLowerCase() ===
           normalizedName.toLocaleLowerCase(),
     )
+
     if (duplicateName) {
       setError('A store with this name already exists.')
       return
     }
 
-    const saveError = onSave({
-      store_name: normalizedName,
-      website_url: normalizedWebsite,
-      logo_url: normalizedLogo || null,
-      status,
-    })
-    if (saveError) setError(saveError)
-    else onClose()
+    const saveError = await onSave({
+  store_name: normalizedName,
+  website_url: normalizedWebsite,
+  logo_url: normalizedLogo || null,
+  status,
+})
+
+if (saveError) setError(saveError)
+else onClose()
   }
 
   const storeId = store?.store_id ?? getStoreIdFromName(storeName)
@@ -113,6 +130,7 @@ function StoreDialog({
         onClick={onClose}
         className="absolute inset-0 cursor-default"
       />
+
       <section
         role="dialog"
         aria-modal="true"
@@ -131,6 +149,7 @@ function StoreDialog({
               {store ? 'Edit store' : 'Add store'}
             </h2>
           </div>
+
           <button
             type="button"
             aria-label="Close store form"
@@ -141,7 +160,10 @@ function StoreDialog({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4 px-5 py-5 sm:px-6">
+        <form
+          onSubmit={handleSubmit}
+          className="space-y-4 px-5 py-5 sm:px-6"
+        >
           <label className="block">
             <span className={labelClassName}>Store name</span>
             <input
@@ -157,6 +179,7 @@ function StoreDialog({
               required
             />
           </label>
+
           <label className="block">
             <span className={labelClassName}>Website URL</span>
             <span className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-[#090e18] px-3 focus-within:border-blue-400/40">
@@ -178,6 +201,7 @@ function StoreDialog({
               />
             </span>
           </label>
+
           <label className="block">
             <span className={labelClassName}>Logo URL (optional)</span>
             <span className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-[#090e18] px-3 focus-within:border-blue-400/40">
@@ -198,6 +222,7 @@ function StoreDialog({
               />
             </span>
           </label>
+
           <label className="block">
             <span className={labelClassName}>Status</span>
             <select
@@ -215,10 +240,16 @@ function StoreDialog({
               <option value="Inactive">Inactive</option>
             </select>
           </label>
+
           <p className="text-[10px] text-slate-600">
-            Store ID: <span className="font-mono text-slate-400">{storeId || '—'}</span>
-            {store && ' · Store IDs remain stable when the display name changes.'}
+            Store ID:{' '}
+            <span className="font-mono text-slate-400">
+              {storeId || '—'}
+            </span>
+            {store &&
+              ' · Store IDs remain stable when the display name changes.'}
           </p>
+
           {error && (
             <p
               role="alert"
@@ -227,6 +258,7 @@ function StoreDialog({
               {error}
             </p>
           )}
+
           <div className="flex flex-col-reverse gap-2 border-t border-white/[0.06] pt-4 sm:flex-row sm:justify-end">
             <button
               type="button"
@@ -235,6 +267,7 @@ function StoreDialog({
             >
               Cancel
             </button>
+
             <button
               type="submit"
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-400"
@@ -272,6 +305,7 @@ function DeleteStoreDialog({
         onClick={onCancel}
         className="absolute inset-0 cursor-default"
       />
+
       <section
         role="alertdialog"
         aria-modal="true"
@@ -281,16 +315,21 @@ function DeleteStoreDialog({
         <span className="flex size-10 items-center justify-center rounded-xl border border-rose-300/10 bg-rose-400/[0.07] text-rose-300">
           <Trash2 aria-hidden="true" size={17} />
         </span>
+
         <h2
           id="delete-store-title"
           className="mt-4 text-sm font-semibold text-white"
         >
           Delete store?
         </h2>
+
         <p className="mt-1.5 text-xs leading-5 text-slate-400">
-          <span className="font-medium text-slate-200">{store.store_name}</span>{' '}
+          <span className="font-medium text-slate-200">
+            {store.store_name}
+          </span>{' '}
           will be removed from the store directory.
         </p>
+
         {productCount > 0 || offerCount > 0 ? (
           <p className="mt-3 rounded-lg border border-amber-300/10 bg-amber-400/[0.06] px-3 py-2 text-[10px] leading-4 text-amber-100">
             Cannot delete this store: it is linked to {productCount}{' '}
@@ -298,6 +337,7 @@ function DeleteStoreDialog({
             {offerCount === 1 ? 'price offer' : 'price offers'}.
           </p>
         ) : null}
+
         {error && (
           <p
             role="alert"
@@ -306,6 +346,7 @@ function DeleteStoreDialog({
             {error}
           </p>
         )}
+
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
@@ -314,6 +355,7 @@ function DeleteStoreDialog({
           >
             Cancel
           </button>
+
           <button
             type="button"
             onClick={onConfirm}
@@ -347,51 +389,130 @@ export function AdminStoresPage() {
       }
     }
   })
+
   const [searchQuery, setSearchQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'all' | AdminStore['status']>(
-    'all',
-  )
+  const [statusFilter, setStatusFilter] = useState<
+    'all' | AdminStore['status']
+  >('all')
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingStore, setEditingStore] = useState<AdminStore | null>(null)
   const [deletingStore, setDeletingStore] = useState<AdminStore | null>(null)
   const [deleteError, setDeleteError] = useState('')
   const [feedback, setFeedback] = useState('')
+
+  const [backendProductCounts, setBackendProductCounts] = useState<
+    Map<string, number>
+  >(() => new Map())
+  const [backendStoreIds, setBackendStoreIds] = useState<Set<string>>(
+  () => new Set(),
+)
+
   const stores = catalog.stores
   const products = catalog.products
 
+  useEffect(() => {
+    let cancelled = false
+
+    async function fetchStores() {
+      try {
+        const backendStores = await getStores()
+
+        if (cancelled) return
+
+        setBackendProductCounts(
+          new Map(
+            backendStores.map((store) => [
+              store.store_id,
+              store.product_count,
+            ]),
+          ),
+        )
+        setBackendStoreIds(
+  new Set(backendStores.map((store) => store.store_id)),
+)
+
+        setCatalog((current) => {
+          const backendStoreIds = new Set(
+            backendStores.map((store) => store.store_id),
+          )
+
+          const localOnlyStores = current.stores.filter(
+            (store) => !backendStoreIds.has(store.store_id),
+          )
+
+          return {
+            ...current,
+            stores: [
+              ...backendStores.map(
+                ({ product_count, ...store }) => store,
+              ),
+              ...localOnlyStores,
+            ].sort((a, b) =>
+              a.store_name.localeCompare(b.store_name),
+            ),
+            error: '',
+          }
+        })
+      } catch (error) {
+        if (!cancelled) {
+          setCatalog((current) => ({
+            ...current,
+            error:
+              error instanceof Error
+                ? error.message
+                : 'Could not load stores from server.',
+          }))
+        }
+      }
+    }
+
+    fetchStores()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const productCounts = useMemo(() => {
     const counts = new Map<string, number>()
+
     products.forEach((product) => {
       if (product.store_id) {
         const storeId = getStoreIdFromName(product.store_id)
+
         counts.set(
           storeId,
           (counts.get(storeId) ?? 0) + 1,
         )
       }
     })
+
     return counts
   }, [products])
 
   const offerCounts = useMemo(() => {
     const counts = new Map<string, number>()
+
     demoProducts.forEach((product) => {
       getStoreOffers(product).forEach((offer) => {
         const storeId = getStoreIdFromName(offer.store)
         counts.set(storeId, (counts.get(storeId) ?? 0) + 1)
       })
     })
+
     return counts
   }, [])
 
   const filteredStores = useMemo(() => {
     const query = searchQuery.trim().toLocaleLowerCase()
+
     return stores.filter((store) => {
       const matchesSearch =
         !query ||
         store.store_name.toLocaleLowerCase().includes(query) ||
         store.website_url.toLocaleLowerCase().includes(query) ||
         store.store_id.toLocaleLowerCase().includes(query)
+
       return (
         matchesSearch &&
         (statusFilter === 'all' || store.status === statusFilter)
@@ -399,10 +520,27 @@ export function AdminStoresPage() {
     })
   }, [searchQuery, statusFilter, stores])
 
-  function persistStores(nextStores: AdminStore[], message: string): string | null {
+  function getProductCount(storeId: string): number {
+    return (
+      backendProductCounts.get(storeId) ??
+      productCounts.get(storeId) ??
+      0
+    )
+  }
+
+  function persistStores(
+    nextStores: AdminStore[],
+    message: string,
+  ): string | null {
     try {
       saveAdminStores(nextStores)
-      setCatalog((current) => ({ ...current, stores: nextStores, error: '' }))
+
+      setCatalog((current) => ({
+        ...current,
+        stores: nextStores,
+        error: '',
+      }))
+
       setFeedback(message)
       return null
     } catch (error) {
@@ -410,6 +548,7 @@ export function AdminStoresPage() {
         error instanceof Error
           ? `Could not save store changes: ${error.message}`
           : 'Could not save store changes.'
+
       setFeedback(message)
       return message
     }
@@ -427,13 +566,16 @@ export function AdminStoresPage() {
     setFeedback('')
   }
 
-  function saveStore(values: StoreValues): string | null {
+  async function saveStore(values: StoreValues): Promise<string | null> {
     const now = new Date().toISOString()
     const existing = editingStore
-    const storeId = existing?.store_id ?? getStoreIdFromName(values.store_name)
+    const storeId =
+      existing?.store_id ?? getStoreIdFromName(values.store_name)
+
     if (!storeId) {
       return 'Store name must include at least one letter or number.'
     }
+
     if (
       stores.some(
         (item) =>
@@ -450,6 +592,20 @@ export function AdminStoresPage() {
       created_at: existing?.created_at ?? now,
       updated_at: now,
     }
+    try {
+  if (existing && backendStoreIds.has(existing.store_id)) {
+    await updateStore(existing.store_id, store)
+  } else if (!existing) {
+    await createStore(store)
+    setBackendStoreIds((current) => new Set(current).add(storeId))
+    setBackendProductCounts((current) => new Map(current).set(storeId, 0))
+  }
+} catch (error) {
+  return error instanceof Error
+    ? error.message
+    : 'Could not save store to the server.'
+}
+
     const nextStores = existing
       ? stores.map((item) =>
           item.store_id === existing.store_id ? store : item,
@@ -460,25 +616,61 @@ export function AdminStoresPage() {
 
     return persistStores(
       nextStores,
-      existing ? `${store.store_name} updated.` : `${store.store_name} added.`,
+      existing
+        ? `${store.store_name} updated.`
+        : `${store.store_name} added.`,
     )
   }
 
-  function confirmDelete() {
-    if (!deletingStore) return
-    const productCount = productCounts.get(deletingStore.store_id) ?? 0
+async function confirmDelete() {
+  if (!deletingStore) return
+
+    const productCount = getProductCount(deletingStore.store_id)
     const offerCount = offerCounts.get(deletingStore.store_id) ?? 0
+
     if (productCount > 0 || offerCount > 0) {
       setFeedback(
-        `Cannot delete ${deletingStore.store_name}: it is linked to ${productCount} ${productCount === 1 ? 'product' : 'products'} and ${offerCount} ${offerCount === 1 ? 'price offer' : 'price offers'}.`,
+        `Cannot delete ${deletingStore.store_name}: it is linked to ${productCount} ${
+          productCount === 1 ? 'product' : 'products'
+        } and ${offerCount} ${
+          offerCount === 1 ? 'price offer' : 'price offers'
+        }.`,
       )
       return
     }
 
-    const saveError = persistStores(
-      stores.filter((store) => store.store_id !== deletingStore.store_id),
-      `${deletingStore.store_name} deleted.`,
-    )
+    try {
+  if (backendStoreIds.has(deletingStore.store_id)) {
+    await deleteStore(deletingStore.store_id)
+    setBackendStoreIds((current) => {
+      const next = new Set(current)
+      next.delete(deletingStore.store_id)
+      return next
+    })
+    setBackendProductCounts((current) => {
+      const next = new Map(current)
+      next.delete(deletingStore.store_id)
+      return next
+    })
+  }
+
+  const saveError = persistStores(
+    stores.filter(
+      (store) => store.store_id !== deletingStore.store_id,
+    ),
+    `${deletingStore.store_name} deleted.`,
+  )
+
+  if (saveError) setDeleteError(saveError)
+  else setDeletingStore(null)
+} catch (error) {
+  setDeleteError(
+    error instanceof Error
+      ? error.message
+      : 'Could not delete store from the server.',
+  )
+}
+
     if (saveError) setDeleteError(saveError)
     else setDeletingStore(null)
   }
@@ -493,14 +685,17 @@ export function AdminStoresPage() {
             <span className="text-slate-700">/</span>
             <span className="text-slate-500">Catalog</span>
           </div>
+
           <h1 className="text-[25px] font-semibold tracking-[-0.035em] text-white sm:text-[29px]">
             Store Management
           </h1>
+
           <p className="mt-1.5 max-w-2xl text-xs leading-5 text-slate-500 sm:text-[13px]">
             Manage retailer details and keep store IDs aligned with product
             records and price offers.
           </p>
         </div>
+
         <button
           type="button"
           onClick={openCreateForm}
@@ -520,6 +715,7 @@ export function AdminStoresPage() {
           {catalog.error}
         </p>
       )}
+
       {feedback && (
         <p
           role="status"
@@ -538,35 +734,50 @@ export function AdminStoresPage() {
       <section className="overflow-hidden rounded-2xl border border-white/[0.07] bg-[#0d1320]">
         <div className="flex flex-col gap-3 border-b border-white/[0.06] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-5">
           <div>
-            <h2 className="text-sm font-semibold text-white">All stores</h2>
+            <h2 className="text-sm font-semibold text-white">
+              All stores
+            </h2>
+
             <p className="mt-1 text-[10px] text-slate-500">
               {filteredStores.length} of {stores.length} stores
             </p>
           </div>
+
           <div className="grid gap-2 sm:grid-cols-[minmax(220px,1fr)_140px]">
             <label className="relative block min-w-0">
               <span className="sr-only">Search stores</span>
+
               <Search
                 aria-hidden="true"
                 size={15}
                 className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
               />
+
               <input
                 type="search"
                 value={searchQuery}
-                onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                onChange={(event) =>
+                  setSearchQuery(event.currentTarget.value)
+                }
                 placeholder="Search name or URL"
                 className="h-10 w-full rounded-xl border border-white/[0.07] bg-[#090e18] pl-9 pr-3 text-xs text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10"
               />
             </label>
+
             <label>
-              <span className="sr-only">Filter stores by status</span>
+              <span className="sr-only">
+                Filter stores by status
+              </span>
+
               <select
                 value={statusFilter}
                 onChange={(event) => {
                   const value = event.currentTarget.value
+
                   setStatusFilter(
-                    value === 'Active' || value === 'Inactive' ? value : 'all',
+                    value === 'Active' || value === 'Inactive'
+                      ? value
+                      : 'all',
                   )
                 }}
                 className={`${fieldClassName} cursor-pointer`}
@@ -591,11 +802,14 @@ export function AdminStoresPage() {
                 <th className="px-5 py-3.5 text-right">Actions</th>
               </tr>
             </thead>
+
             <tbody className="divide-y divide-white/[0.05]">
               {filteredStores.map((store) => {
-                const productCount = productCounts.get(store.store_id) ?? 0
-                const offerCount = offerCounts.get(store.store_id) ?? 0
+                const productCount = getProductCount(store.store_id)
+                const offerCount =
+                  offerCounts.get(store.store_id) ?? 0
                 const inUse = productCount > 0 || offerCount > 0
+
                 const initials = store.store_name
                   .split(/\s+/)
                   .slice(0, 2)
@@ -608,18 +822,26 @@ export function AdminStoresPage() {
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
                         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-blue-300/10 bg-blue-400/[0.06] text-xs font-semibold text-blue-200">
-                          {initials || <StoreIcon aria-hidden="true" size={16} />}
+                          {initials || (
+                            <StoreIcon
+                              aria-hidden="true"
+                              size={16}
+                            />
+                          )}
                         </span>
+
                         <div>
                           <p className="text-xs font-medium text-slate-200">
                             {store.store_name}
                           </p>
+
                           <p className="mt-1 font-mono text-[9px] text-slate-600">
                             {store.store_id}
                           </p>
                         </div>
                       </div>
                     </td>
+
                     <td className="px-4 py-4">
                       <a
                         href={store.website_url}
@@ -630,6 +852,7 @@ export function AdminStoresPage() {
                         {store.website_url}
                       </a>
                     </td>
+
                     <td className="px-4 py-4">
                       {store.logo_url ? (
                         <img
@@ -645,6 +868,7 @@ export function AdminStoresPage() {
                         </span>
                       )}
                     </td>
+
                     <td className="px-4 py-4">
                       <span
                         className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-medium ${
@@ -660,13 +884,16 @@ export function AdminStoresPage() {
                               : 'bg-slate-500'
                           }`}
                         />
+
                         {store.status}
                       </span>
                     </td>
+
                     <td className="px-4 py-4">
                       <span className="text-xs font-medium tabular-nums text-slate-300">
                         {productCount}
                       </span>
+
                       {offerCount > 0 && (
                         <p className="mt-1 text-[9px] text-slate-600">
                           {offerCount} demo price{' '}
@@ -674,6 +901,7 @@ export function AdminStoresPage() {
                         </p>
                       )}
                     </td>
+
                     <td className="px-5 py-4">
                       <div className="flex items-center justify-end gap-1">
                         <button
@@ -682,8 +910,12 @@ export function AdminStoresPage() {
                           aria-label={`Edit ${store.store_name}`}
                           className="rounded-lg p-2 text-slate-500 transition hover:bg-white/[0.05] hover:text-blue-200"
                         >
-                          <Pencil aria-hidden="true" size={15} />
+                          <Pencil
+                            aria-hidden="true"
+                            size={15}
+                          />
                         </button>
+
                         <button
                           type="button"
                           onClick={() => {
@@ -699,9 +931,13 @@ export function AdminStoresPage() {
                           }
                           className="rounded-lg p-2 text-slate-500 transition hover:bg-rose-400/[0.07] hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-30"
                         >
-                          <Trash2 aria-hidden="true" size={15} />
+                          <Trash2
+                            aria-hidden="true"
+                            size={15}
+                          />
                         </button>
                       </div>
+
                       {inUse && (
                         <p className="mt-1 text-right text-[9px] text-amber-200/80">
                           Linked — cannot delete
@@ -711,12 +947,17 @@ export function AdminStoresPage() {
                   </tr>
                 )
               })}
+
               {filteredStores.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-5 py-12 text-center">
+                  <td
+                    colSpan={6}
+                    className="px-5 py-12 text-center"
+                  >
                     <p className="text-xs font-medium text-slate-300">
                       No stores found
                     </p>
+
                     <p className="mt-1 text-[10px] text-slate-500">
                       Adjust the filters or add a new store.
                     </p>
@@ -726,6 +967,7 @@ export function AdminStoresPage() {
             </tbody>
           </table>
         </div>
+
         <div className="border-t border-white/[0.06] px-5 py-3 text-[10px] text-slate-600">
           Store data is saved in this browser. Store IDs remain stable for
           canonical product references.
@@ -743,11 +985,14 @@ export function AdminStoresPage() {
           onSave={saveStore}
         />
       )}
+
       {deletingStore && (
         <DeleteStoreDialog
           store={deletingStore}
-          productCount={productCounts.get(deletingStore.store_id) ?? 0}
-          offerCount={offerCounts.get(deletingStore.store_id) ?? 0}
+          productCount={getProductCount(deletingStore.store_id)}
+          offerCount={
+            offerCounts.get(deletingStore.store_id) ?? 0
+          }
           error={deleteError}
           onCancel={() => setDeletingStore(null)}
           onConfirm={confirmDelete}

@@ -250,6 +250,26 @@ async def import_amazon_products(run_id: str, request: Request):
                 if len(errors) < 10:
                     errors.append(str(exc))
 
+        # 6. Automatically register Amazon Store
+        if created > 0:
+            now = datetime.now(timezone.utc).isoformat()
+
+            await db.stores.update_one(
+                {"_id": "amazon"},
+                {
+                    "$setOnInsert": {
+                        "store_name": "Amazon",
+                        "website_url": "https://www.amazon.com",
+                        "logo_url": None,
+                        "status": "Active",
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                },
+                upsert=True,
+            )
+
+
         return {
             "message": "Amazon product import completed.",
             "run_id": run_id,
