@@ -5,7 +5,7 @@ import requests
 BASE_URL = "https://dummyjson.com"
 
 
-def search_products(keyword: str) -> list[dict]:
+def search_products(keyword: str, *, timeout: int = 15) -> list[dict]:
     """
     Search products from DummyJSON API
     and return normalized product data.
@@ -23,7 +23,7 @@ def search_products(keyword: str) -> list[dict]:
     response = requests.get(
         url,
         params=params,
-        timeout=15
+        timeout=timeout
     )
 
     response.raise_for_status()
@@ -40,6 +40,7 @@ def search_products(keyword: str) -> list[dict]:
             "product_name": product.get("title"),
             "price": product.get("price"),
             "currency": "USD",
+            "category": product.get("category"),
             "availability": product.get("availabilityStatus"),
             "stock": product.get("stock"),
             "product_url": None

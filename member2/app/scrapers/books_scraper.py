@@ -9,7 +9,11 @@ BASE_URL = "https://books.toscrape.com/"
 USER_AGENT = "Mozilla/5.0 (compatible; Member2PriceComparisonBot/1.0)"
 
 
-def _scrape_page(page_url: str) -> tuple[list[dict], str | None]:
+def _scrape_page(
+    page_url: str,
+    *,
+    timeout: int = 15,
+) -> tuple[list[dict], str | None]:
     """
     Scrape books from Books to Scrape
     and return normalized product data.
@@ -18,7 +22,7 @@ def _scrape_page(page_url: str) -> tuple[list[dict], str | None]:
     response = requests.get(
         page_url,
         headers={"User-Agent": USER_AGENT},
-        timeout=15
+        timeout=timeout
     )
 
     response.raise_for_status()
@@ -91,7 +95,7 @@ def _scrape_page(page_url: str) -> tuple[list[dict], str | None]:
     return results, next_url
 
 
-def scrape_books() -> list[dict]:
+def scrape_books(*, timeout: int = 15) -> list[dict]:
     """
     Scrape books from all Books to Scrape pages
     and return normalized product data.
@@ -103,7 +107,7 @@ def scrape_books() -> list[dict]:
 
     while current_url not in visited_urls:
         visited_urls.add(current_url)
-        page_results, next_url = _scrape_page(current_url)
+        page_results, next_url = _scrape_page(current_url, timeout=timeout)
         results.extend(page_results)
 
         if next_url is None or next_url in visited_urls:

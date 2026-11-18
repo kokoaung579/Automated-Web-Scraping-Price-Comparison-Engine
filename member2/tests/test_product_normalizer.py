@@ -2,7 +2,11 @@ from datetime import datetime
 
 import pytest
 
-from app.product_normalizer import normalize_products
+from member2.app.product_normalizer import (
+    convert_to_frontend_products,
+    normalize_ingestion_products,
+    normalize_products,
+)
 
 
 def valid_record(**overrides):
@@ -182,3 +186,140 @@ def test_existing_scraper_outputs_report_schema_gaps_without_fabricating_values(
     assert result.products == []
     assert len(result.errors) == 3
     assert all("required" in " ".join(issue.messages) or "category" in " ".join(issue.messages) or "currency" in " ".join(issue.messages) for issue in result.errors)
+
+
+def test_dummyjson_shape_is_retained_in_ingestion_with_unresolved_category():
+    record = {
+        "source": "DummyJSON",
+        "source_product_id": 1,
+        "product_name": "  Phone  ",
+        "price": 499,
+        "currency": "USD",
+        "availability": "In Stock",
+        "product_url": None,
+    }
+
+    result = normalize_ingestion_products([record], timestamp="2026-11-17T00:00:00Z")
+
+    assert result.errors == []
+    assert result.products[0]["source_identity"] == "DummyJSON"
+    assert result.products[0]["category"] is None
+    assert result.products[0]["currency"] == "USD"
+    assert result.products[0]["store_id"] is None
+
+
+def test_fakestore_shape_preserves_missing_currency_and_unresolved_category():
+    record = {
+        "source": "FakeStoreAPI",
+        "source_product_id": 1,
+        "product_name": "Book",
+        "category": "electronics",
+        "price": 10,
+        "currency": None,
+        "availability": None,
+    }
+
+    ingestion = normalize_ingestion_products([record])
+    final = convert_to_frontend_products(ingestion)
+
+    assert ingestion.errors == []
+    assert ingestion.products[0]["category"] is None
+    assert ingestion.products[0]["currency"] is None
+    assert ingestion.products[0]["availability"] == "unknown"
+    assert final.products == []
+    messages = " ".join(final.errors[-1].messages)
+    assert "category" in messages
+    assert "currency" in messages
+
+
+def test_books_shape_gets_url_identity_but_final_conversion_rejects_missing_category():
+    record = {
+        "source": "BooksToScrape",
+        "source_product_id": None,
+        "product_name": "A Book",
+        "price": 12.99,
+        "currency": "GBP",
+        "availability": "In stock",
+        "product_url": "https://books.toscrape.com/catalogue/a-book/index.html",
+        "image_url": "https://books.toscrape.com/media/a-book.jpg",
+    }
+
+    ingestion = normalize_ingestion_products([record])
+    final = convert_to_frontend_products(ingestion)
+
+    assert ingestion.errors == []
+    assert len(ingestion.products[0]["product_id"]) == 64
+    assert ingestion.products[0]["currency"] == "GBP"
+    assert final.products == []
+    assert any("category" in " ".join(issue.messages) for issue in final.errors)
+
+
+def test_frontend_conversion_accepts_a_complete_product_with_no_store():
+    result = normalize_products(
+        [
+            valid_record(
+                category="Audio",
+                store_id=None,
+                product_url="https://example.com/product/7",
+            )
+        ],
+        timestamp="2026-11-17T00:00:00Z",
+    )
+
+    assert result.errors == []
+    assert result.products[0]["store_id"] is None
+    assert "source_identity" not in result.products[0]
+    assert "source_product_id" not in result.products[0]
+
+
+def test_explicit_source_to_store_mapping_is_used_without_slugging_source():
+    result = normalize_ingestion_products(
+        [valid_record(store_id=None)],
+        source_to_store={"DummyJSON": "amazon"},
+    )
+
+    assert result.errors == []
+    assert result.products[0]["store_id"] == "amazon"
+
+
+def test_same_canonical_url_is_removed_as_a_duplicate():
+    records = [
+        {
+            "source": "BooksToScrape",
+            "product_name": "Book",
+            "price": 10,
+            "currency": "GBP",
+            "product_url": "https://example.com/Product/#details",
+        },
+        {
+            "source": "BooksToScrape",
+            "product_name": "Book copy",
+            "price": 11,
+            "currency": "GBP",
+            "product_url": "https://example.com/Product",
+        },
+    ]
+
+    result = normalize_ingestion_products(records)
+
+    assert result.duplicates_removed == 1
+    assert len(result.products) == 1
+
+
+def test_case_sensitive_url_paths_remain_different_products():
+    records = [
+        {"source": "BooksToScrape", "product_name": "A", "price": 10, "currency": "GBP", "product_url": "https://example.com/Product"},
+        {"source": "BooksToScrape", "product_name": "B", "price": 10, "currency": "GBP", "product_url": "https://example.com/product"},
+    ]
+
+    result = normalize_ingestion_products(records)
+
+    assert result.duplicates_removed == 0
+    assert len({product["product_id"] for product in result.products}) == 2
+
+
+def test_invalid_currency_is_reported_without_fabricating_a_value():
+    result = normalize_ingestion_products([valid_record(currency="US")])
+
+    assert result.products == []
+    assert any("currency" in " ".join(issue.messages) for issue in result.errors)

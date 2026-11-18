@@ -1,5 +1,5 @@
 
-from app.scrapers.dummyjson_scraper import search_products
+from member2.app.scrapers.dummyjson_scraper import search_products
 
 
 def main():

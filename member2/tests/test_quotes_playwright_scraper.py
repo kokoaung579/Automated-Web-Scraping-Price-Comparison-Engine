@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.scrapers.quotes_playwright_scraper import BASE_URL, scrape_quotes
+from member2.app.scrapers.quotes_playwright_scraper import BASE_URL, scrape_quotes
 
 
 class FakeLocator:
@@ -96,7 +96,7 @@ def test_scrape_quotes_extracts_quote_author_and_tags():
     playwright = FakePlaywright(browser)
 
     with patch(
-        "app.scrapers.quotes_playwright_scraper.sync_playwright",
+        "member2.app.scrapers.quotes_playwright_scraper.sync_playwright",
         return_value=playwright,
     ):
         quotes = scrape_quotes()
@@ -132,7 +132,7 @@ def test_scrape_quotes_follows_next_page_until_finished():
     playwright = FakePlaywright(browser)
 
     with patch(
-        "app.scrapers.quotes_playwright_scraper.sync_playwright",
+        "member2.app.scrapers.quotes_playwright_scraper.sync_playwright",
         return_value=playwright,
     ):
         quotes = scrape_quotes()
@@ -151,7 +151,7 @@ def test_scrape_quotes_handles_missing_quote_fields():
     playwright = FakePlaywright(browser)
 
     with patch(
-        "app.scrapers.quotes_playwright_scraper.sync_playwright",
+        "member2.app.scrapers.quotes_playwright_scraper.sync_playwright",
         return_value=playwright,
     ):
         quotes = scrape_quotes()
@@ -173,7 +173,7 @@ def test_scrape_quotes_wraps_browser_errors_and_closes_browser():
     playwright = FakePlaywright(browser)
 
     with patch(
-        "app.scrapers.quotes_playwright_scraper.sync_playwright",
+        "member2.app.scrapers.quotes_playwright_scraper.sync_playwright",
         return_value=playwright,
     ):
         with pytest.raises(RuntimeError, match="Failed to scrape quotes"):

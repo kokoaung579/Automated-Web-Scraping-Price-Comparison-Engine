@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
-from app.scrapers.books_scraper import scrape_books
+from member2.app.scrapers.books_scraper import scrape_books
 
 
 BOOK_HTML = """
@@ -24,7 +24,7 @@ BOOK_HTML = """
 def test_scrape_books_extracts_and_normalizes_book_data():
     response = Mock(text=BOOK_HTML)
 
-    with patch("app.scrapers.books_scraper.requests.get", return_value=response):
+    with patch("member2.app.scrapers.books_scraper.requests.get", return_value=response):
         books = scrape_books()
 
     assert books == [
@@ -46,7 +46,7 @@ def test_scrape_books_extracts_and_normalizes_book_data():
 def test_scrape_books_extracts_price_and_availability():
     response = Mock(text=BOOK_HTML)
 
-    with patch("app.scrapers.books_scraper.requests.get", return_value=response):
+    with patch("member2.app.scrapers.books_scraper.requests.get", return_value=response):
         book = scrape_books()[0]
 
     assert book["price"] == 12.99
@@ -57,7 +57,7 @@ def test_scrape_books_extracts_price_and_availability():
 def test_scrape_books_extracts_rating():
     response = Mock(text=BOOK_HTML)
 
-    with patch("app.scrapers.books_scraper.requests.get", return_value=response):
+    with patch("member2.app.scrapers.books_scraper.requests.get", return_value=response):
         book = scrape_books()[0]
 
     assert book["rating"] == "Three"
@@ -66,7 +66,7 @@ def test_scrape_books_extracts_rating():
 def test_scrape_books_converts_relative_urls_to_absolute_urls():
     response = Mock(text=BOOK_HTML)
 
-    with patch("app.scrapers.books_scraper.requests.get", return_value=response):
+    with patch("member2.app.scrapers.books_scraper.requests.get", return_value=response):
         book = scrape_books()[0]
 
     assert book["product_url"].startswith("https://books.toscrape.com/")
@@ -77,7 +77,7 @@ def test_scrape_books_propagates_request_error():
     response = Mock()
     response.raise_for_status.side_effect = requests.HTTPError("Request failed")
 
-    with patch("app.scrapers.books_scraper.requests.get", return_value=response):
+    with patch("member2.app.scrapers.books_scraper.requests.get", return_value=response):
         with pytest.raises(requests.HTTPError, match="Request failed"):
             scrape_books()
 
@@ -93,7 +93,7 @@ def test_scrape_books_handles_missing_product_elements():
         """
     )
 
-    with patch("app.scrapers.books_scraper.requests.get", return_value=response):
+    with patch("member2.app.scrapers.books_scraper.requests.get", return_value=response):
         books = scrape_books()
 
     assert books == [
@@ -130,7 +130,7 @@ def test_scrape_books_collects_products_from_multiple_pages():
     def get_response(url, **kwargs):
         return responses[url]
 
-    with patch("app.scrapers.books_scraper.requests.get", side_effect=get_response):
+    with patch("member2.app.scrapers.books_scraper.requests.get", side_effect=get_response):
         books = scrape_books()
 
     assert [book["product_name"] for book in books] == [
@@ -148,7 +148,7 @@ def test_scrape_books_resolves_relative_next_url():
     responses = [Mock(text=first_page_html), Mock(text="")]
 
     with patch(
-        "app.scrapers.books_scraper.requests.get",
+        "member2.app.scrapers.books_scraper.requests.get",
         side_effect=responses,
     ) as mock_get:
         scrape_books()
@@ -162,10 +162,22 @@ def test_scrape_books_resolves_relative_next_url():
 def test_scrape_books_stops_when_there_is_no_next_link():
     response = Mock(text=BOOK_HTML)
 
-    with patch("app.scrapers.books_scraper.requests.get", return_value=response) as mock_get:
+    with patch("member2.app.scrapers.books_scraper.requests.get", return_value=response) as mock_get:
         scrape_books()
 
     assert mock_get.call_count == 1
+
+
+def test_scrape_books_uses_configured_request_timeout():
+    response = Mock(text=BOOK_HTML)
+
+    with patch(
+        "member2.app.scrapers.books_scraper.requests.get",
+        return_value=response,
+    ) as mock_get:
+        scrape_books(timeout=42)
+
+    assert mock_get.call_args.kwargs["timeout"] == 42
 
 
 def test_scrape_books_does_not_repeat_visited_page():
@@ -182,7 +194,7 @@ def test_scrape_books_does_not_repeat_visited_page():
     responses = [Mock(text=first_page_html), Mock(text=second_page_html)]
 
     with patch(
-        "app.scrapers.books_scraper.requests.get",
+        "member2.app.scrapers.books_scraper.requests.get",
         side_effect=responses,
     ) as mock_get:
         scrape_books()

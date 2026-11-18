@@ -4,7 +4,7 @@ import requests
 BASE_URL = "https://fakestoreapi.com"
 
 
-def fetch_products() -> list[dict]:
+def fetch_products(*, timeout: int = 15) -> list[dict]:
     """
     Fetch products from the Fake Store API
     and return normalized product data.
@@ -14,7 +14,7 @@ def fetch_products() -> list[dict]:
 
     response = requests.get(
         url,
-        timeout=15
+        timeout=timeout
     )
 
     response.raise_for_status()

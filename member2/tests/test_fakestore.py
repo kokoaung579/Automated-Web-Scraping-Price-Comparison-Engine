@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
-from app.scrapers.fakestore_scraper import fetch_products
+from member2.app.scrapers.fakestore_scraper import fetch_products
 
 
 def test_fetch_products_returns_normalized_product_data():
@@ -19,7 +19,7 @@ def test_fetch_products_returns_normalized_product_data():
         }
     ]
 
-    with patch("app.scrapers.fakestore_scraper.requests.get", return_value=response):
+    with patch("member2.app.scrapers.fakestore_scraper.requests.get", return_value=response):
         products = fetch_products()
 
     assert products == [
@@ -44,7 +44,7 @@ def test_fetch_products_propagates_http_error():
     response = Mock()
     response.raise_for_status.side_effect = requests.HTTPError("API request failed")
 
-    with patch("app.scrapers.fakestore_scraper.requests.get", return_value=response):
+    with patch("member2.app.scrapers.fakestore_scraper.requests.get", return_value=response):
         with pytest.raises(requests.HTTPError, match="API request failed"):
             fetch_products()
 
@@ -56,9 +56,22 @@ def test_fetch_products_rejects_unexpected_response_structure():
     response = Mock()
     response.json.return_value = {"products": []}
 
-    with patch("app.scrapers.fakestore_scraper.requests.get", return_value=response):
+    with patch("member2.app.scrapers.fakestore_scraper.requests.get", return_value=response):
         with pytest.raises(
             ValueError,
             match="expected a list of products",
         ):
             fetch_products()
+
+
+def test_fetch_products_uses_configured_request_timeout():
+    response = Mock()
+    response.json.return_value = []
+
+    with patch(
+        "member2.app.scrapers.fakestore_scraper.requests.get",
+        return_value=response,
+    ) as mock_get:
+        fetch_products(timeout=42)
+
+    assert mock_get.call_args.kwargs["timeout"] == 42
