@@ -19,7 +19,10 @@ import { PriceComparisonPage } from '../pages/PriceComparisonPage'
 import { PriceHistoryPage } from '../pages/PriceHistoryPage'
 import { SettingsPage } from '../pages/SettingsPage'
 import { AuthPage } from '../pages/AuthPage'
+import { ForgotPasswordPage } from '../pages/ForgotPasswordPage'
 import { OtpVerificationPage } from '../pages/OtpVerificationPage'
+import { ResetPasswordOtpPage } from '../pages/ResetPasswordOtpPage'
+import { ResetPasswordPage } from '../pages/ResetPasswordPage'
 import { AdminOverviewPage } from '../pages/admin/AdminOverviewPage'
 import { AdminCategoriesPage } from '../pages/admin/AdminCategoriesPage'
 import { AdminProductsPage } from '../pages/admin/AdminProductsPage'
@@ -241,6 +244,9 @@ export function AppRoutes() {
     <Routes>
       <Route path="signup" element={<AuthPage mode="signup" />} />
       <Route path="login" element={<AuthPage mode="login" />} />
+      <Route path="forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="reset-password/otp" element={<ResetPasswordOtpPage />} />
+      <Route path="reset-password" element={<ResetPasswordPage />} />
       <Route path="verify-otp" element={<OtpVerificationPage />} />
       <Route path="otp-verification" element={<OtpVerificationPage />} />
       <Route path="admin" element={<ProtectedAdminLayout />}>

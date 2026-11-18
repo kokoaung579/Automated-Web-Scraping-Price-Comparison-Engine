@@ -33,6 +33,7 @@ type TestAccount = {
 let backendProducts: Product[] = []
 let backendUsers: AuthUser[] = []
 let backendSession: AuthUser | null = null
+let failNextUserDelete = false
 
 function jsonResponse(data: unknown, status = 200) {
   return {
@@ -83,6 +84,18 @@ async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
     if (!user) return jsonResponse({ detail: 'Not found' }, 404)
     user.status = status
     return jsonResponse(user)
+  }
+  const userDeleteMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/)
+  if (userDeleteMatch && method === 'DELETE') {
+    if (failNextUserDelete) {
+      failNextUserDelete = false
+      return jsonResponse({ detail: 'Unable to delete account.' }, 500)
+    }
+    const userId = decodeURIComponent(userDeleteMatch[1])
+    const exists = backendUsers.some((user) => user.id === userId)
+    if (!exists) return jsonResponse({ detail: 'Not found' }, 404)
+    backendUsers = backendUsers.filter((user) => user.id !== userId)
+    return jsonResponse(undefined, 204)
   }
 
   if (url.pathname === '/api/admin/products') {
@@ -181,6 +194,7 @@ describe('admin and shared user pages', () => {
     backendProducts = loadAdminProducts()
     backendUsers = []
     backendSession = null
+    failNextUserDelete = false
     vi.stubGlobal('fetch', vi.fn(mockBackendFetch))
   })
 
@@ -240,6 +254,114 @@ describe('admin and shared user pages', () => {
           ?.status,
       ).toBe('Inactive')
     })
+  })
+
+  it('requires confirmation to delete an account and updates account counts', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    render(
+      <AuthProvider>
+        <AdminUsersPage />
+      </AuthProvider>,
+    )
+
+    await screen.findByText('Beta User')
+    await user.click(screen.getByRole('button', { name: 'Delete Beta User' }))
+    const confirmation = screen.getByRole('dialog', {
+      name: 'Delete User Account?',
+    })
+    expect(within(confirmation).getByText('beta@example.test')).toBeDefined()
+    await user.click(
+      within(confirmation).getByRole('button', { name: 'Cancel' }),
+    )
+    expect(screen.getByText('Beta User')).toBeDefined()
+    expect(backendUsers.some((account) => account.email === 'beta@example.test'))
+      .toBe(true)
+
+    await user.click(screen.getByRole('button', { name: 'Delete Beta User' }))
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Delete Account',
+      }),
+    )
+    await waitFor(() => {
+      expect(backendUsers.some((account) => account.email === 'beta@example.test'))
+        .toBe(false)
+      expect(screen.queryByText('Beta User')).toBeNull()
+    })
+    expect(screen.getByRole('status').textContent).toContain('account was deleted')
+    const summary = screen.getByRole('region', {
+      name: 'User account summary',
+    })
+    expect(within(summary).getByText('Total accounts').parentElement?.textContent)
+      .toContain('1')
+    expect(within(summary).getByText('Active').parentElement?.textContent)
+      .toContain('1')
+    expect(within(summary).getByText('Administrators').parentElement?.textContent)
+      .toContain('1')
+  })
+
+  it('clamps pagination when deleting the last account on the last page', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    for (let index = 1; index <= 7; index += 1) {
+      backendUsers.push({
+        id: `extra-${index}`,
+        email: `extra-${index}@example.test`,
+        username: `Extra User ${index}`,
+        role: 'User',
+        status: 'Active',
+        registeredAt: '2026-01-02T00:00:00.000Z',
+      })
+    }
+
+    render(
+      <AuthProvider>
+        <AdminUsersPage />
+      </AuthProvider>,
+    )
+
+    await screen.findByText('Beta User')
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    await screen.findByText('Extra User 7')
+    await user.click(screen.getByRole('button', { name: 'Delete Extra User 7' }))
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Delete Account',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByText('Extra User 7')).toBeNull()
+      expect(
+        screen.getByRole('button', { name: 'Next page' }).getAttribute('disabled'),
+      ).not.toBeNull()
+    })
+  })
+
+  it('keeps an account when deletion fails and shows the backend error', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    render(
+      <AuthProvider>
+        <AdminUsersPage />
+      </AuthProvider>,
+    )
+
+    await screen.findByText('Beta User')
+    failNextUserDelete = true
+    await user.click(screen.getByRole('button', { name: 'Delete Beta User' }))
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Delete Account',
+      }),
+    )
+
+    const errorAlert = await screen.findByRole('alert')
+    expect(errorAlert.textContent).toContain('Unable to delete account.')
+    expect(screen.getByText('Beta User')).toBeDefined()
+    expect(backendUsers.some((account) => account.email === 'beta@example.test'))
+      .toBe(true)
   })
 
   it('keeps renamed categories synchronized with products and blocks deleting an assigned category', async () => {

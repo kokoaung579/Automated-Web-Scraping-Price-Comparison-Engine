@@ -35,6 +35,8 @@ export function OtpVerificationPage() {
 
   async function handleVerify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (isSubmitting) return
+
     setError('')
     setSuccess('')
 
