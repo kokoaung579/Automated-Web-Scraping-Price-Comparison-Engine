@@ -9,6 +9,7 @@ import type {
 } from '../context/AppOutletContext'
 import type { PriceHistoryPeriod, PriceHistoryPoint } from '../data/priceHistory'
 import type { StoreOffer } from '../data/storeOffers'
+import type { AuthUser, BrowserAccountImport, UserStatus } from '../types/auth'
 
 type ProductRecord = Omit<DemoProduct, 'icon'>
 
@@ -50,6 +51,7 @@ export type Channel3Product = {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
     ...init,
+    credentials: init?.credentials ?? 'include',
     headers: {
       'Content-Type': 'application/json',
       ...init?.headers,
@@ -58,9 +60,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const body = await response.json().catch(() => null) as
-      | { detail?: string }
+      | { detail?: unknown }
       | null
-    throw new Error(body?.detail ?? `Backend request failed (${response.status})`)
+    const detail = body?.detail
+    const message =
+      typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail
+              .map((item) =>
+                typeof item === 'object' &&
+                item !== null &&
+                'msg' in item &&
+                typeof item.msg === 'string'
+                  ? item.msg
+                  : '',
+              )
+              .filter(Boolean)
+              .join(' ')
+          : ''
+    throw new Error(message || `Backend request failed (${response.status})`)
   }
 
   if (response.status === 204) return undefined as T
@@ -128,6 +147,57 @@ export function toChannel3CatalogProduct(
 
 export const api = {
   health: () => request<{ status: string }>('/health'),
+
+  registerAccount: (email: string, username: string, password: string) =>
+    request<AuthUser>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, username, password }),
+    }),
+
+  loginAccount: (identifier: string, password: string) =>
+    request<AuthUser>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ identifier, password }),
+    }),
+
+  verifyOtp: (email: string, otp: string) =>
+    request<AuthUser>('/auth/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email, otp }),
+    }),
+
+  resendOtp: (email: string) =>
+    request<{ message: string }>('/auth/resend-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  currentSession: () => request<AuthUser | null>('/auth/session'),
+
+  logout: () =>
+    request<void>('/auth/logout', {
+      method: 'POST',
+    }),
+
+  adminUsers: () => request<AuthUser[]>('/admin/users'),
+
+  updateAdminUserStatus: (email: string, status: UserStatus) =>
+    request<AuthUser>(
+      `/admin/users/${encodeURIComponent(email)}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      },
+    ),
+
+  importBrowserUsers: (accounts: BrowserAccountImport[]) =>
+    request<{ imported: number; skipped: number; completed: boolean }>(
+      '/admin/users/import-browser',
+      {
+        method: 'POST',
+        body: JSON.stringify({ accounts }),
+      },
+    ),
 
   // Admin Products CRUD
   adminProducts: () => request<Product[]>('/admin/products'),

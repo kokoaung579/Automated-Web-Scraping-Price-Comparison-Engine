@@ -13,11 +13,8 @@ import {
   UserRound,
 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
-import {
-  getAuthLandingPath,
-  registerLocalAccount,
-  signInLocalAccount,
-} from '../auth/localAuth'
+import { api } from '../api/client'
+import { useAuth } from '../auth/useAuth'
 
 type AuthPageProps = {
   mode: 'login' | 'signup'
@@ -296,6 +293,7 @@ function PricePilotBrand() {
 
 export function AuthPage({ mode }: AuthPageProps) {
   const navigate = useNavigate()
+  const { setUser } = useAuth()
   const isSignup = mode === 'signup'
   const [values, setValues] = useState(initialValues)
   const [errors, setErrors] = useState<AuthErrors>({})
@@ -360,17 +358,18 @@ export function AuthPage({ mode }: AuthPageProps) {
     setIsSubmitting(true)
     try {
       if (isSignup) {
-        await registerLocalAccount(
+        await api.registerAccount(
           values.email,
           values.username,
           values.password,
         )
+        navigate('/login', { replace: true })
       } else {
-        await signInLocalAccount(values.email, values.password)
+        const user = await api.loginAccount(values.email, values.password)
+        setUser(user)
+        const destination = user.role === 'Admin' ? '/admin' : '/'
+        navigate(destination, { replace: true })
       }
-
-      const destination = isSignup ? '/' : getAuthLandingPath()
-      navigate(destination, { replace: true })
     } catch (error) {
       setFormError(
         error instanceof Error
@@ -521,8 +520,7 @@ export function AuthPage({ mode }: AuthPageProps) {
                 size={14}
                 className="mt-0.5 shrink-0 text-slate-400"
               />
-              Demo authentication is saved in this browser only. No account
-              data is sent to a server.
+              Account details are securely stored in the PricePilot database.
             </div>
           </div>
           <p className="mx-auto mt-5 flex max-w-[430px] items-center justify-center gap-1.5 text-[10px] text-slate-600">

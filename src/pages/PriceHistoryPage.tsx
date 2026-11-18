@@ -198,12 +198,17 @@ function HistoryTableRow({ row }: { row: HistoryRow }) {
 }
 
 export function PriceHistoryPage() {
-  const { products } = useOutletContext<AppOutletContext>()
-  const [selectedProductId, setSelectedProductId] = useState(
+  const { products, dataSource } = useOutletContext<AppOutletContext>()
+  const [selectedProductIdState, setSelectedProductId] = useState(
     products[0]?.id ?? '',
   )
   const [period, setPeriod] = useState<Period>('30D')
   const [storeFilter, setStoreFilter] = useState('all')
+  const selectedProductId = products.some(
+    (item) => item.id === selectedProductIdState,
+  )
+    ? selectedProductIdState
+    : products[0]?.id ?? ''
   const product = products.find((item) => item.id === selectedProductId)
   const [remoteData, setRemoteData] = useState<{
     productId: string
@@ -211,11 +216,16 @@ export function PriceHistoryPage() {
     offers: StoreOffer[]
     histories: StoreHistory[]
   } | null>(null)
+  const [historyLoadError, setHistoryLoadError] = useState<{
+    productId: string
+    period: Period
+    message: string
+  } | null>(null)
 
   useEffect(() => {
     let active = true
     const productId = product?.id
-    if (!productId) return
+    if (!productId || dataSource !== 'backend') return
 
     Promise.all([
       api.offers(productId),
@@ -233,21 +243,36 @@ export function PriceHistoryPage() {
       })
       .catch((error: unknown) => {
         console.error('Unable to load price history from the backend', error)
+        if (active) {
+          setHistoryLoadError(
+            {
+              productId,
+              period,
+              message:
+                error instanceof Error
+                  ? error.message
+                  : 'Unable to load price history.',
+            },
+          )
+        }
       })
 
     return () => {
       active = false
     }
-  }, [period, product?.id])
+  }, [dataSource, period, product?.id])
 
   const storeOffers = useMemo(
     () =>
-      remoteData && remoteData.productId === product?.id
-        ? remoteData.offers
-        : product
+      dataSource === 'demo'
+        ? product
           ? getStoreOffers(product)
+          : []
+        : remoteData &&
+            remoteData.productId === product?.id
+          ? remoteData.offers
           : [],
-    [product, remoteData],
+    [dataSource, product, remoteData],
   )
   const visibleOffers = useMemo(
     () =>
@@ -258,6 +283,20 @@ export function PriceHistoryPage() {
   )
   const histories = useMemo(
     () => {
+      if (dataSource === 'demo') {
+        return product
+          ? visibleOffers.map((offer, index) => ({
+              store: offer.store,
+              points: createStorePriceHistory(
+                product,
+                offer.price,
+                period,
+                index,
+              ),
+            }))
+          : []
+      }
+
       if (
         remoteData &&
         remoteData.productId === product?.id &&
@@ -268,28 +307,21 @@ export function PriceHistoryPage() {
         )
       }
 
-      return product
-        ? visibleOffers.map((offer, index) => ({
-            store: offer.store,
-            points: createStorePriceHistory(
-              product,
-              offer.price,
-              period,
-              index,
-            ),
-          }))
-        : []
+      return []
     },
-    [period, product, remoteData, visibleOffers],
+    [dataSource, period, product, remoteData, visibleOffers],
   )
-  const chartData: ChartPoint[] = histories[0]?.points.map((point, index) => {
-    const row: ChartPoint = { date: point.date }
-    histories.forEach((history) => {
-      const historyPoint = history.points[index]
-      if (historyPoint) row[history.store] = historyPoint.price
+  const chartRows = new Map<string, ChartPoint>()
+  histories.forEach((history) => {
+    history.points.forEach((point) => {
+      const row = chartRows.get(point.date) ?? { date: point.date }
+      row[history.store] = point.price
+      chartRows.set(point.date, row)
     })
-    return row
-  }) ?? []
+  })
+  const chartData = [...chartRows.values()].sort((first, second) =>
+    first.date.localeCompare(second.date),
+  )
   const historyValues = histories.flatMap((history) =>
     history.points.map((point) => point.price),
   )
@@ -308,6 +340,24 @@ export function PriceHistoryPage() {
   const marketChangePercent =
     marketLowStart === 0 ? 0 : (marketChange / marketLowStart) * 100
   const stores = storeOffers.map((offer) => offer.store)
+  const hasCurrentHistory = Boolean(
+    remoteData &&
+      product &&
+      remoteData.productId === product.id &&
+      remoteData.period === period,
+  )
+  const currentHistoryError =
+    !hasCurrentHistory &&
+    historyLoadError &&
+    historyLoadError.productId === product?.id &&
+    historyLoadError.period === period
+      ? historyLoadError.message
+      : null
+  const isLoadingHistory =
+    dataSource === 'loading' ||
+    (dataSource === 'backend' &&
+      !hasCurrentHistory &&
+      currentHistoryError === null)
 
   return (
     <div className="space-y-6">
@@ -321,11 +371,15 @@ export function PriceHistoryPage() {
             Price History
           </h1>
           <p className="mt-2 text-xs text-slate-500 sm:text-sm">
-            Explore demo price trends across products and stores.
+            Review price changes for products and stores in the catalog.
           </p>
         </div>
         <span className="rounded-xl border border-white/[0.07] bg-[#0d1320] px-3 py-2 text-[11px] text-slate-400">
-          Demo data
+          {dataSource === 'backend'
+            ? 'MongoDB records'
+            : dataSource === 'demo'
+              ? 'Demo data'
+              : 'Loading'}
         </span>
       </section>
 
@@ -418,7 +472,7 @@ export function PriceHistoryPage() {
                 </div>
               </div>
               <span className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1 text-[9px] font-medium uppercase tracking-wide text-slate-500">
-                Demo history
+                {dataSource === 'backend' ? 'Stored history' : 'Demo history'}
               </span>
             </div>
 
@@ -501,7 +555,7 @@ export function PriceHistoryPage() {
                   Price history
                 </h2>
                 <p className="mt-1 text-[10px] text-slate-500">
-                  {tableRows.length} demo observations · sorted newest first
+                  {tableRows.length} recorded observations · sorted newest first
                 </p>
               </div>
               <span className="text-[10px] text-slate-500">{period}</span>
@@ -573,7 +627,11 @@ export function PriceHistoryPage() {
             No price history available
           </h2>
           <p className="mt-1 max-w-xs text-[11px] leading-5 text-slate-500">
-            Select a product and store to view demo price observations.
+            {isLoadingHistory
+              ? 'Loading the selected product’s recorded price changes.'
+              : currentHistoryError
+                ? `Could not load stored price history: ${currentHistoryError}`
+                : 'Price observations will appear after prices are recorded for this product.'}
           </p>
         </section>
       )}

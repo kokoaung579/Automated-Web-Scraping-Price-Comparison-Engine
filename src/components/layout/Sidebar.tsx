@@ -28,6 +28,7 @@ type SidebarProps = {
   isOpen: boolean
   isCollapsed: boolean
   onNavigate: () => void
+  dataSource: 'loading' | 'backend' | 'demo'
   watchlistCount: number
   alertsCount: number
   unreadNotificationCount: number
@@ -37,6 +38,7 @@ export function Sidebar({
   isOpen,
   isCollapsed,
   onNavigate,
+  dataSource,
   watchlistCount,
   alertsCount,
   unreadNotificationCount,
@@ -167,9 +169,21 @@ export function Sidebar({
             isCollapsed ? 'lg:justify-center' : ''
           }`}
         >
-          <span className="size-2 rounded-full bg-emerald-400 shadow-[0_0_10px_#34d399]" />
+          <span
+            className={`size-2 rounded-full ${
+              dataSource === 'backend'
+                ? 'bg-emerald-400 shadow-[0_0_10px_#34d399]'
+                : dataSource === 'demo'
+                  ? 'bg-amber-400'
+                  : 'animate-pulse bg-slate-500'
+            }`}
+          />
           <span className={isCollapsed ? 'lg:hidden' : ''}>
-            Monitoring active
+            {dataSource === 'backend'
+              ? 'Catalog connected'
+              : dataSource === 'demo'
+                ? 'Demo mode'
+                : 'Connecting'}
           </span>
         </div>
         <p
@@ -177,15 +191,25 @@ export function Sidebar({
             isCollapsed ? 'lg:hidden' : ''
           }`}
         >
-          Price checks are running for your tracked products.
+          {dataSource === 'backend'
+            ? 'Prices, offers, and history use the shared catalog.'
+            : dataSource === 'demo'
+              ? 'Backend unavailable; showing demo prices.'
+              : 'Loading catalog data.'}
         </p>
         <div
           className={`mt-4 flex items-center justify-between border-t border-white/[0.07] pt-3 text-[10px] text-slate-500 ${
             isCollapsed ? 'lg:hidden' : ''
           }`}
         >
-          <span>Last sync</span>
-          <span className="font-medium text-slate-300">2 min ago</span>
+          <span>Price source</span>
+          <span className="font-medium text-slate-300">
+            {dataSource === 'backend'
+              ? 'MongoDB'
+              : dataSource === 'demo'
+                ? 'Demo'
+                : '—'}
+          </span>
         </div>
       </div>
       <p

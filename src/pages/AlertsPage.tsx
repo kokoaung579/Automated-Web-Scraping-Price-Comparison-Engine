@@ -262,7 +262,9 @@ function AlertCard({
           </div>
         </div>
         <div className="flex items-center justify-between gap-2 border-t border-white/[0.05] pt-3 lg:block lg:border-0 lg:pt-0">
-          <span className="text-[10px] text-slate-500 lg:block">Current price</span>
+          <span className="text-[10px] text-slate-500 lg:block">
+            Current price · {product.store}
+          </span>
           <span className="text-xs font-semibold text-white">
             {formatPrice(product.price)}
           </span>

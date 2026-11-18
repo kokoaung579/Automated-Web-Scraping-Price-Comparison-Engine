@@ -44,6 +44,7 @@ export type UserPreferences = {
 
 export type AppOutletContext = {
   products: DemoProduct[]
+  dataSource: 'loading' | 'backend' | 'demo'
   searchQuery: string
   setSearchQuery: (query: string) => void
   watchlistIds: string[]
