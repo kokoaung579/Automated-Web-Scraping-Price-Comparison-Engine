@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -10,26 +10,23 @@ import {
   Search,
   Shield,
   ShieldCheck,
+  Trash2,
   UserRound,
   Users,
   X,
 } from 'lucide-react'
-import type {
-  LocalUserRole,
-  LocalUserStatus,
-  ManagedLocalUser,
-} from '../../auth/localAuth'
-import {
-  getCurrentSession,
-  getLocalUsers,
-  setLocalUserStatus,
-} from '../../auth/localAuth'
+import { useAuth } from '../../auth/useAuth'
+import { api } from '../../api/client'
+import { getBrowserAccountsForMigration } from '../../auth/legacyBrowserAccounts'
+import type { AuthUser, UserRole, UserStatus } from '../../types/auth'
 
-type RoleFilter = 'all' | LocalUserRole
-type StatusFilter = 'all' | LocalUserStatus
+type RoleFilter = 'all' | UserRole
+type StatusFilter = 'all' | UserStatus
 type PageState = {
-  users: ManagedLocalUser[]
+  users: AuthUser[]
   error: string
+  migrationError: string
+  loading: boolean
 }
 
 const pageSize = 8
@@ -37,14 +34,33 @@ const pageSize = 8
 function getErrorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
-    : 'Unable to load local user accounts.'
+    : 'Unable to load user accounts.'
 }
 
-function loadUsers(): PageState {
+async function loadUsers(importBrowserAccounts = false): Promise<PageState> {
+  let migrationError = ''
+  if (importBrowserAccounts) {
+    try {
+      await api.importBrowserUsers(getBrowserAccountsForMigration())
+    } catch (error) {
+      migrationError = `Existing browser accounts could not be imported: ${getErrorMessage(error)}`
+    }
+  }
+
   try {
-    return { users: getLocalUsers(), error: '' }
+    return {
+      users: await api.adminUsers(),
+      error: '',
+      migrationError,
+      loading: false,
+    }
   } catch (error) {
-    return { users: [], error: getErrorMessage(error) }
+    return {
+      users: [],
+      error: getErrorMessage(error),
+      migrationError,
+      loading: false,
+    }
   }
 }
 
@@ -70,7 +86,7 @@ function getInitials(username: string): string {
     : username.slice(0, 2).toUpperCase()
 }
 
-function StatusBadge({ status }: { status: LocalUserStatus }) {
+function StatusBadge({ status }: { status: UserStatus }) {
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-medium ${
@@ -89,7 +105,7 @@ function StatusBadge({ status }: { status: LocalUserStatus }) {
   )
 }
 
-function RoleBadge({ role }: { role: LocalUserRole }) {
+function RoleBadge({ role }: { role: UserRole }) {
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[10px] font-medium ${
@@ -112,7 +128,7 @@ function UserDetailsDialog({
   user,
   onClose,
 }: {
-  user: ManagedLocalUser
+  user: AuthUser
   onClose: () => void
 }) {
   return (
@@ -185,7 +201,7 @@ function UserDetailsDialog({
             </div>
           </dl>
           <p className="mt-4 text-[10px] leading-5 text-slate-600">
-            Local demo account details are stored in this browser only.
+            Account details are stored in MongoDB.
           </p>
         </div>
       </section>
@@ -193,17 +209,117 @@ function UserDetailsDialog({
   )
 }
 
+function DeleteUserDialog({
+  user,
+  isDeleting,
+  onCancel,
+  onConfirm,
+}: {
+  user: AuthUser
+  isDeleting: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+      <button
+        type="button"
+        aria-label="Cancel account deletion"
+        onClick={onCancel}
+        disabled={isDeleting}
+        className="absolute inset-0 cursor-default"
+      />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-user-title"
+        className="relative z-10 w-full max-w-md overflow-hidden rounded-2xl border border-rose-300/15 bg-[#0d1320] shadow-2xl shadow-black/50"
+      >
+        <div className="flex items-start gap-3 border-b border-white/[0.06] px-5 py-4 sm:px-6">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-rose-300/15 bg-rose-400/[0.08] text-rose-300">
+            <Trash2 aria-hidden="true" size={18} />
+          </span>
+          <div>
+            <h2
+              id="delete-user-title"
+              className="text-base font-semibold text-white"
+            >
+              Delete User Account?
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-slate-400">
+              Are you sure you want to permanently delete this user account?
+            </p>
+          </div>
+        </div>
+        <div className="px-5 py-4 sm:px-6">
+          <dl className="space-y-2 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3.5 py-3">
+            <div className="flex flex-wrap justify-between gap-2 text-xs">
+              <dt className="text-slate-500">Username</dt>
+              <dd className="font-medium text-slate-200">{user.username}</dd>
+            </div>
+            <div className="flex flex-wrap justify-between gap-2 text-xs">
+              <dt className="text-slate-500">Email</dt>
+              <dd className="break-all font-medium text-slate-200">{user.email}</dd>
+            </div>
+          </dl>
+          <p className="mt-3 text-xs font-medium text-rose-300">
+            This action cannot be undone.
+          </p>
+          <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={isDeleting}
+              className="rounded-xl border border-white/[0.08] px-4 py-2.5 text-xs font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:cursor-wait disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={isDeleting}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-300/15 bg-rose-500/15 px-4 py-2.5 text-xs font-semibold text-rose-200 transition hover:bg-rose-500/25 disabled:cursor-wait disabled:opacity-60"
+            >
+              <Trash2 aria-hidden="true" size={14} />
+              {isDeleting ? 'Deleting…' : 'Delete Account'}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 export function AdminUsersPage() {
-  const [pageState, setPageState] = useState(loadUsers)
+  const { user: currentUser } = useAuth()
+  const [pageState, setPageState] = useState<PageState>({
+    users: [],
+    error: '',
+    migrationError: '',
+    loading: true,
+  })
   const [searchQuery, setSearchQuery] = useState('')
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [page, setPage] = useState(1)
-  const [selectedUser, setSelectedUser] = useState<ManagedLocalUser | null>(
+  const [selectedUser, setSelectedUser] = useState<AuthUser | null>(
     null,
   )
   const [actionError, setActionError] = useState('')
-  const currentUserEmail = getCurrentSession()?.email.toLowerCase() ?? ''
+  const [actionSuccess, setActionSuccess] = useState('')
+  const [userToDelete, setUserToDelete] = useState<AuthUser | null>(null)
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null)
+  const currentUserEmail = currentUser?.email.toLowerCase() ?? ''
+
+  useEffect(() => {
+    let active = true
+    loadUsers(true).then((nextState) => {
+      if (active) setPageState(nextState)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   const totalActive = pageState.users.filter(
     (user) => user.status === 'Active',
@@ -234,10 +350,11 @@ export function AdminUsersPage() {
   const startIndex = (currentPage - 1) * pageSize
   const visibleUsers = filteredUsers.slice(startIndex, startIndex + pageSize)
 
-  function reloadUsers() {
-    const nextState = loadUsers()
+  async function reloadUsers() {
+    setPageState((current) => ({ ...current, loading: true, error: '' }))
+    const nextState = await loadUsers()
     setPageState(nextState)
-    if (!nextState.error) setActionError('')
+    setActionError('')
   }
 
   function updateSearch(value: string) {
@@ -255,13 +372,17 @@ export function AdminUsersPage() {
     setPage(1)
   }
 
-  function toggleUserStatus(user: ManagedLocalUser) {
-    const nextStatus: LocalUserStatus =
+  async function toggleUserStatus(user: AuthUser) {
+    const nextStatus: UserStatus =
       user.status === 'Active' ? 'Inactive' : 'Active'
 
     try {
-      const updatedUser = setLocalUserStatus(user.email, nextStatus)
+      const updatedUser = await api.updateAdminUserStatus(
+        user.email,
+        nextStatus,
+      )
       setPageState((current) => ({
+        ...current,
         users: current.users.map((currentUser) =>
           currentUser.email === updatedUser.email ? updatedUser : currentUser,
         ),
@@ -271,8 +392,37 @@ export function AdminUsersPage() {
         selected?.email === updatedUser.email ? updatedUser : selected,
       )
       setActionError('')
+      setActionSuccess('')
     } catch (error) {
       setActionError(getErrorMessage(error))
+    }
+  }
+
+  async function deleteUser(user: AuthUser) {
+    if (deletingUserId) return
+
+    setDeletingUserId(user.id)
+    setActionError('')
+    setActionSuccess('')
+    try {
+      await api.deleteAdminUser(user.id)
+      setPageState((current) => ({
+        ...current,
+        users: current.users.filter(
+          (currentUser) => currentUser.id !== user.id,
+        ),
+        error: '',
+      }))
+      setSelectedUser((selected) =>
+        selected?.id === user.id ? null : selected,
+      )
+      setUserToDelete(null)
+      setActionSuccess(`${user.username}’s account was deleted.`)
+    } catch (error) {
+      setActionError(getErrorMessage(error))
+      setUserToDelete(null)
+    } finally {
+      setDeletingUserId(null)
     }
   }
 
@@ -290,13 +440,13 @@ export function AdminUsersPage() {
             User Management
           </h2>
           <p className="mt-1.5 max-w-2xl text-xs leading-5 text-slate-500 sm:text-[13px]">
-            Review local accounts, roles, and access status across this demo
+            Review MongoDB accounts, roles, and access status across the
             workspace.
           </p>
         </div>
         <span className="inline-flex items-center gap-2 self-start rounded-xl border border-white/[0.07] bg-[#0d1320] px-3 py-2 text-[10px] text-slate-400 sm:self-auto">
           <Shield aria-hidden="true" size={14} className="text-cyan-300" />
-          Browser demo data
+          MongoDB
         </span>
       </section>
 
@@ -357,6 +507,23 @@ export function AdminUsersPage() {
         ))}
       </section>
 
+      {pageState.migrationError && (
+        <p
+          role="alert"
+          className="rounded-xl border border-rose-300/15 bg-rose-400/[0.05] px-4 py-3 text-xs text-rose-200"
+        >
+          {pageState.migrationError}
+        </p>
+      )}
+      {actionSuccess && (
+        <p
+          role="status"
+          className="rounded-xl border border-emerald-300/10 bg-emerald-400/[0.06] px-4 py-3 text-xs text-emerald-200"
+        >
+          {actionSuccess}
+        </p>
+      )}
+
       <section className="overflow-hidden rounded-2xl border border-white/[0.07] bg-[#0d1320]">
         <div className="border-b border-white/[0.06] px-4 py-4 sm:px-5 sm:py-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -365,12 +532,12 @@ export function AdminUsersPage() {
                 Registered users
               </h3>
               <p className="mt-1 text-[10px] text-slate-500">
-                {pageState.users.length} local{' '}
+                {pageState.users.length}{' '}
                 {pageState.users.length === 1 ? 'account' : 'accounts'}
               </p>
             </div>
             <span className="rounded-full border border-white/[0.07] bg-white/[0.025] px-2.5 py-1 text-[9px] font-medium text-slate-500">
-              Frontend only
+              MongoDB
             </span>
           </div>
 
@@ -429,7 +596,11 @@ export function AdminUsersPage() {
           </div>
         </div>
 
-        {pageState.error ? (
+        {pageState.loading ? (
+          <p role="status" className="px-5 py-12 text-center text-xs text-slate-400">
+            Loading accounts from MongoDB…
+          </p>
+        ) : pageState.error ? (
           <div
             role="alert"
             className="flex flex-col items-center px-5 py-12 text-center"
@@ -560,7 +731,7 @@ export function AdminUsersPage() {
                                   ? 'You cannot deactivate the account currently in use'
                                   : undefined
                               }
-                              onClick={() => toggleUserStatus(user)}
+                              onClick={() => void toggleUserStatus(user)}
                               className={`rounded-lg border px-2.5 py-1.5 text-[10px] font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
                                 user.status === 'Active'
                                   ? 'border-rose-300/10 text-rose-300 hover:bg-rose-400/[0.07]'
@@ -570,6 +741,25 @@ export function AdminUsersPage() {
                               {user.status === 'Active'
                                 ? 'Deactivate'
                                 : 'Activate'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isCurrentUser || deletingUserId !== null}
+                              title={
+                                isCurrentUser
+                                  ? 'You cannot delete the account currently in use'
+                                  : undefined
+                              }
+                              onClick={() => {
+                                setActionError('')
+                                setActionSuccess('')
+                                setUserToDelete(user)
+                              }}
+                              aria-label={`Delete ${user.username}`}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300/10 px-2.5 py-1.5 text-[10px] font-medium text-rose-300 transition hover:border-rose-300/20 hover:bg-rose-400/[0.07] disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              <Trash2 aria-hidden="true" size={13} />
+                              Delete
                             </button>
                           </div>
                         </td>
@@ -624,12 +814,12 @@ export function AdminUsersPage() {
             </span>
             <p className="mt-3 text-sm font-medium text-slate-200">
               {pageState.users.length === 0
-                ? 'No local accounts yet'
+                ? 'No accounts yet'
                 : 'No users match these filters'}
             </p>
             <p className="mt-1 max-w-sm text-xs leading-5 text-slate-500">
               {pageState.users.length === 0
-                ? 'Registered demo accounts will appear here.'
+                ? 'Registered accounts will appear here.'
                 : 'Try a different search term, role, or status.'}
             </p>
             {pageState.users.length > 0 && (
@@ -651,13 +841,21 @@ export function AdminUsersPage() {
 
       <p className="flex items-center justify-center gap-1.5 pb-1 text-[9px] text-slate-600">
         <CircleCheck aria-hidden="true" size={12} />
-        Account changes are saved in this browser only.
+        Account status changes are saved to MongoDB.
       </p>
 
       {selectedUser && (
         <UserDetailsDialog
           user={selectedUser}
           onClose={() => setSelectedUser(null)}
+        />
+      )}
+      {userToDelete && (
+        <DeleteUserDialog
+          user={userToDelete}
+          isDeleting={deletingUserId === userToDelete.id}
+          onCancel={() => setUserToDelete(null)}
+          onConfirm={() => void deleteUser(userToDelete)}
         />
       )}
     </div>

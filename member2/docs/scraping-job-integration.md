@@ -124,3 +124,82 @@ for tests or local wiring. The module-level `app` intentionally uses
 development but is volatile and rejects job creation until explicit store and
 source configuration is supplied. Do not treat this default as a production
 job store.
+
+## Retailer product scrapers
+
+The registry includes `Adorama`, `Amazon`, and `Walmart` in addition to the
+existing demo/API scrapers. Each retailer binding requires a non-empty
+`keyword`. Configure `StoreScraperBinding.source_identity` with the exact
+source name and use an explicitly approved existing managed `store_id` in
+`JobManagementConfig.store_bindings` and `source_to_store`; these scrapers do
+not create stores or infer source-to-store relationships. The backend jobs API
+uses the store binding's configured keyword when a job is executed.
+
+| Source identity | Discovery strategy | Bounded behavior |
+| --- | --- | --- |
+| `Adorama` | Match keywords against robots-advertised product sitemaps, then read candidate product pages. | At most 6 advertised sitemap files, 6 child sitemaps per file, and 8 product pages per run. It does not call the site's disallowed search endpoint. |
+| `Amazon` | Read the public `/s` search results and follow its next-page link when allowed by robots.txt. | At most 2 search pages, 20 distinct products, and 5 detail pages per run. Search cards provide listing data; detail pages fill missing fields. |
+| `Walmart` | Match keywords against robots-advertised product sitemap shards, then read candidate product pages. | At most 8 sitemap shards and 8 product pages per run. It does not call the site's disallowed `/search` path; shard limits can produce incomplete or empty keyword results. |
+
+The scrapers send a transparent `Member2PriceComparisonBot/1.0` user agent,
+honor robots rules and crawl delays, restrict redirects to each retailer's
+hosts, and use bounded timeouts. HTTP refusals, CAPTCHA or human-verification
+pages, and other detected anti-bot responses are surfaced as failures; the
+scrapers do not switch to a browser, impersonate a user agent, retry a block,
+or bypass access controls. Robots permission alone does not establish
+permission under a retailer's terms. Verify the applicable terms and obtain
+approval before enabling live or production scraping.
+
+Product fields are extracted from listing markup, product pages, and
+Schema.org JSON-LD when present. Missing values remain missing; invalid prices
+are not converted into guessed prices. The existing normalizer still requires
+an approved category, currency, and store mapping to persist a result. An
+unmapped retailer category is not inferred and will be reported as a
+normalization issue.
+
+Unit tests use mocked responses and run with the normal Member 2 suite. Live
+retailer requests are opt-in and never contact MongoDB:
+
+```powershell
+$env:RUN_LIVE_ECOMMERCE_SCRAPERS = "1"
+python -m pytest member2\tests\test_ecommerce_scrapers_live.py -q -rs
+Remove-Item Env:RUN_LIVE_ECOMMERCE_SCRAPERS
+```
+
+The live tests report retailer blocks or network/HTTP unavailability as skips;
+an empty result or product without a valid extracted price is a failure, not a
+successful live scrape.
+
+## Current retailer access blockers and permitted alternatives
+
+The last direct-access attempts failed before usable product records were
+extracted:
+
+* Adorama's robots-advertised sitemap was readable, but a candidate product
+  page returned HTTP 403. The scraper surfaces that refusal and does not retry
+  the page through another client.
+* Amazon's public search request returned HTTP 503. The request fails before
+  the search-result parser runs, so changing selectors would not address it.
+* Walmart's search path is disallowed by robots.txt. Product sitemap shards
+  were readable, but product pages returned a robot/human verification
+  challenge; those pages are rejected rather than parsed as product data.
+
+No alternate access provider is currently configured. Potential partner routes
+to investigate are Amazon's [Creators API](https://affiliate-program.amazon.com/creatorsapi/docs),
+the [Walmart Affiliate Program](https://affiliates.walmart.com/) and its
+Affiliate Marketing API, and Adorama's
+[Affiliate Program](https://www.adorama.com/g/adorama-affiliate-program).
+They require partner enrollment and/or credentials, and their terms may limit
+price display, caching, storage, and comparison use. Adorama's public
+affiliate-program page advertises partner tools, but a product-price feed/API
+and permission for this application's use have not been verified.
+
+A commercial data provider is another option, but none is enabled or required
+by this package. For example, SerpApi publishes a
+[Walmart product endpoint](https://serpapi.com/walmart-product-api) and
+[pricing](https://serpapi.com/pricing). Provider coverage for all three
+retailers, current pricing, allowed retention, and availability of Adorama
+offers must be confirmed before selecting it. Do not add provider credentials
+or incur charges until that route is explicitly approved. After approval, keep
+keys in the ignored local environment file and add only the selected
+provider's required variable names to the local setup instructions.

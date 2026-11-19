@@ -1,12 +1,19 @@
 import asyncio
+import ssl
 import threading
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from truststore import extract_from_ssl as original_extract_from_ssl
 
 from app import main, member2_runtime
 from member2.app.job_config import JobManagementConfig
+from member2.app.job_models import CreateScrapingJobInput
+from member2.app.job_repository import InMemoryJobRepository
+from member2.app.job_service import ScrapingJobService
+from member2.app.routers.jobs import get_job_service
 from member2.app.job_worker import ScrapingJobWorker
 
 
@@ -79,15 +86,30 @@ def reset_fake_client():
     FakeMongoClient.fail_index = False
 
 
+class FakeStoresCollection:
+    def __init__(self, documents):
+        self.documents = documents
+
+    async def find_one(self, query):
+        return self.documents.get(query["_id"])
+
+
+class UnexpectedStoresCollection:
+    async def find_one(self, query):
+        pytest.fail(f"Unexpected store lookup: {query!r}")
+
+
 def test_runtime_injects_sync_database_initializes_indexes_and_builds_service(
     monkeypatch,
 ):
     reset_fake_client()
     monkeypatch.setattr(member2_runtime, "MongoClient", FakeMongoClient)
+    config = JobManagementConfig(poll_interval_seconds=0.25)
 
     runtime = member2_runtime._build_member2_runtime(
         "mongodb://test-host:27017",
         "Member2_jobs_test",
+        config,
     )
 
     client = FakeMongoClient.instances[0]
@@ -99,7 +121,7 @@ def test_runtime_injects_sync_database_initializes_indexes_and_builds_service(
         len(collection.indexes)
         for collection in client.database.collections.values()
     ) == 5
-    assert isinstance(runtime.service.config, JobManagementConfig)
+    assert runtime.service.config is config
     assert runtime.service.repository is runtime.repository
     assert runtime.worker.service is runtime.service
     assert runtime.worker.poll_interval_seconds == (
@@ -226,6 +248,150 @@ def test_worker_offloads_synchronous_service_calls():
     asyncio.run(scenario())
 
 
+def test_member2_jobs_router_is_mounted_under_admin_api_with_admin_access():
+    assert "/api/admin/jobs" in main.app.openapi()["paths"]
+
+    main.app.state.database = object()
+    client = TestClient(main.app)
+    try:
+        response = client.get("/api/admin/jobs")
+    finally:
+        client.close()
+        del main.app.state.database
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Sign in to continue."
+
+
+def test_jobs_router_resolves_the_backend_service_state():
+    service = object()
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(scraping_job_service=service),
+        ),
+    )
+
+    assert get_job_service(request) is service
+
+
+def test_jobs_router_reports_missing_backend_service():
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace()),
+    )
+
+    with pytest.raises(HTTPException) as error:
+        get_job_service(request)
+
+    assert error.value.status_code == 503
+
+
+def test_jobs_api_returns_configuration_error_without_a_store_mapping():
+    repository = InMemoryJobRepository()
+    main.app.state.database = object()
+    main.app.state.scraping_job_service = ScrapingJobService(
+        repository,
+        JobManagementConfig(),
+    )
+    main.app.dependency_overrides[main.require_admin] = lambda: {"role": "Admin"}
+    client = TestClient(main.app)
+    try:
+        response = client.post(
+            "/api/admin/jobs",
+            json={
+                "store_id": "unmapped-test-store",
+                "interval_minutes": 60,
+                "scheduled_at": "2099-01-01T00:00:00Z",
+                "request_timeout_seconds": 30,
+                "retry_attempts": 1,
+            },
+        )
+    finally:
+        client.close()
+        main.app.dependency_overrides.pop(main.require_admin, None)
+        del main.app.state.database
+        del main.app.state.scraping_job_service
+
+    assert response.status_code == 422
+    assert "No scraper configuration is registered" in response.json()["detail"]
+    assert repository.list_jobs() == []
+
+
+def test_missing_local_member2_mappings_leave_job_config_empty(monkeypatch):
+    monkeypatch.delenv("MEMBER2_STORE_SCRAPER_MAPPINGS", raising=False)
+    database = SimpleNamespace(stores=UnexpectedStoresCollection())
+
+    async def build_config():
+        return await member2_runtime.build_member2_job_config(database)
+
+    config = asyncio.run(build_config())
+
+    assert config.store_bindings == {}
+    assert config.source_to_store == {}
+
+
+def test_explicit_member2_config_enables_job_creation(monkeypatch):
+    monkeypatch.setenv(
+        "MEMBER2_STORE_SCRAPER_MAPPINGS",
+        '{"test-store":{"source_identity":"DummyJSON","keyword":"test query"}}',
+    )
+    database = SimpleNamespace(
+        stores=FakeStoresCollection({
+            "test-store": {
+                "_id": "test-store",
+                "store_name": "Test Store",
+                "website_url": "https://example.test",
+                "status": "Active",
+            },
+        }),
+    )
+
+    async def build_config():
+        return await member2_runtime.build_member2_job_config(database)
+
+    config = asyncio.run(build_config())
+    binding = config.store_bindings["test-store"]
+    assert binding.keyword == "test query"
+    assert config.source_to_store == {"DummyJSON": "test-store"}
+    service = ScrapingJobService(InMemoryJobRepository(), config)
+
+    job = service.create_job(
+        CreateScrapingJobInput(
+            store_id=binding.store_id,
+            interval_minutes=60,
+            scheduled_at="2099-01-01T00:00:00Z",
+            request_timeout_seconds=30,
+            retry_attempts=1,
+        )
+    )
+
+    assert job.store_id == binding.store_id
+    assert job.store_name == binding.store_name
+    assert job.website_url == binding.website_url
+
+
+def test_member2_config_rejects_unregistered_source(monkeypatch):
+    monkeypatch.setenv(
+        "MEMBER2_STORE_SCRAPER_MAPPINGS",
+        '{"test-store":{"source_identity":"UnregisteredSource"}}',
+    )
+    database = SimpleNamespace(
+        stores=FakeStoresCollection({
+            "test-store": {
+                "_id": "test-store",
+                "store_name": "Test Store",
+                "website_url": "https://example.test",
+                "status": "Active",
+            },
+        }),
+    )
+
+    async def build_config():
+        return await member2_runtime.build_member2_job_config(database)
+
+    with pytest.raises(RuntimeError, match="No product scraper is registered"):
+        asyncio.run(build_config())
+
+
 def test_main_lifespan_stops_member2_before_closing_async_client(monkeypatch):
     events = []
     async_client = SimpleNamespace(
@@ -234,20 +400,36 @@ def test_main_lifespan_stops_member2_before_closing_async_client(monkeypatch):
     service = object()
     runtime = SimpleNamespace(service=service)
     application = FastAPI()
+    database = object()
 
     monkeypatch.setattr(
         main,
-        "get_member2_integration_test_config",
+        "get_mongodb_config",
         lambda: ("mongodb://test-host:27017", "Member2_jobs_test"),
     )
+    monkeypatch.setattr(main.sys, "version_info", (3, 15, 0))
+
+    def restore_ssl_context():
+        original_extract_from_ssl()
+        events.append("ssl_restore")
+
+    monkeypatch.setattr(main, "extract_from_ssl", restore_ssl_context)
 
     async def connect_db():
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.options |= ssl.OP_NO_SSLv2
         events.append("main_connect")
-        return async_client, object()
+        return async_client, database
 
-    async def start_runtime(uri, database_name):
+    async def build_job_config(received_database):
+        assert received_database is database
+        events.append("member2_config")
+        return JobManagementConfig()
+
+    async def start_runtime(uri, database_name, config):
         assert uri == "mongodb://test-host:27017"
         assert database_name == "Member2_jobs_test"
+        assert isinstance(config, JobManagementConfig)
         events.append("member2_start")
         return runtime
 
@@ -255,20 +437,35 @@ def test_main_lifespan_stops_member2_before_closing_async_client(monkeypatch):
         assert received_runtime is runtime
         events.append("member2_stop")
 
+    async def no_op(_database):
+        pass
+
     monkeypatch.setattr(main, "connect_db", connect_db)
+    monkeypatch.setattr(main, "initialize_auth_database", no_op)
+    monkeypatch.setattr(main, "ensure_bootstrap_admin", no_op)
+    monkeypatch.setattr(main, "migrate_legacy_admin_products", no_op)
+    monkeypatch.setattr(main, "sync_existing_admin_product_prices", no_op)
+    monkeypatch.setattr(main, "build_member2_job_config", build_job_config)
     monkeypatch.setattr(main, "start_member2_runtime", start_runtime)
     monkeypatch.setattr(main, "stop_member2_runtime", stop_runtime)
 
     async def scenario():
         async with main.lifespan(application):
             assert application.state.mongo_client is async_client
-            assert application.state.member2_job_service is service
+            assert application.state.scraping_job_service is service
             assert application.state.member2_job_runtime is runtime
-            assert events == ["main_connect", "member2_start"]
+            assert events == [
+                "ssl_restore",
+                "main_connect",
+                "member2_config",
+                "member2_start",
+            ]
 
     asyncio.run(scenario())
     assert events == [
+        "ssl_restore",
         "main_connect",
+        "member2_config",
         "member2_start",
         "member2_stop",
         "main_async_close",
@@ -283,23 +480,38 @@ def test_main_lifespan_closes_async_client_after_member2_startup_failure(
         close=lambda: _record_async_close(events),
     )
     application = FastAPI()
+    database = object()
 
     monkeypatch.setattr(
         main,
-        "get_member2_integration_test_config",
+        "get_mongodb_config",
         lambda: ("mongodb://test-host:27017", "Member2_jobs_test"),
     )
+    monkeypatch.setattr(main.sys, "version_info", (3, 15, 0))
+    monkeypatch.setattr(main, "extract_from_ssl", lambda: None)
 
     async def connect_db():
         events.append("main_connect")
-        return async_client, object()
+        return async_client, database
 
-    async def fail_start(uri, database_name):
-        _ = uri, database_name
+    async def build_job_config(received_database):
+        assert received_database is database
+        return JobManagementConfig()
+
+    async def fail_start(uri, database_name, config):
+        _ = uri, database_name, config
         events.append("member2_start_failed")
         raise RuntimeError("index initialization failed")
 
+    async def no_op(_database):
+        pass
+
     monkeypatch.setattr(main, "connect_db", connect_db)
+    monkeypatch.setattr(main, "initialize_auth_database", no_op)
+    monkeypatch.setattr(main, "ensure_bootstrap_admin", no_op)
+    monkeypatch.setattr(main, "migrate_legacy_admin_products", no_op)
+    monkeypatch.setattr(main, "sync_existing_admin_product_prices", no_op)
+    monkeypatch.setattr(main, "build_member2_job_config", build_job_config)
     monkeypatch.setattr(main, "start_member2_runtime", fail_start)
 
     async def scenario():
@@ -315,24 +527,24 @@ def test_main_lifespan_closes_async_client_after_member2_startup_failure(
     ]
 
 
-def test_main_lifespan_requires_test_configuration_before_connect(monkeypatch):
+def test_main_lifespan_requires_mongodb_configuration_before_connect(monkeypatch):
     application = FastAPI()
 
-    def missing_test_configuration():
-        raise RuntimeError("test database selection is required")
+    def missing_mongodb_configuration():
+        raise RuntimeError("MongoDB configuration is required")
 
     async def connect_db():
         pytest.fail("Main MongoDB must not connect without test selection.")
 
     monkeypatch.setattr(
         main,
-        "get_member2_integration_test_config",
-        missing_test_configuration,
+        "get_mongodb_config",
+        missing_mongodb_configuration,
     )
     monkeypatch.setattr(main, "connect_db", connect_db)
 
     async def scenario():
-        with pytest.raises(RuntimeError, match="test database selection"):
+        with pytest.raises(RuntimeError, match="MongoDB configuration"):
             async with main.lifespan(application):
                 pass
 

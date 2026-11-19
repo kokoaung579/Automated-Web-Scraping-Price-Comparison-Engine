@@ -10,6 +10,7 @@ import {
 import { Link, useNavigate, useOutletContext } from 'react-router-dom'
 import { api, toChannel3CatalogProduct } from '../api/client'
 import type { AppOutletContext } from '../context/AppOutletContext'
+import { mergeCatalogProducts } from '../data/catalogProducts'
 import type { DemoProduct } from '../data/products'
 
 type PriceRange = 'all' | 'under-200' | '200-400' | 'over-400'
@@ -55,25 +56,6 @@ function matchesSearch(product: DemoProduct, query: string) {
     product.name.toLocaleLowerCase().includes(normalizedQuery) ||
     product.category.toLocaleLowerCase().includes(normalizedQuery) ||
     product.store.toLocaleLowerCase().includes(normalizedQuery)
-  )
-}
-
-function matchesDatabaseProduct(
-  databaseProduct: DemoProduct,
-  channel3Product: DemoProduct,
-) {
-  const normalizedName = (value: string) =>
-    value.toLocaleLowerCase().replace(/[^a-z0-9]/g, '')
-  const databaseName = normalizedName(databaseProduct.name)
-  const channel3Name = normalizedName(channel3Product.name)
-  const databaseBrand = normalizedName(databaseProduct.brand)
-  const channel3Brand = normalizedName(channel3Product.brand)
-
-  return (
-    (channel3Brand === databaseBrand ||
-      channel3Name.includes(databaseBrand)) &&
-    (channel3Name.includes(databaseName) ||
-      databaseName.includes(channel3Name))
   )
 }
 
@@ -351,30 +333,7 @@ export function ProductsPage() {
     [channel3Result, query],
   )
   const catalogProducts = useMemo(
-    () => {
-      const matchedChannel3Ids = new Set<string>()
-      const databaseProducts = products.map((databaseProduct) => {
-        const channel3Product = channel3Products.find((candidate) =>
-          matchesDatabaseProduct(databaseProduct, candidate),
-        )
-        if (!channel3Product) return databaseProduct
-
-        matchedChannel3Ids.add(channel3Product.id)
-        return {
-          ...databaseProduct,
-          price: channel3Product.price,
-          previousPrice: channel3Product.previousPrice,
-          store: channel3Product.store,
-        }
-      })
-
-      return [
-        ...databaseProducts,
-        ...channel3Products.filter(
-          (channel3Product) => !matchedChannel3Ids.has(channel3Product.id),
-        ),
-      ]
-    },
+    () => mergeCatalogProducts(products, channel3Products),
     [channel3Products, products],
   )
 
@@ -418,7 +377,7 @@ export function ProductsPage() {
             Products
           </h1>
           <p className="mt-2 text-xs text-slate-500 sm:text-sm">
-            Browse and compare prices for your tracked products.
+            Prices show the listed store; compare offers across stores in Price comparison.
           </p>
         </div>
         <span className="rounded-xl border border-white/[0.07] bg-[#0d1320] px-3 py-2 text-[11px] text-slate-400">

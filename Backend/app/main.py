@@ -1,25 +1,47 @@
 
 import logging
+import sys
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
-from app.routers.channel3 import router as channel3_router
+from truststore import extract_from_ssl
+
 from app.routers.apify import router as apify_router
+from app.routers.channel3 import router as channel3_router
+from app.routers.auth import (
+    ensure_bootstrap_admin,
+    initialize_auth_database,
+    require_admin,
+    router as auth_router,
+)
+from app.routers.audit import router as audit_router
+from app.routers.stores import router as stores_router
 from app.services.channel3_services import (
     find_matching_channel3_product,
     search_channel3_products,
 )
 
-from fastapi import FastAPI, HTTPException, Query, Response, status
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo.errors import DuplicateKeyError
 
-from app.config import get_member2_integration_test_config
+from app.config import get_mongodb_config
 from app.database import connect_db
 from app.member2_runtime import (
     Member2JobRuntime,
+    build_member2_job_config,
     start_member2_runtime,
     stop_member2_runtime,
 )
+from app.services.product_catalog import upsert_admin_product_offer
 from app.models import (
     AdminProduct,
     DemoNotification,
@@ -30,9 +52,15 @@ from app.models import (
     StoreOffer,
     WatchlistEntry,
     WatchlistInput,
+    admin_product_to_catalog_document,
+    catalog_document_to_admin_product,
+    catalog_document_to_public_product,
 )
+from member2.app.routers.jobs import router as member2_jobs_router
 
 logger = logging.getLogger(__name__)
+
+ADMIN_PRODUCTS_MIGRATION_ID = "admin-products-to-products-v1"
 
 
 @asynccontextmanager
@@ -40,17 +68,27 @@ async def lifespan(application: FastAPI):
     client = None
     member2_runtime: Member2JobRuntime | None = None
     try:
-        mongo_uri, database_name = get_member2_integration_test_config()
+        mongo_uri, database_name = get_mongodb_config()
+        # truststore's patched SSLContext recurses in PyMongo on Python 3.15.
+        if sys.version_info >= (3, 15):
+            extract_from_ssl()
         client, database = await connect_db()
         application.state.mongo_client = client
         application.state.database = database
 
+        await initialize_auth_database(database)
+        await ensure_bootstrap_admin(database)
+        await migrate_legacy_admin_products(database)
+        await sync_existing_admin_product_prices(database)
+
+        member2_job_config = await build_member2_job_config(database)
         member2_runtime = await start_member2_runtime(
             mongo_uri,
             database_name,
+            member2_job_config,
         )
         application.state.member2_job_runtime = member2_runtime
-        application.state.member2_job_service = member2_runtime.service
+        application.state.scraping_job_service = member2_runtime.service
         yield
     finally:
         try:
@@ -72,6 +110,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5175",
+        "http://127.0.0.1:5175",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -80,10 +120,76 @@ app.add_middleware(
 
 app.include_router(channel3_router)
 app.include_router(apify_router)
+app.include_router(auth_router)
+app.include_router(stores_router)
+app.include_router(audit_router)
+app.include_router(
+    member2_jobs_router,
+    prefix="/api/admin",
+    dependencies=[Depends(require_admin)],
+)
 
 
 def get_database():
     return app.state.database
+
+
+async def migrate_legacy_admin_products(database) -> None:
+    migrations = database.app_migrations
+    migration_completed = await migrations.find_one(
+        {"_id": ADMIN_PRODUCTS_MIGRATION_ID}
+    ) is not None
+
+    legacy_documents = await database.admin_products.find().to_list(
+        length=None
+    )
+    for document in legacy_documents:
+        product = AdminProduct.model_validate({
+            **{
+                key: value
+                for key, value in document.items()
+                if key != "_id"
+            },
+            "product_id": document["_id"],
+        })
+        existing = await database.products.find_one(
+            {"_id": product.product_id}
+        )
+        if existing and migration_completed:
+            continue
+
+        previous_price = None
+        if existing:
+            previous_price = existing.get("previousPrice", existing["price"])
+            if existing["price"] != product.price:
+                previous_price = existing["price"]
+        await database.products.update_one(
+            {"_id": product.product_id},
+            {
+                "$set": admin_product_to_catalog_document(
+                    product,
+                    previous_price=previous_price,
+                )
+            },
+            upsert=True,
+        )
+        await upsert_admin_product_offer(database, product)
+
+    if not migration_completed:
+        await migrations.update_one(
+            {"_id": ADMIN_PRODUCTS_MIGRATION_ID},
+            {"$setOnInsert": {"completedAt": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+
+
+async def sync_existing_admin_product_prices(database) -> None:
+    documents = await database.products.find().to_list(length=None)
+    for document in documents:
+        admin_product = document.get("adminProduct")
+        if isinstance(admin_product, dict):
+            product = AdminProduct.model_validate(admin_product)
+            await upsert_admin_product_offer(database, product)
 
 
 def serialize_document(document: dict) -> dict:
@@ -109,23 +215,11 @@ def mongo_payload(model) -> dict:
     response_model=list[AdminProduct],
 )
 async def list_admin_products():
-    documents = await get_database().admin_products.find().to_list(
+    documents = await get_database().products.find().to_list(
         length=None
     )
 
-    return [
-        AdminProduct(
-            **{
-                **{
-                    key: value
-                    for key, value in document.items()
-                    if key != "_id"
-                },
-                "product_id": document["_id"],
-            }
-        )
-        for document in documents
-    ]
+    return [catalog_document_to_admin_product(document) for document in documents]
 
 
 @app.post(
@@ -133,12 +227,12 @@ async def list_admin_products():
     response_model=AdminProduct,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_admin_product(product: AdminProduct):
+async def create_admin_product(product: AdminProduct, request: Request):
     try:
-        await get_database().admin_products.insert_one(
+        await get_database().products.insert_one(
             {
                 "_id": product.product_id,
-                **product.model_dump(exclude={"product_id"}),
+                **admin_product_to_catalog_document(product),
             }
         )
     except DuplicateKeyError:
@@ -147,6 +241,22 @@ async def create_admin_product(product: AdminProduct):
             detail="Admin product id already exists",
         )
 
+    await upsert_admin_product_offer(get_database(), product)
+    try:
+        from app.routers.audit import record_audit_log
+
+        await record_audit_log(
+            get_database(),
+            user_id="admin",
+            user_email="admin",
+            action="CREATE",
+            module="PRODUCT_MANAGEMENT",
+            description=f"Created product {product.product_name}.",
+            ip_address=request.client.host if request.client else "",
+            status="SUCCESS",
+        )
+    except Exception:
+        pass
     return product
 
 
@@ -164,20 +274,33 @@ async def update_admin_product(
             detail="Product id does not match path",
         )
 
-    result = await get_database().admin_products.replace_one(
+    database = get_database()
+    existing = await database.products.find_one({"_id": product_id})
+    if existing is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found",
+        )
+
+    previous_price = existing.get("previousPrice", existing["price"])
+    if existing["price"] != product.price:
+        previous_price = existing["price"]
+    result = await database.products.update_one(
         {"_id": product_id},
         {
-            "_id": product_id,
-            **product.model_dump(exclude={"product_id"}),
+            "$set": admin_product_to_catalog_document(
+                product,
+                previous_price=previous_price,
+            )
         },
     )
-
     if result.matched_count == 0:
         raise HTTPException(
             status_code=404,
-            detail="Admin product not found",
+            detail="Product not found",
         )
 
+    await upsert_admin_product_offer(database, product)
     return product
 
 
@@ -186,7 +309,7 @@ async def update_admin_product(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_admin_product(product_id: str):
-    result = await get_database().admin_products.delete_one(
+    result = await get_database().products.delete_one(
         {"_id": product_id}
     )
 
@@ -195,6 +318,11 @@ async def delete_admin_product(product_id: str):
             status_code=404,
             detail="Admin product not found",
         )
+
+    database = get_database()
+    await database.offers.delete_many({"productId": product_id})
+    await database.watchlist.delete_one({"_id": product_id})
+    await database.alerts.delete_many({"productId": product_id})
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -262,7 +390,7 @@ async def list_products():
     )
 
     return [
-        serialize_document(document)
+        catalog_document_to_public_product(document)
         for document in documents
     ]
 
@@ -307,14 +435,47 @@ async def product_channel3_details(product_id: str):
     response_model=list[StoreOffer],
 )
 async def product_offers(product_id: str):
-    await require_product(product_id)
+    product = await require_product(product_id)
 
     documents = await get_database().offers.find(
         {"productId": product_id},
-        {"_id": 0, "store": 1, "price": 1},
+        {"_id": 1, "store": 1, "price": 1},
     ).to_list(length=None)
 
-    return documents
+    if not isinstance(product.get("adminProduct"), dict):
+        return [
+            {"store": offer["store"], "price": offer["price"]}
+            for offer in documents
+        ]
+
+    def normalize_store(value: str) -> str:
+        return "".join(
+            character
+            for character in value.casefold()
+            if character.isalnum()
+        )
+
+    catalog_store = product["store"]
+    normalized_catalog_store = normalize_store(catalog_store)
+    listed_offer = next(
+        (
+            offer
+            for offer in documents
+            if normalize_store(offer["store"]) == normalized_catalog_store
+        ),
+        None,
+    )
+    current_offers = [
+        {"store": offer["store"], "price": offer["price"]}
+        for offer in documents
+        if offer.get("_id") != f"{product_id}:{offer['store']}"
+        and normalize_store(offer["store"]) != normalized_catalog_store
+    ]
+    current_offers.append({
+        "store": listed_offer["store"] if listed_offer else catalog_store,
+        "price": product["price"],
+    })
+    return current_offers
 
 
 @app.get(
@@ -348,13 +509,18 @@ async def product_history(
 
 @app.get("/api/alerts", response_model=list[PriceAlert])
 async def list_alerts():
-    documents = await get_database().alerts.find().to_list(
-        length=None
-    )
+    database = get_database()
+    documents = await database.alerts.find().to_list(length=None)
+    product_documents = await database.products.find(
+        {},
+        {"_id": 1},
+    ).to_list(length=None)
+    product_ids = {document["_id"] for document in product_documents}
 
     return [
         serialize_document(document)
         for document in documents
+        if document.get("productId") in product_ids
     ]
 
 
@@ -442,9 +608,13 @@ async def delete_alert(alert_id: str):
     response_model=list[WatchlistEntry],
 )
 async def list_watchlist():
-    documents = await get_database().watchlist.find().to_list(
-        length=None
-    )
+    database = get_database()
+    documents = await database.watchlist.find().to_list(length=None)
+    product_documents = await database.products.find(
+        {},
+        {"_id": 1},
+    ).to_list(length=None)
+    product_ids = {document["_id"] for document in product_documents}
 
     return [
         {
@@ -454,6 +624,10 @@ async def list_watchlist():
             "addedAt": document["addedAt"],
         }
         for document in documents
+        if document.get(
+            "productId",
+            document["_id"],
+        ) in product_ids
     ]
 
 

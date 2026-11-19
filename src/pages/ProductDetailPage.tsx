@@ -308,6 +308,7 @@ export function ProductDetailPage() {
   const id = routeParams.id ?? routeParams.productId
   const {
     products,
+    dataSource,
     watchlistIds,
     toggleWatchlist,
     saveAlert,
@@ -321,16 +322,20 @@ export function ProductDetailPage() {
     offers: StoreOffer[]
     histories: StoreHistory[]
   } | null>(null)
+  const [priceDataError, setPriceDataError] = useState<{
+    productId: string
+    period: PriceHistoryPeriod
+    message: string
+  } | null>(null)
   const [channel3Data, setChannel3Data] = useState<{
     productId: string
     product: Channel3Product | null
-    offers: StoreOffer[]
   } | null>(null)
 
   useEffect(() => {
     let active = true
     const productId = product?.id
-    if (!productId) return
+    if (!productId || dataSource !== 'backend') return
 
     Promise.all([
       api.offers(productId),
@@ -348,12 +353,24 @@ export function ProductDetailPage() {
       })
       .catch((error: unknown) => {
         console.error('Unable to load product price data from the backend', error)
+        if (active) {
+          setPriceDataError(
+            {
+              productId,
+              period,
+              message:
+                error instanceof Error
+                  ? error.message
+                  : 'Unable to load product prices.',
+            },
+          )
+        }
       })
 
     return () => {
       active = false
     }
-  }, [period, product?.id])
+  }, [dataSource, period, product?.id])
 
   useEffect(() => {
     let active = true
@@ -366,10 +383,6 @@ export function ProductDetailPage() {
         setChannel3Data({
           productId: product.id,
           product: channel3Product,
-          offers: (channel3Product?.offers ?? []).map((offer) => ({
-            store: offer.store,
-            price: offer.price,
-          })),
         })
       })
       .catch((error: unknown) => {
@@ -382,33 +395,21 @@ export function ProductDetailPage() {
   }, [product])
 
   const storeOffers = useMemo(() => {
-    const databaseOffers =
-      remoteData && remoteData.productId === product?.id
-        ? remoteData.offers
-        : product
-          ? getStoreOffers(product)
-          : []
-    const channel3Offers =
-      channel3Data && channel3Data.productId === product?.id
-        ? channel3Data.offers
-        : []
-    const channel3Stores = new Set(
-      channel3Offers.map((offer) => offer.store.toLocaleLowerCase()),
-    )
+    if (dataSource === 'demo') {
+      return product ? getStoreOffers(product) : []
+    }
 
-    return [
-      ...databaseOffers.filter(
-        (offer) => !channel3Stores.has(offer.store.toLocaleLowerCase()),
-      ),
-      ...channel3Offers,
-    ]
-  }, [channel3Data, product, remoteData])
+    return remoteData && remoteData.productId === product?.id
+      ? remoteData.offers
+      : []
+  }, [dataSource, product, remoteData])
   const sortedOffers = useMemo(
     () => [...storeOffers].sort((first, second) => first.price - second.price),
     [storeOffers],
   )
   const histories = useMemo<StoreHistory[]>(() => {
     if (
+      dataSource === 'backend' &&
       remoteData &&
       remoteData.productId === product?.id &&
       remoteData.period === period
@@ -416,7 +417,8 @@ export function ProductDetailPage() {
       return remoteData.histories
     }
 
-    return product
+    if (dataSource === 'demo') {
+      return product
         ? storeOffers.map((offer, index) => ({
             store: offer.store,
             points: createStorePriceHistory(
@@ -427,7 +429,10 @@ export function ProductDetailPage() {
             ),
           }))
         : []
-  }, [period, product, remoteData, storeOffers])
+    }
+
+    return []
+  }, [dataSource, period, product, remoteData, storeOffers])
 
   if (!product) {
     return (
@@ -442,7 +447,7 @@ export function ProductDetailPage() {
           Product not found
         </h1>
         <p className="mt-1 max-w-sm text-xs leading-5 text-slate-500">
-          This product isn’t in the demo catalog. Browse the available products
+          This product isn’t in the catalog. Browse the available products
           to open a detail page.
         </p>
         <Link
@@ -470,15 +475,17 @@ export function ProductDetailPage() {
       value: feature,
     })) ?? []),
   ]
-  const chartData: ChartPoint[] =
-    histories[0]?.points.map((point, index) => {
-      const row: ChartPoint = { date: point.date }
-      histories.forEach((history) => {
-        const historyPoint = history.points[index]
-        if (historyPoint) row[history.store] = historyPoint.price
-      })
-      return row
-    }) ?? []
+  const chartRows = new Map<string, ChartPoint>()
+  histories.forEach((history) => {
+    history.points.forEach((point) => {
+      const row = chartRows.get(point.date) ?? { date: point.date }
+      row[history.store] = point.price
+      chartRows.set(point.date, row)
+    })
+  })
+  const chartData = [...chartRows.values()].sort((first, second) =>
+    first.date.localeCompare(second.date),
+  )
   const historyPrices = histories.flatMap((history) =>
     history.points.map((point) => point.price),
   )
@@ -495,6 +502,23 @@ export function ProductDetailPage() {
   const cheapestPrice = sortedOffers[0]?.price ?? product.price
   const cheapestStore = sortedOffers[0]?.store ?? product.store
   const isWatchlisted = watchlistIds.includes(product.id)
+  const hasCurrentPriceData = Boolean(
+    remoteData &&
+      remoteData.productId === product.id &&
+      remoteData.period === period,
+  )
+  const currentPriceDataError =
+    !hasCurrentPriceData &&
+    priceDataError &&
+    priceDataError.productId === product.id &&
+    priceDataError.period === period
+      ? priceDataError.message
+      : null
+  const isLoadingPriceData =
+    dataSource === 'loading' ||
+    (dataSource === 'backend' &&
+      !hasCurrentPriceData &&
+      currentPriceDataError === null)
   const lastUpdated = new Date(product.updatedAt).toLocaleString('en-US', {
     dateStyle: 'medium',
     timeStyle: 'short',
@@ -643,7 +667,7 @@ export function ProductDetailPage() {
           <div>
             <h2 className="text-sm font-semibold text-white">Prices across stores</h2>
             <p className="mt-1 text-[10px] text-slate-500">
-              Compare current demo prices for {product.name}
+              Compare the recorded store prices for {product.name}
             </p>
           </div>
           <span className="text-[10px] text-slate-500">
@@ -660,7 +684,21 @@ export function ProductDetailPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/[0.05]">
-              {sortedOffers.map((offer) => {
+              {sortedOffers.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={3}
+                    className="px-5 py-8 text-center text-xs text-slate-500"
+                    role="status"
+                  >
+                    {isLoadingPriceData
+                      ? 'Loading current store offers…'
+                      : currentPriceDataError
+                        ? `Could not load current store offers: ${currentPriceDataError}`
+                        : 'No current store offers are recorded.'}
+                  </td>
+                </tr>
+              ) : sortedOffers.map((offer) => {
                 const cheapest = offer.price === cheapestPrice
                 return (
                   <tr
@@ -704,6 +742,7 @@ export function ProductDetailPage() {
         </div>
       </section>
 
+      {historyPrices.length > 0 ? (
       <section className="grid gap-3 sm:grid-cols-3" aria-label="Historical price statistics">
         {[
           { label: 'Lowest price', value: formatPrice(lowestPrice), tone: 'text-emerald-300' },
@@ -724,13 +763,25 @@ export function ProductDetailPage() {
           </div>
         ))}
       </section>
+      ) : (
+        <section
+          role="status"
+          className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 text-xs text-slate-500"
+        >
+          {isLoadingPriceData
+            ? 'Loading price history…'
+            : currentPriceDataError
+              ? `Could not load price history: ${currentPriceDataError}`
+              : 'No recorded price history is available for this range.'}
+        </section>
+      )}
 
       <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-sm font-semibold text-white">Price history</h2>
             <p className="mt-1 text-[10px] text-slate-500">
-              Demo price trends across stores
+              Stored price changes across stores
             </p>
           </div>
           <div className="flex items-center gap-0.5 rounded-xl border border-white/[0.07] bg-[#090e18] p-1">
@@ -751,7 +802,7 @@ export function ProductDetailPage() {
               ))}
           </div>
         </div>
-        <div className="mt-4 h-[280px] w-full min-w-0 sm:h-[340px]">
+        {historyPrices.length > 0 && <div className="mt-4 h-[280px] w-full min-w-0 sm:h-[340px]">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart
               data={chartData}
@@ -817,7 +868,7 @@ export function ProductDetailPage() {
               ))}
             </LineChart>
           </ResponsiveContainer>
-        </div>
+        </div>}
       </section>
 
       {alertDialogOpen && (

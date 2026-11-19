@@ -1172,7 +1172,7 @@ export function AdminProductsPage() {
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.025] px-3.5 py-2.5 text-[11px] font-medium text-slate-300 transition hover:bg-white/[0.06] disabled:opacity-40"
           >
             <FileSpreadsheet aria-hidden="true" size={14} />
-            Download Excel Template
+            Download Template
           </button>
           <button
             type="button"
@@ -1187,7 +1187,7 @@ export function AdminProductsPage() {
             className={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-blue-300/10 bg-blue-400/[0.06] px-3.5 py-2.5 text-[11px] font-medium text-blue-200 transition hover:bg-blue-400/[0.12] ${catalog.error || loading || busy ? 'pointer-events-none opacity-40' : ''}`}
           >
             <Upload aria-hidden="true" size={14} />
-            {busy ? 'Reading workbook…' : 'Import Excel'}
+            {busy ? 'Reading workbook…' : 'Import Products'}
             <input
               type="file"
               accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

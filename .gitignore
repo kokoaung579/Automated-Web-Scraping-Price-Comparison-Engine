@@ -33,8 +33,3 @@ dist-ssr
 # Python cache
 __pycache__/
 *.py[cod]
-.pytest_cache/
-
-# Python virtual environments
-.venv/
-venv/

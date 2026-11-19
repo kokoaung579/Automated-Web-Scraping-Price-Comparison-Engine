@@ -1,9 +1,10 @@
 # SmartPrice API
 
 The FastAPI backend stores the catalog, price offers/history, alerts, watchlist,
-notifications, and scraping-log examples in MongoDB. It does not run scraping
-jobs. On startup, demo catalog data is inserted into each seed collection only
-when that collection is empty; existing records are left unchanged.
+notifications, and scraping logs in MongoDB. It also runs the Member 2
+scraping-job worker. On startup, demo catalog data is inserted into each seed
+collection only when that collection is empty; existing records are left
+unchanged.
 
 ## Setup
 
@@ -18,10 +19,29 @@ Backend\venv\Scripts\python.exe -m pip install -r Backend\requirements.txt
 
 Set `MONGODB_URL` in `Backend\.env` to your MongoDB connection string. The API
 fails at startup with a clear message if it is missing or MongoDB cannot be
-reached. `DATABASE_NAME` defaults to `PriceComparison`.
+reached. `DATABASE_NAME` defaults to `PriceComparison`. The scraping-job
+worker uses the same database and requires a MongoDB replica set or sharded
+deployment because job persistence uses transactions.
+The Backend requirements include the worker's Python dependencies, so setup
+does not require installing packages from the separate `member2` environment.
 Set `CHANNEL3_API_KEY` in the same file to enable live Channel3 product
 searches. Keep the key in the backend environment only; do not add it to
 frontend environment variables or commit it.
+
+Registration, login, and admin user management use the MongoDB `users`
+collection. Configure `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_USERNAME`,
+and `BOOTSTRAP_ADMIN_PASSWORD` together to create the first administrator
+when that email is not already registered. The password must be at least
+12 characters; there is no default admin password. Keep these values only in
+`Backend\.env` or the deployment secret manager. `APP_ENV=development` enables
+the local HTTP session cookie; leave it unset or use a non-development value
+for HTTPS deployments.
+
+When an administrator first opens User Management, existing browser-local
+accounts are offered for a one-time import into MongoDB. Existing password
+hashes are retained for sign-in and upgraded after a successful login;
+imported roles are set to `User`, and the configured administrator account is
+not overwritten. The browser copy is not deleted.
 
 Run the API from the `Backend` directory:
 
@@ -36,24 +56,45 @@ if ($env:PYTHONPATH) {
 .\venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-The repository root is added to `PYTHONPATH` so the backend can import the
-sibling `member2` package without changing `sys.path` at runtime.
+The local Vite origins on ports `5173` and `5175` are allowed by CORS
+(including `localhost` and `127.0.0.1`). Interactive API documentation is
+available at `http://127.0.0.1:8000/docs`.
 
 For Member 2 integration testing only, set
 `MEMBER2_INTEGRATION_TEST_MODE=true`,
 `MEMBER2_TEST_MONGODB_URI`, and `MEMBER2_TEST_DATABASE_NAME` in the process
 environment. The test URI must not include a database path, and the database
-name must end in `_test`. When test mode is selected, both the main backend
-client and any injected Member 2 client use these dedicated settings; invalid
-or incomplete test settings fail startup instead of falling back to the normal
-MongoDB configuration. Startup seeding therefore also targets the selected
-test database. Use a transaction-capable replica set or sharded deployment;
-do not use a standalone MongoDB server for job transaction tests. Never put
-test credentials in tracked files.
+name must end in `_test`. In this mode, both backend clients use only the
+dedicated test settings; invalid or incomplete settings fail startup rather
+than falling back to the normal MongoDB configuration. Never put test
+credentials in tracked files.
 
-The local Vite origin `http://localhost:5173` is allowed by CORS (as is
-`http://127.0.0.1:5173`). Interactive API documentation is available at
-`http://127.0.0.1:8000/docs`.
+## Member 2 scraping jobs
+
+The jobs API is mounted at `/api/admin/jobs` and requires an administrator
+session. The worker starts and stops with the Backend lifespan.
+
+Store/source mappings are optional and belong in the ignored local
+`Backend\.env` file as `MEMBER2_STORE_SCRAPER_MAPPINGS`, a JSON object keyed
+by an existing `store_id`:
+
+```json
+{
+  "<existing-store-id>": {
+    "source_identity": "<registered-member2-source>",
+    "keyword": "<optional-search-keyword>"
+  }
+}
+```
+
+The Backend reads each store's name, website URL, and active status from the
+MongoDB `stores` collection; it does not infer a scraper source from a store
+name or URL. `source_identity` must name a registered Member 2 scraper
+(`DummyJSON`, `FakeStoreAPI`, or `BooksToScrape`); `DummyJSON` also requires a
+non-empty `keyword`. The current source-to-store contract permits each source
+identity to map to only one store. No production mappings are currently
+configured. Until approved values are supplied, job creation returns the
+existing configuration error rather than creating a job with invented data.
 
 ## Import Channel3 products
 
@@ -70,9 +111,44 @@ pagination cap, and stores products under `channel3-<product-id>`. Products
 without USD offers are skipped because the catalog requires a comparable price.
 Re-run the command to update existing imported products and offers.
 
+Admin-managed products and scraped Amazon products use the same MongoDB
+`products` collection as the public catalog, so they appear in the user-facing
+product list. Admin price changes also update the matching store offer and add
+the current price to price history. Existing records from the former
+`admin_products` collection are copied into `products` at startup if missing;
+the migration does not overwrite existing catalog records after its first run.
+
+## How workspace pages relate
+
+- **Products** shows the catalog price at the product's listed store.
+- **Price comparison** includes that store offer alongside other recorded
+  store offers. The cheapest offer can differ from the catalog price when a
+  different store is cheaper.
+- **Price history** shows stored observations. Admin and scraping price
+  changes add a point; it does not substitute a generated trend for backend
+  history.
+- **Watchlist** and **Alerts** refer to catalog product IDs. Deleting a
+  product removes its store offers, watchlist entry, and alerts; existing
+  notifications remain as historical records.
+- **Alerts** evaluate the same listed-store catalog price shown on Products.
+  When the workspace loads, active alerts whose target has been reached are
+  marked triggered. If in-app alerts are enabled, a linked notification is
+  created once. Email delivery is not configured.
+- **Settings** preferences are saved in the current browser. Theme, in-app
+  alerts, and system-update display are user preferences, not product prices.
+
 ## API
 
 - `GET /api/health`
+- `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/session`,
+  `POST /api/auth/logout`
+- `GET /api/admin/users`, `PATCH /api/admin/users/{email}/status`,
+  `POST /api/admin/users/import-browser` (admin session required)
+- `GET /api/admin/jobs`, `POST /api/admin/jobs`, and
+  `/api/admin/jobs/{job_id}` job/execution management endpoints (admin session
+  required)
+- `GET /api/admin/products`, `POST /api/admin/products`,
+  `PUT /api/admin/products/{product_id}`, `DELETE /api/admin/products/{product_id}`
 - `GET /api/products`
 - `GET /api/products/{product_id}/channel3`
 - `GET /api/channel3/search?q={query}&limit={limit}`

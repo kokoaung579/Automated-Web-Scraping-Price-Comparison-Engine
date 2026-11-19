@@ -8,8 +8,7 @@ import {
   useLocation,
   useParams,
 } from 'react-router-dom'
-import { getCurrentSession } from '../auth/localAuth'
-import type { LocalSession } from '../auth/localAuth'
+import { useAuth } from '../auth/useAuth'
 import { AdminLayout } from '../components/admin/AdminLayout'
 import { AppLayout } from '../components/layout/AppLayout'
 import { AlertsPage } from '../pages/AlertsPage'
@@ -20,6 +19,10 @@ import { PriceComparisonPage } from '../pages/PriceComparisonPage'
 import { PriceHistoryPage } from '../pages/PriceHistoryPage'
 import { SettingsPage } from '../pages/SettingsPage'
 import { AuthPage } from '../pages/AuthPage'
+import { ForgotPasswordPage } from '../pages/ForgotPasswordPage'
+import { OtpVerificationPage } from '../pages/OtpVerificationPage'
+import { ResetPasswordOtpPage } from '../pages/ResetPasswordOtpPage'
+import { ResetPasswordPage } from '../pages/ResetPasswordPage'
 import { AdminOverviewPage } from '../pages/admin/AdminOverviewPage'
 import { AdminCategoriesPage } from '../pages/admin/AdminCategoriesPage'
 import { AdminProductsPage } from '../pages/admin/AdminProductsPage'
@@ -136,37 +139,19 @@ function ProductDetailLoading() {
 
 function ProtectedAppLayout() {
   const location = useLocation()
-  let currentUser: LocalSession | null
+  const { loading, user, error, retry } = useAuth()
 
-  try {
-    currentUser = getCurrentSession()
-  } catch (error) {
+  if (loading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#070b14] px-5 font-sans text-slate-100">
-        <section
-          role="alert"
-          className="max-w-md rounded-2xl border border-rose-400/15 bg-[#0d1320] p-6"
-        >
-          <h1 className="text-base font-semibold text-white">
-            Could not verify your login
-          </h1>
-          <p className="mt-2 text-sm leading-6 text-slate-400">
-            {error instanceof Error
-              ? error.message
-              : 'Please try signing in again.'}
-          </p>
-          <Link
-            to="/login"
-            className="mt-5 inline-flex rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-500"
-          >
-            Go to login
-          </Link>
-        </section>
-      </main>
+      <AuthLoading />
     )
   }
 
-  if (!currentUser) {
+  if (error) {
+    return <AuthVerificationError message={error} onRetry={retry} />
+  }
+
+  if (!user) {
     return (
       <Navigate
         to="/login"
@@ -176,46 +161,28 @@ function ProtectedAppLayout() {
     )
   }
 
-  if (currentUser.role === 'Admin') {
+  if (user.role === 'Admin') {
     return <Navigate to="/admin" replace />
   }
 
-  return <AppLayout currentUser={currentUser} />
+  return <AppLayout currentUser={user} />
 }
 
 function ProtectedAdminLayout() {
   const location = useLocation()
-  let currentUser: LocalSession | null
+  const { loading, user, error, retry } = useAuth()
 
-  try {
-    currentUser = getCurrentSession()
-  } catch (error) {
+  if (loading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-[#070b14] px-5 font-sans text-slate-100">
-        <section
-          role="alert"
-          className="max-w-md rounded-2xl border border-rose-400/15 bg-[#0d1320] p-6"
-        >
-          <h1 className="text-base font-semibold text-white">
-            Could not verify your admin access
-          </h1>
-          <p className="mt-2 text-sm leading-6 text-slate-400">
-            {error instanceof Error
-              ? error.message
-              : 'Please sign in again to continue.'}
-          </p>
-          <Link
-            to="/login"
-            className="mt-5 inline-flex rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-500"
-          >
-            Go to login
-          </Link>
-        </section>
-      </main>
+      <AuthLoading />
     )
   }
 
-  if (!currentUser) {
+  if (error) {
+    return <AuthVerificationError message={error} onRetry={retry} />
+  }
+
+  if (!user) {
     return (
       <Navigate
         to="/login"
@@ -225,11 +192,51 @@ function ProtectedAdminLayout() {
     )
   }
 
-  if (currentUser.role !== 'Admin') {
+  if (user.role !== 'Admin') {
     return <Navigate to="/" replace />
   }
 
-  return <AdminLayout currentUser={currentUser} />
+  return <AdminLayout currentUser={user} />
+}
+
+function AuthLoading() {
+  return (
+    <main
+      role="status"
+      className="flex min-h-screen items-center justify-center bg-[#070b14] px-5 font-sans text-sm text-slate-300"
+    >
+      Checking your PricePilot session…
+    </main>
+  )
+}
+
+function AuthVerificationError({
+  message,
+  onRetry,
+}: {
+  message: string
+  onRetry: () => void
+}) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[#070b14] px-5 font-sans text-slate-100">
+      <section
+        role="alert"
+        className="max-w-md rounded-2xl border border-rose-400/15 bg-[#0d1320] p-6"
+      >
+        <h1 className="text-base font-semibold text-white">
+          Could not verify your login
+        </h1>
+        <p className="mt-2 text-sm leading-6 text-slate-400">{message}</p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-5 inline-flex rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-500"
+        >
+          Try again
+        </button>
+      </section>
+    </main>
+  )
 }
 
 export function AppRoutes() {
@@ -237,6 +244,11 @@ export function AppRoutes() {
     <Routes>
       <Route path="signup" element={<AuthPage mode="signup" />} />
       <Route path="login" element={<AuthPage mode="login" />} />
+      <Route path="forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="reset-password/otp" element={<ResetPasswordOtpPage />} />
+      <Route path="reset-password" element={<ResetPasswordPage />} />
+      <Route path="verify-otp" element={<OtpVerificationPage />} />
+      <Route path="otp-verification" element={<OtpVerificationPage />} />
       <Route path="admin" element={<ProtectedAdminLayout />}>
         <Route index element={<AdminOverviewPage />} />
         <Route

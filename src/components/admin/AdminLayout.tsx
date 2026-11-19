@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { Outlet } from 'react-router-dom'
-import type { LocalSession } from '../../auth/localAuth'
+import type { AuthUser } from '../../types/auth'
 import { AdminHeader } from './AdminHeader'
 import { AdminSidebar } from './AdminSidebar'
 
 type AdminLayoutProps = {
-  currentUser: LocalSession
+  currentUser: AuthUser
 }
 
 export function AdminLayout({ currentUser }: AdminLayoutProps) {

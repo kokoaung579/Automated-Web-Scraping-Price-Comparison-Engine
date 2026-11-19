@@ -1,6 +1,7 @@
 annotated-doc==0.0.6
 annotated-types==0.8.0
 anyio==4.16.0
+beautifulsoup4==4.15.0
 channel3-sdk==4.9.0
 click==8.5.1
 dnspython==2.9.2
@@ -12,8 +13,10 @@ pydantic==2.14.3
 pydantic_core==2.50.4
 pymongo==4.20.0
 python-dotenv==1.2.4
+requests==2.34.2
 starlette==1.10.0
 typing-inspection==0.4.5
 typing_extensions==4.16.0
+truststore==0.10.5
 uvicorn==0.54.0
 httpx==0.28.1
