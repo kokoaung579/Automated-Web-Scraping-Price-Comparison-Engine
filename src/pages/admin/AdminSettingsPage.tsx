@@ -549,7 +549,7 @@ export function AdminSettingsPage() {
             <div>
               <h4 className="text-xs font-medium text-slate-200">Export Demo Data</h4>
               <p className="mt-1 max-w-2xl text-[10px] leading-4 text-slate-500">
-                Download products, categories, stores, scraping jobs, and audit logs as a JSON file. Account credentials and settings are not included.
+                Download products, categories, scraping jobs, and audit logs as a JSON file. Stores are managed in MongoDB; account credentials and settings are not included.
               </p>
             </div>
             <button

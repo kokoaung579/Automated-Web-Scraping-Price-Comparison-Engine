@@ -8,13 +8,14 @@ import {
 import { CircleCheck, CircleX } from 'lucide-react'
 import { Outlet } from 'react-router-dom'
 import type {
+  ConnectionStatus,
+  DataSourceState,
   DemoNotification,
   PriceAlert,
   PriceAlertDraft,
   UserPreferences,
   WatchlistEntry,
 } from '../../context/AppOutletContext'
-import { products as demoProducts } from '../../data/products'
 import { api } from '../../api/client'
 import type { AuthUser } from '../../types/auth'
 import type { DemoProduct } from '../../data/products'
@@ -118,75 +119,6 @@ function createInitialPreferences(): UserPreferences {
     return defaults
   }
 }
-
-const initialAlerts: PriceAlert[] = [
-  {
-    id: 'alert-sony-target',
-    productId: 'sony-wh-1000xm5',
-    type: 'target-price',
-    threshold: 300,
-    targetPrice: 300,
-    status: 'active',
-    createdAt: '2026-11-12T09:00:00.000Z',
-  },
-  {
-    id: 'alert-bose-drop',
-    productId: 'bose-quietcomfort-ultra',
-    type: 'percentage-drop',
-    threshold: 10,
-    targetPrice: 314.1,
-    status: 'active',
-    createdAt: '2026-11-11T14:30:00.000Z',
-  },
-  {
-    id: 'alert-airpods-target',
-    productId: 'apple-airpods-pro-2',
-    type: 'target-price',
-    threshold: 195,
-    targetPrice: 195,
-    status: 'triggered',
-    createdAt: '2026-11-10T08:15:00.000Z',
-  },
-  {
-    id: 'alert-switch-target',
-    productId: 'nintendo-switch-oled',
-    type: 'target-price',
-    threshold: 330,
-    targetPrice: 330,
-    status: 'triggered',
-    createdAt: '2026-11-12T10:20:00.000Z',
-  },
-]
-
-const initialNotifications: DemoNotification[] = [
-  {
-    id: 'notification-airpods-target',
-    type: 'price-alert',
-    alertId: 'alert-airpods-target',
-    productId: 'apple-airpods-pro-2',
-    message: 'Apple AirPods Pro 2 reached your $195.00 target price.',
-    price: 189.99,
-    createdAt: '2026-11-13T08:42:00.000Z',
-    isRead: false,
-  },
-  {
-    id: 'notification-switch-target',
-    type: 'price-alert',
-    alertId: 'alert-switch-target',
-    productId: 'nintendo-switch-oled',
-    message: 'Nintendo Switch OLED reached your $330.00 target price.',
-    price: 319.99,
-    createdAt: '2026-11-12T10:21:00.000Z',
-    isRead: true,
-  },
-  {
-    id: 'notification-system-ready',
-    type: 'system',
-    message: 'Your PricePilot demo workspace is ready to track prices.',
-    createdAt: '2026-11-13T07:30:00.000Z',
-    isRead: false,
-  },
-]
 
 function formatPrice(price: number) {
   return new Intl.NumberFormat('en-US', {
@@ -345,14 +277,17 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [preferences, setPreferences] = useState(createInitialPreferences)
   const [theme, setTheme] = useState(preferences.theme)
-  const [products, setProducts] = useState(demoProducts)
-  const [dataSource, setDataSource] =
-    useState<'loading' | 'backend' | 'demo'>('loading')
+  const [products, setProducts] = useState<DemoProduct[]>([])
+  const [dataSource, setDataSource] = useState<DataSourceState>('loading')
+  const [dataError, setDataError] = useState<string | null>(null)
+  const [connectionStatus, setConnectionStatus] =
+    useState<ConnectionStatus>('checking')
+  const [loadVersion, setLoadVersion] = useState(0)
   const [{ watchlistEntries, alerts, notifications, toast }, dispatch] =
     useReducer(appReducer, {
       watchlistEntries: [],
-      alerts: initialAlerts,
-      notifications: initialNotifications,
+      alerts: [],
+      notifications: [],
       toast: null,
     })
   const catalogProductIds = new Set(products.map((product) => product.id))
@@ -375,6 +310,20 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
 
   useEffect(() => {
     let active = true
+
+    api.health()
+      .then((health) => {
+        if (!active) return
+        setConnectionStatus(
+          health.status === 'ok' && health.database === 'connected'
+            ? 'connected'
+            : 'disconnected',
+        )
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to check backend health', error)
+        if (active) setConnectionStatus('error')
+      })
 
     Promise.all([
       api.products(),
@@ -461,10 +410,16 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
       .catch((error: unknown) => {
         console.error('Unable to load application data from the backend', error)
         if (active) {
-          setDataSource('demo')
+          setProducts([])
+          setDataSource('error')
+          setDataError(
+            error instanceof Error
+              ? error.message
+              : 'Unable to load catalog data from the backend.',
+          )
           dispatch({
             type: 'notify',
-            message: 'Backend unavailable; showing demo data.',
+            message: 'Backend unavailable; no demo products are shown.',
             toastId: ++toastSequence.current,
           })
         }
@@ -473,7 +428,7 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
     return () => {
       active = false
     }
-  }, [preferences.inAppPriceAlerts])
+  }, [preferences.inAppPriceAlerts, loadVersion])
 
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -770,6 +725,14 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
     return () => window.clearTimeout(timeoutId)
   }, [toast])
 
+  function reloadData() {
+    setProducts([])
+    setDataError(null)
+    setDataSource('loading')
+    setConnectionStatus('checking')
+    setLoadVersion((version) => version + 1)
+  }
+
   function closeSidebar() {
     setSidebarOpen(false)
   }
@@ -820,6 +783,9 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
             context={{
               products,
               dataSource,
+              dataError,
+              connectionStatus,
+              reloadData,
               searchQuery,
               setSearchQuery,
               watchlistIds,

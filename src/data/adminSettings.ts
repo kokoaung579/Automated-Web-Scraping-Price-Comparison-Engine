@@ -2,10 +2,7 @@ import {
   clearAdminCategoryData,
   loadAdminCategories,
 } from './adminCategories'
-import {
-  clearAuditLogData,
-  loadAuditLogs,
-} from './adminAuditLogs'
+import { clearAuditLogData } from './adminAuditLogs'
 import {
   clearAdminProductData,
   loadAdminProducts,
@@ -14,11 +11,6 @@ import {
   clearScrapingJobData,
   loadScrapingJobs,
 } from './adminScraping'
-import {
-  clearAdminStoreData,
-  loadAdminStores,
-} from './adminStores'
-
 export type AdminEnvironment =
   | 'Demo'
   | 'Development'
@@ -52,16 +44,14 @@ export type AdminDemoDataExport = {
   data: {
     products: ReturnType<typeof loadAdminProducts>
     categories: ReturnType<typeof loadAdminCategories>
-    stores: ReturnType<typeof loadAdminStores>
     scraping_jobs: ReturnType<typeof loadScrapingJobs>
-    audit_logs: ReturnType<typeof loadAuditLogs>
   }
 }
 
 export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
   applicationName: 'PricePilot',
   environment: 'Demo',
-  timeZone: 'UTC',
+  timeZone: 'Asia/Yangon',
   defaultCurrency: 'USD',
   scrapingIntervalMinutes: 60,
   requestTimeoutSeconds: 30,
@@ -247,17 +237,15 @@ export function loadAdminDemoDataExport(): AdminDemoDataExport {
     exported_at: new Date().toISOString(),
     data: {
       categories: loadAdminCategories(),
-      stores: loadAdminStores(),
       products: loadAdminProducts(),
       scraping_jobs: loadScrapingJobs(),
-      audit_logs: loadAuditLogs(),
     },
   }
 }
 
 export function resetAdminDemoData(): void {
   clearAdminCategoryData()
-  clearAdminStoreData()
+  window.localStorage.removeItem('pricepilot-admin-stores')
   clearAdminProductData()
   clearScrapingJobData()
   clearAuditLogData()

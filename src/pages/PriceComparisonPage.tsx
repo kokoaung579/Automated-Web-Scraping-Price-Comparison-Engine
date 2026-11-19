@@ -9,7 +9,6 @@ import {
 import { Link, useOutletContext } from 'react-router-dom'
 import type { AppOutletContext } from '../context/AppOutletContext'
 import { api } from '../api/client'
-import { getStoreOffers } from '../data/storeOffers'
 import type { StoreOffer } from '../data/storeOffers'
 import type { DemoProduct } from '../data/products'
 
@@ -220,15 +219,10 @@ export function PriceComparisonPage() {
 
   const allOffers = useMemo(
     () =>
-      dataSource === 'demo'
-        ? selectedProduct
-          ? getStoreOffers(selectedProduct)
-          : []
-        : remoteOffers &&
-            remoteOffers.productId === selectedProduct?.id
-          ? remoteOffers.offers
-          : [],
-    [dataSource, remoteOffers, selectedProduct],
+      remoteOffers && remoteOffers.productId === selectedProduct?.id
+        ? remoteOffers.offers
+        : [],
+    [remoteOffers, selectedProduct],
   )
   const hasCurrentOffers = Boolean(
     remoteOffers &&

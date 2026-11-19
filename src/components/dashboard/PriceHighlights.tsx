@@ -1,40 +1,34 @@
 import type { ReactNode } from 'react'
-import { ArrowDownRight, Ear, Headphones, Store } from 'lucide-react'
-import {
-  getDemoProducts,
-  formatDemoPrice,
-  getPriceChangePercent,
-  matchesDemoProduct,
-} from './demoProducts'
-import type { DemoProduct } from './demoProducts'
+import { ArrowDownRight, Store } from 'lucide-react'
 import {
   DashboardEmptyState,
   DashboardSkeleton,
 } from './DashboardDataState'
-import type { DemoProduct as CatalogProduct } from '../../data/products'
+import {
+  formatDashboardPrice,
+  getPriceChangePercent,
+  matchesDashboardProduct,
+} from './catalogProducts'
+import type { DashboardProduct } from './catalogProducts'
 
-function ProductThumbnail({
-  product,
-}: {
-  product: DemoProduct
-}) {
-  const Icon = product.thumbnail === 'earbuds' ? Ear : Headphones
+function ProductThumbnail({ product }: { product: DashboardProduct }) {
+  const Icon = product.icon
 
   return (
     <span
       role="img"
       aria-label={`${product.name} product image`}
-      className="flex size-12 shrink-0 items-center justify-center rounded-xl border border-white/[0.06] bg-gradient-to-br from-blue-400/15 to-emerald-400/5 text-blue-200"
+      className={`flex size-12 shrink-0 items-center justify-center rounded-xl border border-white/[0.06] bg-gradient-to-br ${product.tone}`}
     >
       <Icon aria-hidden="true" size={22} strokeWidth={1.7} />
     </span>
   )
 }
 
-function PriceDropCard({ product }: { product: DemoProduct }) {
+function PriceDropCard({ product }: { product: DashboardProduct }) {
   const priceChange = getPriceChangePercent(
     product.previousPrice,
-    product.currentPrice,
+    product.price,
   )
 
   return (
@@ -50,10 +44,10 @@ function PriceDropCard({ product }: { product: DemoProduct }) {
         </p>
         <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
           <span className="text-[10px] text-slate-600 line-through">
-            {formatDemoPrice(product.previousPrice)}
+            {formatDashboardPrice(product.previousPrice)}
           </span>
           <span className="text-xs font-semibold text-white">
-            {formatDemoPrice(product.currentPrice)}
+            {formatDashboardPrice(product.price)}
           </span>
         </div>
       </div>
@@ -65,7 +59,7 @@ function PriceDropCard({ product }: { product: DemoProduct }) {
   )
 }
 
-function CheapestProductCard({ product }: { product: DemoProduct }) {
+function CheapestProductCard({ product }: { product: DashboardProduct }) {
   return (
     <article className="group flex items-center gap-3 rounded-xl border border-white/[0.05] bg-[#0a101b]/70 p-3 transition duration-200 hover:-translate-y-0.5 hover:border-blue-400/20 hover:bg-[#111a29]">
       <ProductThumbnail product={product} />
@@ -79,7 +73,7 @@ function CheapestProductCard({ product }: { product: DemoProduct }) {
         </p>
       </div>
       <p className="shrink-0 text-xs font-semibold text-white">
-        {formatDemoPrice(product.currentPrice)}
+        {formatDashboardPrice(product.price)}
       </p>
     </article>
   )
@@ -91,22 +85,25 @@ export function PriceHighlights({
   empty = false,
   searchQuery = '',
 }: {
-  products: CatalogProduct[]
+  products: DashboardProduct[]
   loading?: boolean
   empty?: boolean
   searchQuery?: string
 }) {
-  const dashboardProducts = getDemoProducts(products)
-  const matchingProducts = dashboardProducts.filter((product) =>
-    matchesDemoProduct(product, searchQuery),
+  const matchingProducts = products.filter((product) =>
+    matchesDashboardProduct(product, searchQuery),
   )
-  const priceDrops = matchingProducts.filter(
-    (product) =>
-      getPriceChangePercent(product.previousPrice, product.currentPrice) < 0,
-  )
-  const cheapestProducts = [...matchingProducts].sort(
-    (first, second) => first.currentPrice - second.currentPrice,
-  )
+  const priceDrops = matchingProducts
+    .filter((product) => product.price < product.previousPrice)
+    .sort(
+      (first, second) =>
+        getPriceChangePercent(second.previousPrice, second.price) -
+        getPriceChangePercent(first.previousPrice, first.price),
+    )
+    .slice(0, 5)
+  const cheapestProducts = [...matchingProducts]
+    .sort((first, second) => first.price - second.price)
+    .slice(0, 5)
 
   function renderContent(
     title: string,
@@ -135,17 +132,7 @@ export function PriceHighlights({
       )
     }
 
-    if (empty) {
-      return (
-        <DashboardEmptyState
-          title={title}
-          description={description}
-          className="min-h-[236px]"
-        />
-      )
-    }
-
-    if (noMatches) {
+    if (empty || noMatches) {
       return (
         <DashboardEmptyState
           title={title}
@@ -172,19 +159,17 @@ export function PriceHighlights({
             Recent Price Drops
           </h2>
           <p className="mt-1 text-[11px] text-slate-500">
-            Products with a lower price today
+            Catalog products with a lower stored price
           </p>
         </div>
         {renderContent(
-          searchQuery
-            ? 'No matching price drops'
-            : 'No recent price drops',
+          searchQuery ? 'No matching price drops' : 'No recent price drops',
           searchQuery
             ? 'Try another product or store, or search for a different item.'
-            : 'Products with a price decrease will appear here.',
+            : 'Products with a stored price decrease will appear here.',
           <div className="space-y-2.5">
             {priceDrops.map((product) => (
-              <PriceDropCard key={product.name} product={product} />
+              <PriceDropCard key={product.id} product={product} />
             ))}
           </div>,
           !empty && priceDrops.length === 0,
@@ -203,7 +188,7 @@ export function PriceHighlights({
             Cheapest Products
           </h2>
           <p className="mt-1 text-[11px] text-slate-500">
-            Lowest current price across tracked stores
+            Lowest current price from the catalog
           </p>
         </div>
         {renderContent(
@@ -213,7 +198,7 @@ export function PriceHighlights({
             : 'The lowest prices will appear once products are available.',
           <div className="space-y-2.5">
             {cheapestProducts.map((product) => (
-              <CheapestProductCard key={product.name} product={product} />
+              <CheapestProductCard key={product.id} product={product} />
             ))}
           </div>,
           !empty && matchingProducts.length === 0,
