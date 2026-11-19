@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
-import { ArrowDownRight, ArrowUpRight, MoreHorizontal } from 'lucide-react'
+import {
+  ArrowDownRight,
+  ArrowUpRight,
+  MoreHorizontal,
+  TriangleAlert,
+} from 'lucide-react'
 import {
   Area,
   CartesianGrid,
@@ -11,27 +16,57 @@ import {
   YAxis,
 } from 'recharts'
 import { api } from '../../api/client'
-import {
-  formatDemoPrice,
-  getDemoProducts,
-  getPriceChangePercent,
-  matchesDemoProduct,
-} from './demoProducts'
-import type { DemoProduct } from '../../data/products'
-import {
-  createStorePriceHistory,
-  priceHistoryPeriods,
-} from '../../data/priceHistory'
-import type {
-  PriceHistoryPeriod,
-  PriceHistoryPoint,
-} from '../../data/priceHistory'
+import type { StoreHistory } from '../../api/client'
 import {
   DashboardEmptyState,
   DashboardSkeleton,
 } from './DashboardDataState'
+import {
+  formatDashboardPrice,
+  getPriceChangePercent,
+  matchesDashboardProduct,
+} from './catalogProducts'
+import type { DashboardProduct } from './catalogProducts'
+import { priceHistoryPeriods } from '../../data/priceHistory'
+import type {
+  PriceHistoryPeriod,
+  PriceHistoryPoint,
+} from '../../data/priceHistory'
 
 type Period = PriceHistoryPeriod
+
+type CurrentHistory = {
+  productId: string
+  period: Period
+  points: PriceHistoryPoint[]
+  store: string | null
+}
+
+type HistoryLoadError = {
+  productId: string
+  period: Period
+  message: string
+}
+
+function HistorySkeleton() {
+  return (
+    <section
+      aria-label="Loading price trend"
+      aria-busy="true"
+      className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-3">
+          <DashboardSkeleton className="h-4 w-24" />
+          <DashboardSkeleton className="h-7 w-40" />
+        </div>
+        <DashboardSkeleton className="h-8 w-28 rounded-xl" />
+      </div>
+      <DashboardSkeleton className="mt-7 h-8 w-32" />
+      <DashboardSkeleton className="mt-5 h-[220px] w-full sm:h-[250px]" />
+    </section>
+  )
+}
 
 export function PriceTrendChart({
   products: catalogProducts,
@@ -39,32 +74,28 @@ export function PriceTrendChart({
   empty = false,
   searchQuery = '',
 }: {
-  products: DemoProduct[]
+  products: DashboardProduct[]
   loading?: boolean
   empty?: boolean
   searchQuery?: string
 }) {
-  const dashboardProducts = getDemoProducts(catalogProducts)
-  const products = catalogProducts.filter((product) =>
-    dashboardProducts.some((demoProduct) => demoProduct.name === product.name),
+  const [selectedProductId, setSelectedProductId] = useState(
+    catalogProducts[0]?.id ?? '',
   )
-  const [selectedProduct, setSelectedProduct] = useState(products[0]?.name ?? '')
   const [period, setPeriod] = useState<Period>('30D')
-  const matchingProducts = products.filter((item) => {
-    const source = dashboardProducts.find(
-      (demoProduct) => demoProduct.name === item.name,
-    )
-    return source ? matchesDemoProduct(source, searchQuery) : false
-  })
+  const [currentHistory, setCurrentHistory] = useState<CurrentHistory | null>(
+    null,
+  )
+  const [historyLoadError, setHistoryLoadError] =
+    useState<HistoryLoadError | null>(null)
+
+  const matchingProducts = catalogProducts.filter((product) =>
+    matchesDashboardProduct(product, searchQuery),
+  )
   const product =
-    matchingProducts.find((item) => item.name === selectedProduct) ??
+    matchingProducts.find((item) => item.id === selectedProductId) ??
     matchingProducts[0] ??
-    products[0]
-  const [remoteHistory, setRemoteHistory] = useState<{
-    productId: string
-    period: Period
-    points: PriceHistoryPoint[]
-  } | null>(null)
+    catalogProducts[0]
 
   useEffect(() => {
     let active = true
@@ -72,17 +103,28 @@ export function PriceTrendChart({
     if (!productId) return
 
     api.priceHistory(productId, period)
-      .then((histories) => {
-        if (active) {
-          setRemoteHistory({
-            productId,
-            period,
-            points: histories[0]?.points ?? [],
-          })
-        }
+      .then((histories: StoreHistory[]) => {
+        if (!active) return
+        const storedHistory = histories.find((item) => item.points.length > 0)
+        setCurrentHistory({
+          productId,
+          period,
+          points: storedHistory?.points ?? [],
+          store: storedHistory?.store ?? null,
+        })
+        setHistoryLoadError(null)
       })
       .catch((error: unknown) => {
         console.error('Unable to load dashboard price history from the backend', error)
+        if (!active) return
+        setHistoryLoadError({
+          productId,
+          period,
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Unable to load stored price history.',
+        })
       })
 
     return () => {
@@ -90,50 +132,75 @@ export function PriceTrendChart({
     }
   }, [period, product?.id])
 
-  const fallbackData = product
-    ? createStorePriceHistory(product, product.price, period, 0)
-    : []
-  const data =
-    remoteHistory &&
-    remoteHistory.productId === product?.id &&
-    remoteHistory.period === period
-      ? remoteHistory.points
-      : fallbackData
+  const hasCurrentHistory =
+    currentHistory !== null &&
+    product !== undefined &&
+    currentHistory.productId === product.id &&
+    currentHistory.period === period
+  const currentError =
+    !hasCurrentHistory &&
+    historyLoadError &&
+    historyLoadError.productId === product?.id &&
+    historyLoadError.period === period
+      ? historyLoadError.message
+      : null
+  const isLoadingHistory = Boolean(product) && !hasCurrentHistory && currentError === null
+  const data = hasCurrentHistory ? currentHistory.points : []
   const firstPrice = data[0]?.price ?? 0
   const currentPrice = data[data.length - 1]?.price ?? 0
   const priceChange = getPriceChangePercent(firstPrice, currentPrice)
 
-  if (loading) {
-    return (
-      <section
-        aria-label="Loading price trend"
-        aria-busy="true"
-        className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6"
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div className="space-y-3">
-            <DashboardSkeleton className="h-4 w-24" />
-            <DashboardSkeleton className="h-7 w-40" />
-          </div>
-          <DashboardSkeleton className="h-8 w-28 rounded-xl" />
-        </div>
-        <DashboardSkeleton className="mt-7 h-8 w-32" />
-        <DashboardSkeleton className="mt-5 h-[220px] w-full sm:h-[250px]" />
-      </section>
-    )
+  if (loading || isLoadingHistory) {
+    return <HistorySkeleton />
   }
 
-  if (empty || !product || matchingProducts.length === 0 || data.length === 0) {
+  if (empty || !product) {
     return (
       <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
         <h2 className="text-sm font-semibold text-white">Price trend</h2>
         <DashboardEmptyState
-          title={empty ? 'No price history yet' : 'No matching products'}
-          description={
-            empty
-              ? 'Price trends will appear here once product data is available.'
-              : 'Try a different product, store, or category search.'
-          }
+          title="No price history available"
+          description="Price trends will appear here once the catalog has recorded prices."
+          className="min-h-[280px]"
+        />
+      </section>
+    )
+  }
+
+  if (matchingProducts.length === 0) {
+    return (
+      <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
+        <h2 className="text-sm font-semibold text-white">Price trend</h2>
+        <DashboardEmptyState
+          title="No matching products"
+          description="Try a different product, store, or category search."
+          className="min-h-[280px]"
+        />
+      </section>
+    )
+  }
+
+  if (currentError) {
+    return (
+      <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
+        <h2 className="text-sm font-semibold text-white">Price trend</h2>
+        <DashboardEmptyState
+          title="Unable to load price history"
+          description={`Could not load stored price history: ${currentError}`}
+          icon={TriangleAlert}
+          className="min-h-[280px]"
+        />
+      </section>
+    )
+  }
+
+  if (data.length === 0) {
+    return (
+      <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
+        <h2 className="text-sm font-semibold text-white">Price trend</h2>
+        <DashboardEmptyState
+          title="No price history available"
+          description="No stored price observations were found for this product and date range."
           className="min-h-[280px]"
         />
       </section>
@@ -147,18 +214,18 @@ export function PriceTrendChart({
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-sm font-semibold text-white">Price trend</h2>
             <span className="rounded-md border border-blue-400/10 bg-blue-400/[0.07] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-blue-300">
-              Demo data
+              MongoDB records
             </span>
           </div>
           <label className="mt-2 block">
             <span className="sr-only">Select product</span>
             <select
-              value={product.name}
-              onChange={(event) => setSelectedProduct(event.target.value)}
+              value={product.id}
+              onChange={(event) => setSelectedProductId(event.target.value)}
               className="max-w-full cursor-pointer rounded-lg border border-white/[0.08] bg-[#090e18] px-2.5 py-1.5 text-xs text-slate-300 outline-none transition focus:border-blue-400/40"
             >
               {matchingProducts.map((item) => (
-                <option key={item.name} value={item.name}>
+                <option key={item.id} value={item.id}>
                   {item.name}
                 </option>
               ))}
@@ -189,7 +256,7 @@ export function PriceTrendChart({
 
       <div className="mt-7 flex flex-wrap items-end gap-x-3 gap-y-2">
         <p className="text-3xl font-semibold tracking-tight text-white">
-          {formatDemoPrice(currentPrice)}
+          {formatDashboardPrice(currentPrice)}
         </p>
         <span
           className={`mb-1 inline-flex items-center gap-1 text-xs font-medium ${
@@ -265,7 +332,7 @@ export function PriceTrendChart({
                       )}
                     </p>
                     <p className="mt-1 text-sm font-semibold text-white">
-                      {formatDemoPrice(point.price)}
+                      {formatDashboardPrice(point.price)}
                     </p>
                   </div>
                 )
@@ -296,7 +363,10 @@ export function PriceTrendChart({
         </ResponsiveContainer>
       </div>
       <div className="mt-2 flex items-center justify-between border-t border-white/[0.06] pt-4 text-[10px] text-slate-500">
-        <span>Demo price history for {product.name}</span>
+        <span>
+          Stored price history for {product.name}
+          {currentHistory?.store ? ` from ${currentHistory.store}` : ''}
+        </span>
         <span>{period === '1Y' ? 'Past year' : `Past ${period.toLowerCase()}`}</span>
       </div>
     </section>
@@ -309,40 +379,38 @@ export function RecentPriceChanges({
   empty = false,
   searchQuery = '',
 }: {
-  products: DemoProduct[]
+  products: DashboardProduct[]
   loading?: boolean
   empty?: boolean
   searchQuery?: string
 }) {
-  const dashboardProducts = getDemoProducts(products)
-  const changes = dashboardProducts.map((product) => {
-    const priceChange = getPriceChangePercent(
-      product.previousPrice,
-      product.currentPrice,
-    )
+  const getUpdatedTime = (value: string) => {
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? 0 : parsed
+  }
+  const changes = products
+    .filter((product) => matchesDashboardProduct(product, searchQuery))
+    .sort((first, second) => getUpdatedTime(second.updatedAt) - getUpdatedTime(first.updatedAt))
+    .slice(0, 5)
+    .map((product) => {
+      const priceChange = getPriceChangePercent(
+        product.previousPrice,
+        product.price,
+      )
+      const Icon = product.icon
 
-    return {
-      name: product.name,
-      detail: `${product.category} · ${product.storesTracked} stores`,
-      initials: product.name[0],
-      color:
-        product.thumbnail === 'earbuds'
-          ? 'bg-slate-200 text-slate-800'
-          : product.name.startsWith('Bose')
-            ? 'bg-amber-400/10 text-amber-200'
-            : 'bg-slate-700 text-slate-200',
-      price: formatDemoPrice(product.currentPrice),
-      previous: formatDemoPrice(product.previousPrice),
-      change: `${priceChange > 0 ? '+' : ''}${priceChange.toFixed(1)}%`,
-      down: priceChange < 0,
-    }
-  })
-  const matchingChanges = changes.filter((item) => {
-    const product = dashboardProducts.find(
-      (demoProduct) => demoProduct.name === item.name,
-    )
-    return product ? matchesDemoProduct(product, searchQuery) : false
-  })
+      return {
+        id: product.id,
+        name: product.name,
+        detail: `${product.category} · ${product.store}`,
+        tone: product.tone,
+        Icon,
+        price: formatDashboardPrice(product.price),
+        previous: formatDashboardPrice(product.previousPrice),
+        change: `${priceChange > 0 ? '+' : ''}${priceChange.toFixed(1)}%`,
+        down: priceChange < 0,
+      }
+    })
 
   if (loading) {
     return (
@@ -369,7 +437,7 @@ export function RecentPriceChanges({
     )
   }
 
-  if (empty || matchingChanges.length === 0) {
+  if (empty || changes.length === 0) {
     return (
       <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
         <h2 className="text-sm font-semibold text-white">Recent price changes</h2>
@@ -377,7 +445,7 @@ export function RecentPriceChanges({
           title={empty ? 'No recent price changes' : 'No matching products'}
           description={
             empty
-              ? 'Price updates will show here when they become available.'
+              ? 'Price updates will show here when catalog prices are available.'
               : 'Try a different product, store, or category search.'
           }
           className="min-h-[240px]"
@@ -392,7 +460,7 @@ export function RecentPriceChanges({
         <div>
           <h2 className="text-sm font-semibold text-white">Recent price changes</h2>
           <p className="mt-1 text-[11px] text-slate-500">
-            Updates across your tracked products
+            Latest updates from the shared catalog
           </p>
         </div>
         <span aria-hidden="true" className="rounded-lg p-2 text-slate-500">
@@ -400,15 +468,15 @@ export function RecentPriceChanges({
         </span>
       </div>
       <div className="divide-y divide-white/[0.05]">
-        {matchingChanges.map((item) => (
+        {changes.map((item) => (
           <article
-            key={item.name}
+            key={item.id}
             className="flex items-center gap-3 px-5 py-4 sm:gap-4 sm:px-6"
           >
             <span
-              className={`flex size-10 shrink-0 items-center justify-center rounded-xl text-sm font-semibold ${item.color}`}
+              className={`flex size-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${item.tone}`}
             >
-              {item.initials}
+              <item.Icon aria-hidden="true" size={18} />
             </span>
             <div className="min-w-0 flex-1">
               <h3 className="truncate text-xs font-medium text-slate-200">
@@ -441,7 +509,7 @@ export function RecentPriceChanges({
       </div>
       <div className="border-t border-white/[0.06] px-5 py-3.5 text-center sm:px-6">
         <p className="text-[10px] text-slate-500">
-          Showing a sample of recent market movements
+          Based on stored catalog prices
         </p>
       </div>
     </section>

@@ -42,9 +42,20 @@ export type UserPreferences = {
   systemUpdates: boolean
 }
 
+export type DataSourceState = 'loading' | 'backend' | 'error'
+
+export type ConnectionStatus =
+  | 'checking'
+  | 'connected'
+  | 'disconnected'
+  | 'error'
+
 export type AppOutletContext = {
   products: DemoProduct[]
-  dataSource: 'loading' | 'backend' | 'demo'
+  dataSource: DataSourceState
+  dataError: string | null
+  connectionStatus: ConnectionStatus
+  reloadData: () => void
   searchQuery: string
   setSearchQuery: (query: string) => void
   watchlistIds: string[]

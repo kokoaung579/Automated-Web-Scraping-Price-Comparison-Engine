@@ -34,8 +34,8 @@ import type {
   ScrapingJob,
   ScrapingJobStatus,
 } from '../../data/adminScraping'
-import { loadAdminStores } from '../../data/adminStores'
 import type { AdminStore } from '../../data/adminStores'
+import { getStores } from '../../services/storesApi'
 import { getScrapingApiMode } from '../../services/scrapingApi'
 
 const statusLabels: Record<ScrapingJobStatus, string> = {
@@ -515,33 +515,12 @@ function ConfirmJobActionDialog({
 export function AdminScrapingPage() {
   const apiMode = useMemo(() => getScrapingApiMode(), [])
   const apiClient = apiMode.mode === 'live' ? apiMode.client : null
-  const [catalog, setCatalog] = useState(() => {
-    if (apiMode.mode !== 'demo') return { jobs: [] as ScrapingJob[], error: '' }
-    try {
-      return { jobs: loadScrapingJobs(), error: '' }
-    } catch (error) {
-      return {
-        jobs: [] as ScrapingJob[],
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Could not load scraping demo data.',
-      }
-    }
-  })
-  const [storeState] = useState(() => {
-    try {
-      return { stores: loadAdminStores(), error: '' }
-    } catch (error) {
-      return {
-        stores: [] as AdminStore[],
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Could not load managed stores.',
-      }
-    }
-  })
+  const [catalog, setCatalog] = useState(() => ({
+    jobs: [] as ScrapingJob[],
+    error: '',
+  }))
+  const [managedStores, setManagedStores] = useState<AdminStore[]>([])
+  const [storeError, setStoreError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<
     'all' | ScrapingJobStatus
@@ -563,7 +542,46 @@ export function AdminScrapingPage() {
     action: DemoJobAction
   } | null>(null)
   const jobs = catalog.jobs
-  const activeStores = storeState.stores.filter((store) => store.status === 'Active')
+  const activeStores = managedStores.filter(
+    (store) => store.status === 'Active',
+  )
+
+  useEffect(() => {
+    let active = true
+
+    getStores()
+      .then((stores) => {
+        if (!active) return
+        setManagedStores(stores)
+        setStoreError('')
+
+        if (apiMode.mode === 'demo') {
+          try {
+            setCatalog({ jobs: loadScrapingJobs(stores), error: '' })
+          } catch (error) {
+            setCatalog({
+              jobs: [],
+              error:
+                error instanceof Error
+                  ? error.message
+                  : 'Could not load scraping demo data.',
+            })
+          }
+        }
+      })
+      .catch((error: unknown) => {
+        if (!active) return
+        setStoreError(
+          error instanceof Error
+            ? error.message
+            : 'Could not load managed stores.',
+        )
+      })
+
+    return () => {
+      active = false
+    }
+  }, [apiMode.mode])
   const selectedJob =
     detailJob?.id === selectedJobId
       ? detailJob
@@ -742,7 +760,7 @@ export function AdminScrapingPage() {
   }
 
   const controlsDisabled =
-    apiMode.mode === 'error' || Boolean(catalog.error) || Boolean(storeState.error)
+    apiMode.mode === 'error' || Boolean(catalog.error) || Boolean(storeError)
   const modeName = apiMode.mode === 'live'
     ? 'LIVE BACKEND MODE'
     : apiMode.mode === 'demo'
@@ -799,9 +817,9 @@ export function AdminScrapingPage() {
           Live backend mode: job state is loaded from the configured API and refreshed every 10 seconds. Scraping execution remains a backend responsibility.
         </p>
       )}
-      {(catalog.error || storeState.error || pageError) && (
+      {(catalog.error || storeError || pageError) && (
         <div role="alert" className="flex flex-col gap-3 rounded-xl border border-rose-300/10 bg-rose-400/[0.06] px-4 py-3 text-xs leading-5 text-rose-200 sm:flex-row sm:items-center sm:justify-between">
-          <span>{catalog.error || storeState.error || pageError}</span>
+          <span>{catalog.error || storeError || pageError}</span>
           {apiClient && (
             <button type="button" onClick={() => void refreshLiveJobs(true)} disabled={refreshing} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-rose-200/10 px-3 py-2 text-[10px] font-medium text-rose-100 transition hover:bg-rose-400/[0.07] disabled:opacity-50">
               <RefreshCw aria-hidden="true" size={12} className={refreshing ? 'animate-spin' : ''} />

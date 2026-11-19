@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
+  Bell,
   Boxes,
-  Check,
   CircleAlert,
   CircleCheck,
+  ClipboardList,
   Database,
+  FolderTree,
+  Layers,
+  RefreshCw,
   Server,
   Store,
   Users,
@@ -22,64 +26,71 @@ import {
 } from 'recharts'
 import { Link } from 'react-router-dom'
 import { api } from '../../api/client'
-import type { AuthUser } from '../../types/auth'
+import { useAdminNotifications } from '../../context/AdminNotificationsContext'
+import {
+  formatDateTime,
+  formatShortDate,
+  getYangonDayKey,
+} from '../../utils/datetime'
 import type { AuditLog } from '../../data/adminAuditLogs'
-import { loadAuditLogs } from '../../data/adminAuditLogs'
-import { loadAdminCategories } from '../../data/adminCategories'
-import { loadScrapingJobs } from '../../data/adminScraping'
-import type { ScrapingJob } from '../../data/adminScraping'
-import { loadAdminStores } from '../../data/adminStores'
-
-type LocalOverviewData = {
-  storeCount: number
-  categoryCount: number
-  jobs: ScrapingJob[]
-  auditLogs: AuditLog[]
-}
-
-type LocalOverviewResult = {
-  data: LocalOverviewData | null
-  error: string
-}
+import type { DashboardResponse } from '../../types/dashboard'
 
 type ApiStatus = 'checking' | 'online' | 'offline'
-type Tone = 'blue' | 'cyan' | 'emerald' | 'rose' | 'violet'
+type Tone = 'blue' | 'cyan' | 'purple' | 'green' | 'amber' | 'rose'
 
-type Statistic = {
+type KpiCard = {
   label: string
   value: string
-  source: string
+  detail: string
   icon: LucideIcon
   tone: Tone
   to: string
 }
 
-type ScrapingActivityPoint = {
-  day: string
-  successful: number
-  failed: number
+type AuditState = {
+  logs: AuditLog[]
+  totalEvents: number
+  loading: boolean
+  error: string
 }
 
-const toneStyles: Record<Tone, { icon: string; bar: string }> = {
+type ScrapingChartPoint = {
+  label: string
+  completed: number
+  failed: number
+  total: number
+}
+
+const toneStyles: Record<Tone, { icon: string; glow: string; value: string }> = {
   blue: {
-    icon: 'border-blue-300/10 bg-blue-400/[0.09] text-blue-300',
-    bar: 'bg-blue-400',
+    icon: 'border-blue-400/15 bg-blue-500/10 text-blue-300',
+    glow: 'from-blue-500/20',
+    value: 'text-white',
   },
   cyan: {
-    icon: 'border-cyan-300/10 bg-cyan-400/[0.08] text-cyan-300',
-    bar: 'bg-cyan-400',
+    icon: 'border-cyan-400/15 bg-cyan-500/10 text-cyan-300',
+    glow: 'from-cyan-500/20',
+    value: 'text-white',
   },
-  emerald: {
-    icon: 'border-emerald-300/10 bg-emerald-400/[0.08] text-emerald-300',
-    bar: 'bg-emerald-400',
+  purple: {
+    icon: 'border-violet-400/15 bg-violet-500/10 text-violet-300',
+    glow: 'from-violet-500/20',
+    value: 'text-white',
+  },
+  green: {
+    icon: 'border-emerald-400/15 bg-emerald-500/10 text-emerald-300',
+    glow: 'from-emerald-500/20',
+    value: 'text-white',
+  },
+  amber: {
+    icon: 'border-amber-400/15 bg-amber-500/10 text-amber-300',
+    glow: 'from-amber-500/20',
+    value: 'text-white',
   },
   rose: {
-    icon: 'border-rose-300/10 bg-rose-400/[0.08] text-rose-300',
-    bar: 'bg-rose-400',
-  },
-  violet: {
-    icon: 'border-violet-300/10 bg-violet-400/[0.08] text-violet-300',
-    bar: 'bg-violet-400',
+    icon: 'border-rose-400/15 bg-rose-500/10 text-rose-300',
+    glow: 'from-rose-500/20',
+    value: 'text-white',
   },
 }
 
@@ -87,161 +98,330 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
 }
 
-function loadLocalOverviewData(): LocalOverviewResult {
-  try {
-    const stores = loadAdminStores()
-    const categories = loadAdminCategories()
-    const auditLogs = loadAuditLogs()
-    return {
-      data: {
-        storeCount: stores.length,
-        categoryCount: categories.length,
-        jobs: loadScrapingJobs(),
-        auditLogs,
-      },
-      error: '',
-    }
-  } catch (error) {
-    console.error('Unable to load local admin overview data', error)
-    return {
-      data: null,
-      error: getErrorMessage(error, 'Unable to load local admin data.'),
-    }
-  }
+function isDashboardResponse(value: unknown): value is DashboardResponse {
+  const candidate = value as DashboardResponse | null
+  return Boolean(
+    candidate &&
+      candidate.kpis &&
+      candidate.charts &&
+      candidate.price_activity &&
+      candidate.comparison &&
+      candidate.recent_activity &&
+      candidate.meta,
+  )
 }
 
-function formatActivityTime(timestamp: string): string {
-  const date = new Date(timestamp)
-  if (!Number.isFinite(date.getTime())) return 'Unknown date'
+function buildScrapingActivityChart(
+  dashboard: DashboardResponse | null,
+): ScrapingChartPoint[] {
+  if (!dashboard) return []
 
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date)
-}
+  const scrapingItems = dashboard.recent_activity.items.filter(
+    (item) => item.category === 'scraping_activities',
+  )
+  const byDay = new Map<string, ScrapingChartPoint>()
 
-function buildScrapingActivity(
-  jobs: ScrapingJob[],
-  now = new Date(),
-): ScrapingActivityPoint[] {
-  const days = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-    )
-    date.setUTCDate(date.getUTCDate() - (6 - index))
-    return {
-      key: date.toISOString().slice(0, 10),
-      day: new Intl.DateTimeFormat('en-US', {
-        weekday: 'short',
-        timeZone: 'UTC',
-      }).format(date),
-      successful: 0,
+  for (const item of scrapingItems) {
+    const key = getYangonDayKey(item.timestamp)
+    if (!key) continue
+
+    const current = byDay.get(key) ?? {
+      label: formatShortDate(item.timestamp),
+      completed: 0,
       failed: 0,
+      total: 0,
     }
-  })
-  const dayIndexes = new Map(days.map((day, index) => [day.key, index]))
 
-  for (const job of jobs) {
-    for (const execution of job.executions) {
-      if (execution.status !== 'completed' && execution.status !== 'failed') {
-        continue
-      }
-
-      const timestamp = Date.parse(execution.started_at)
-      if (!Number.isFinite(timestamp)) continue
-      const dayIndex = dayIndexes.get(new Date(timestamp).toISOString().slice(0, 10))
-      if (dayIndex === undefined) continue
-
-      if (execution.status === 'completed') days[dayIndex].successful += 1
-      else days[dayIndex].failed += 1
+    const status = (item.status ?? '').toLowerCase()
+    if (status === 'success' || status === 'completed') {
+      current.completed += 1
+    } else if (status === 'failure' || status === 'failed') {
+      current.failed += 1
     }
+    current.total += 1
+    byDay.set(key, current)
   }
 
-  return days.map(({ day, successful, failed }) => ({
-    day,
-    successful,
-    failed,
-  }))
+  return Array.from(byDay.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-7)
+    .map(([, point]) => point)
 }
 
-function AdminStatCard({
-  label,
-  value,
-  source,
-  icon: Icon,
-  tone,
-  to,
-}: Statistic) {
+function StatCard({ label, value, detail, icon: Icon, tone, to }: KpiCard) {
   const styles = toneStyles[tone]
 
   return (
     <Link
       to={to}
-      className="group relative overflow-hidden rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 transition duration-200 hover:-translate-y-0.5 hover:border-white/[0.12] hover:bg-[#101827] sm:p-5"
+      className="group relative overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0f1728]/90 p-5 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition duration-200 hover:-translate-y-0.5 hover:border-cyan-400/20 hover:bg-[#121c31]"
     >
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute -right-10 -top-14 size-32 rounded-full bg-blue-400/[0.035] blur-2xl transition group-hover:bg-blue-400/[0.07]"
+        className={`pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b ${styles.glow} to-transparent opacity-70`}
       />
-      <div className="relative flex items-start justify-between gap-3">
-        <div className={`flex size-10 items-center justify-center rounded-xl border ${styles.icon}`}>
-          <Icon aria-hidden="true" size={18} />
+      <div className="relative flex items-start justify-between gap-4">
+        <div>
+          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-slate-500">
+            {label}
+          </p>
+          <p className={`mt-3 text-3xl font-semibold tracking-tight ${styles.value}`}>
+            {value}
+          </p>
+          <p className="mt-2 text-xs leading-5 text-slate-500">{detail}</p>
         </div>
-        <span className="rounded-full bg-white/[0.035] px-2 py-1 text-[9px] font-medium text-slate-400">
-          {source}
+        <span
+          className={`flex size-11 shrink-0 items-center justify-center rounded-xl border ${styles.icon}`}
+        >
+          <Icon aria-hidden="true" size={20} />
         </span>
       </div>
-      <p className="relative mt-5 text-[11px] font-medium text-slate-500">
-        {label}
-      </p>
-      <p className="relative mt-1 text-[25px] font-semibold tracking-tight text-white sm:text-[27px]">
-        {value}
-      </p>
     </Link>
   )
 }
 
+function SectionCard({
+  title,
+  description,
+  action,
+  children,
+  className = '',
+}: {
+  title: string
+  description: string
+  action?: React.ReactNode
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <section
+      className={`min-h-0 rounded-2xl border border-white/[0.08] bg-[#0f1728]/90 p-5 shadow-[0_18px_50px_-40px_rgba(0,0,0,0.9)] sm:p-6 ${className}`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-base font-semibold tracking-tight text-white">{title}</h3>
+          <p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500 sm:text-[13px]">
+            {description}
+          </p>
+        </div>
+        {action}
+      </div>
+      <div className="mt-5">{children}</div>
+    </section>
+  )
+}
+
+function StatusBadge({ status }: { status: ApiStatus | 'healthy' | 'unavailable' }) {
+  const tone =
+    status === 'online' || status === 'healthy'
+      ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-300'
+      : status === 'offline' || status === 'unavailable'
+        ? 'border-rose-400/20 bg-rose-500/10 text-rose-300'
+        : 'border-slate-400/20 bg-slate-500/10 text-slate-300'
+
+  const label =
+    status === 'online' || status === 'healthy'
+      ? 'Connected'
+      : status === 'offline' || status === 'unavailable'
+        ? 'Unavailable'
+        : 'Checking'
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-medium ${tone}`}
+    >
+      <span
+        aria-hidden="true"
+        className={`size-1.5 rounded-full ${
+          status === 'online' || status === 'healthy'
+            ? 'bg-emerald-400'
+            : status === 'offline' || status === 'unavailable'
+              ? 'bg-rose-400'
+              : 'bg-slate-400'
+        }`}
+      />
+      {label}
+    </span>
+  )
+}
+
+function SkeletonCard() {
+  return (
+    <div className="animate-pulse rounded-2xl border border-white/[0.08] bg-[#0f1728]/90 p-5">
+      <div className="h-3 w-24 rounded bg-white/[0.06]" />
+      <div className="mt-4 h-8 w-20 rounded bg-white/[0.08]" />
+      <div className="mt-3 h-3 w-32 rounded bg-white/[0.05]" />
+    </div>
+  )
+}
+
+function EmptyPanel({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: LucideIcon
+  title: string
+  description: string
+}) {
+  return (
+    <div className="flex min-h-[220px] flex-col items-center justify-center rounded-xl border border-dashed border-white/[0.08] bg-white/[0.02] px-4 py-8 text-center">
+      <span className="flex size-11 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-slate-400">
+        <Icon aria-hidden="true" size={20} />
+      </span>
+      <p className="mt-4 text-sm font-medium text-slate-200">{title}</p>
+      <p className="mt-1 max-w-md text-xs leading-5 text-slate-500">{description}</p>
+    </div>
+  )
+}
+
+function AuditRecords({ state }: { state: AuditState }) {
+  const recentLogs = useMemo(
+    () =>
+      [...state.logs]
+        .sort(
+          (first, second) =>
+            Date.parse(second.timestamp) - Date.parse(first.timestamp),
+        )
+        .slice(0, 5),
+    [state.logs],
+  )
+
+  if (state.loading) {
+    return (
+      <p
+        role="status"
+        className="flex min-h-[220px] items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.02] text-sm text-slate-400"
+      >
+        Loading audit records…
+      </p>
+    )
+  }
+
+  if (state.error) {
+    return (
+      <p
+        role="alert"
+        className="flex min-h-[220px] items-center justify-center rounded-xl border border-rose-400/20 bg-rose-500/[0.06] px-4 text-center text-sm text-rose-200"
+      >
+        {state.error}
+      </p>
+    )
+  }
+
+  if (recentLogs.length === 0) {
+    return (
+      <EmptyPanel
+        icon={ClipboardList}
+        title="No audit records available"
+        description="Audit events will appear here when the backend audit log contains records."
+      />
+    )
+  }
+
+  return (
+    <ul className="space-y-3">
+      {recentLogs.map((log) => {
+        const success = log.status === 'success'
+        const Icon = success ? CircleCheck : CircleAlert
+        return (
+          <li
+            key={log.id}
+            className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4 transition hover:border-cyan-400/15 hover:bg-white/[0.03]"
+          >
+            <div className="flex items-start gap-3">
+              <span
+                className={`mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border ${
+                  success
+                    ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-300'
+                    : 'border-rose-400/20 bg-rose-500/10 text-rose-300'
+                }`}
+              >
+                <Icon aria-hidden="true" size={15} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+                  <p className="text-sm font-medium text-slate-100">{log.action}</p>
+                  <time className="text-[11px] text-slate-500">
+                    {formatDateTime(log.timestamp)}
+                  </time>
+                </div>
+                <p className="mt-1 text-xs leading-5 text-slate-400">
+                  {log.actor_name} · {log.description}
+                </p>
+              </div>
+            </div>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
 export function AdminOverviewPage() {
-  const [localOverview] = useState(loadLocalOverviewData)
-  const { data: localData, error: localDataError } = localOverview
-  const [userCount, setUserCount] = useState<number | null>(null)
-  const [userError, setUserError] = useState('')
-  const [productCount, setProductCount] = useState<number | null>(null)
-  const [productError, setProductError] = useState('')
+  const { unreadCount } = useAdminNotifications()
+  const [dashboard, setDashboard] = useState<DashboardResponse | null>(null)
+  const [dashboardLoading, setDashboardLoading] = useState(true)
+  const [dashboardError, setDashboardError] = useState('')
+  const [reloadToken, setReloadToken] = useState(0)
   const [apiStatus, setApiStatus] = useState<ApiStatus>('checking')
+  const [auditState, setAuditState] = useState<AuditState>({
+    logs: [],
+    totalEvents: 0,
+    loading: true,
+    error: '',
+  })
 
   useEffect(() => {
     let active = true
 
-    api.adminUsers()
-      .then((users: AuthUser[]) => {
-        if (active) setUserCount(users.length)
+    api
+      .dashboard()
+      .then((response: DashboardResponse) => {
+        if (!isDashboardResponse(response)) {
+          throw new Error('The backend returned an unexpected dashboard payload.')
+        }
+        if (active) {
+          setDashboard(response)
+          setDashboardError('')
+        }
       })
       .catch((error: unknown) => {
-        console.error('Unable to load MongoDB user count for the admin overview', error)
+        console.error('Unable to load MongoDB dashboard data', error)
         if (active) {
-          setUserError(
-            getErrorMessage(error, 'Unable to load the MongoDB user count.'),
-          )
+          setDashboardError(getErrorMessage(error, 'Unable to load dashboard data.'))
+        }
+      })
+      .finally(() => {
+        if (active) setDashboardLoading(false)
+      })
+
+    api
+      .auditLogs()
+      .then((response) => {
+        if (active) {
+          setAuditState({
+            logs: Array.isArray(response.logs) ? response.logs : [],
+            totalEvents: response.total_events ?? 0,
+            loading: false,
+            error: '',
+          })
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to load audit records for the admin overview', error)
+        if (active) {
+          setAuditState({
+            logs: [],
+            totalEvents: 0,
+            loading: false,
+            error: getErrorMessage(error, 'Unable to load audit records.'),
+          })
         }
       })
 
-    api.adminProducts()
-      .then((products) => {
-        if (active) setProductCount(products.length)
-      })
-      .catch((error: unknown) => {
-        console.error('Unable to load catalog count for the admin overview', error)
-        if (active) {
-          setProductError(
-            getErrorMessage(error, 'Unable to load the MongoDB product count.'),
-          )
-        }
-      })
-
-    api.health()
+    api
+      .health()
       .then(({ status }) => {
         if (active) setApiStatus(status === 'ok' ? 'online' : 'offline')
       })
@@ -253,418 +433,426 @@ export function AdminOverviewPage() {
     return () => {
       active = false
     }
-  }, [])
+  }, [reloadToken])
 
-  const completedJobs =
-    localData?.jobs.filter((job) => job.status === 'completed').length ?? 0
-  const failedJobs =
-    localData?.jobs.filter((job) => job.status === 'failed').length ?? 0
-  const chartData = useMemo(
-    () => buildScrapingActivity(localData?.jobs ?? []),
-    [localData?.jobs],
+  function refreshDashboard() {
+    setDashboardLoading(true)
+    setDashboardError('')
+    setReloadToken((token) => token + 1)
+  }
+
+  const scrapingActivityData = useMemo(
+    () => buildScrapingActivityChart(dashboard),
+    [dashboard],
   )
-  const hasScrapingActivity = chartData.some(
-    (point) => point.successful > 0 || point.failed > 0,
+
+  const scrapingItems = useMemo(
+    () =>
+      dashboard?.recent_activity.items.filter(
+        (item) => item.category === 'scraping_activities',
+      ) ?? [],
+    [dashboard],
   )
-  const recentActivities = [...(localData?.auditLogs ?? [])]
-    .sort(
-      (first, second) =>
-        Date.parse(second.timestamp) - Date.parse(first.timestamp),
-    )
-    .slice(0, 4)
 
-  const statistics: Statistic[] = [
-    {
-      label: 'User accounts',
-      value: userCount?.toLocaleString() ?? (userError ? '—' : '…'),
-      source: 'MongoDB',
-      icon: Users,
-      tone: 'blue',
-      to: '/admin/users',
-    },
-    {
-      label: 'Catalog products',
-      value: productCount?.toLocaleString() ?? (productError ? '—' : '…'),
-      source: 'MongoDB',
-      icon: Boxes,
-      tone: 'cyan',
-      to: '/admin/products',
-    },
-    {
-      label: 'Managed stores',
-      value: localData?.storeCount.toLocaleString() ?? '—',
-      source: 'Browser demo',
-      icon: Store,
-      tone: 'violet',
-      to: '/admin/stores',
-    },
-    {
-      label: 'Categories',
-      value: localData?.categoryCount.toLocaleString() ?? '—',
-      source: 'Browser demo',
-      icon: Database,
-      tone: 'blue',
-      to: '/admin/categories',
-    },
-    {
-      label: 'Scraping jobs',
-      value: localData?.jobs.length.toLocaleString() ?? '—',
-      source: 'Simulated',
-      icon: Activity,
-      tone: 'cyan',
-      to: '/admin/scraping',
-    },
-    {
-      label: 'Completed / failed jobs',
-      value: localData ? `${completedJobs} / ${failedJobs}` : '—',
-      source: 'Simulated',
-      icon: failedJobs > 0 ? CircleAlert : CircleCheck,
-      tone: failedJobs > 0 ? 'rose' : 'emerald',
-      to: '/admin/scraping',
-    },
-  ]
+  const completedScrapingJobs = scrapingItems.filter((item) => {
+    const status = (item.status ?? '').toLowerCase()
+    return status === 'success' || status === 'completed'
+  }).length
 
-  const apiStatusLabel =
-    apiStatus === 'checking'
-      ? 'Checking backend'
-      : apiStatus === 'online'
-        ? 'Backend API online'
-        : 'Backend API unavailable'
-  const apiStatusTone =
-    apiStatus === 'online'
-      ? 'text-emerald-300'
-      : apiStatus === 'offline'
-        ? 'text-rose-300'
-        : 'text-slate-400'
+  const failedScrapingJobs = scrapingItems.filter((item) => {
+    const status = (item.status ?? '').toLowerCase()
+    return status === 'failure' || status === 'failed'
+  }).length
+
+  const totalScrapingJobs =
+    dashboard?.recent_activity.categories.find(
+      (category) => category.key === 'scraping_activities',
+    )?.count ?? 0
+
+  const kpis: KpiCard[] = dashboard
+    ? [
+        {
+          label: 'User Accounts',
+          value: dashboard.kpis.total_users.toLocaleString(),
+          detail: 'Registered accounts in MongoDB',
+          icon: Users,
+          tone: 'blue',
+          to: '/admin/users',
+        },
+        {
+          label: 'Catalog Products',
+          value: dashboard.kpis.total_products.toLocaleString(),
+          detail: 'Products in the live catalog',
+          icon: Boxes,
+          tone: 'cyan',
+          to: '/admin/products',
+        },
+        {
+          label: 'Managed Stores',
+          value: dashboard.kpis.total_stores.toLocaleString(),
+          detail: 'Stores configured in the system',
+          icon: Store,
+          tone: 'purple',
+          to: '/admin/stores',
+        },
+        {
+          label: 'Categories',
+          value: dashboard.charts.products_by_category.length.toLocaleString(),
+          detail: 'Distinct product categories in catalog',
+          icon: FolderTree,
+          tone: 'green',
+          to: '/admin/categories',
+        },
+        {
+          label: 'Scraping Jobs',
+          value: totalScrapingJobs.toLocaleString(),
+          detail: `${dashboard.kpis.active_scraping_jobs.toLocaleString()} active job records`,
+          icon: Activity,
+          tone: 'amber',
+          to: '/admin/scraping',
+        },
+        {
+          label: 'Completed / Failed Jobs',
+          value: `${completedScrapingJobs.toLocaleString()} / ${failedScrapingJobs.toLocaleString()}`,
+          detail: 'Derived from recorded scraping activity',
+          icon: Layers,
+          tone: 'rose',
+          to: '/admin/scraping',
+        },
+      ]
+    : []
+
+  const scrapingExecutionStatus: 'healthy' | 'unavailable' | 'checking' =
+    apiStatus === 'offline'
+      ? 'unavailable'
+      : dashboard
+        ? totalScrapingJobs > 0 || dashboard.kpis.active_scraping_jobs >= 0
+          ? 'healthy'
+          : 'unavailable'
+        : dashboardLoading
+          ? 'checking'
+          : 'unavailable'
+
+  const catalogStatus: 'healthy' | 'unavailable' | 'checking' =
+    dashboard ? 'healthy' : dashboardLoading ? 'checking' : 'unavailable'
 
   return (
-    <div className="space-y-6 sm:space-y-7">
-      <section className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-        <div>
-          <div className="mb-2 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-[0.18em] text-blue-300">
-            <span className="size-1.5 rounded-full bg-cyan-300" />
-            Control center
-            <span className="rounded-md border border-white/[0.07] bg-white/[0.025] px-1.5 py-0.5 text-[8px] tracking-wide text-slate-500">
-              MIXED DATA SOURCES
-            </span>
+    <div className="space-y-6 sm:space-y-8">
+      <section className="flex flex-col gap-4 rounded-2xl border border-white/[0.08] bg-gradient-to-r from-[#101a2f] via-[#0f1728] to-[#101827] p-5 sm:p-6 lg:flex-row lg:items-end lg:justify-between">
+        <div className="min-w-0">
+          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-cyan-400/15 bg-cyan-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-200">
+            <span className="size-1.5 rounded-full bg-cyan-300 shadow-[0_0_10px_rgba(103,232,249,0.9)]" />
+            Platform Overview
           </div>
-          <h2 className="text-[25px] font-semibold tracking-[-0.035em] text-white sm:text-[29px]">
-            Platform overview
+          <h2 className="text-2xl font-semibold tracking-tight text-white sm:text-[30px]">
+            Admin overview dashboard
           </h2>
-          <p className="mt-1.5 text-xs leading-5 text-slate-500 sm:text-[13px]">
-            Catalog counts come from MongoDB; other admin counts are browser demo data.
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
+            Monitor platform health, catalog coverage, and scraping performance using live
+            backend and MongoDB data. Metrics and records shown here reflect current API
+            responses and available execution history.
           </p>
         </div>
-        <div
-          className={`flex items-center gap-2 self-start rounded-xl border border-white/[0.07] bg-[#0d1320] px-3 py-2 sm:self-auto ${apiStatusTone}`}
-          role="status"
-        >
-          <span
-            className={`size-1.5 rounded-full ${
-              apiStatus === 'online'
-                ? 'bg-emerald-400'
-                : apiStatus === 'offline'
-                  ? 'bg-rose-400'
-                  : 'bg-slate-500'
-            }`}
-          />
-          <span className="text-[10px]">{apiStatusLabel}</span>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <div
+            role="status"
+            className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-[#0b1220]/80 px-4 py-3"
+          >
+            <div>
+              <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-slate-500">
+                Backend API
+              </p>
+              <p className="mt-1 text-sm font-medium text-slate-200">Connection status</p>
+            </div>
+            <StatusBadge status={apiStatus} />
+          </div>
+          <button
+            type="button"
+            onClick={refreshDashboard}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/[0.08] bg-[#0b1220]/80 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-cyan-400/20 hover:text-white"
+          >
+            <RefreshCw aria-hidden="true" size={15} />
+            Refresh
+          </button>
         </div>
       </section>
 
       <section
-        aria-label="Platform statistics"
-        className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:gap-4"
+        aria-label="Notification summary"
+        className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/[0.08] bg-[#0f1728]/90 px-4 py-3 sm:px-5"
       >
-        {statistics.map((statistic) => (
-          <AdminStatCard key={statistic.label} {...statistic} />
-        ))}
+        <div className="flex items-center gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-cyan-400/15 bg-cyan-500/10 text-cyan-300">
+            <Bell aria-hidden="true" size={16} />
+          </span>
+          <div>
+            <p className="text-xs font-medium text-slate-200">
+              {unreadCount > 0
+                ? `You have ${unreadCount} unread notification${unreadCount === 1 ? '' : 's'}`
+                : 'No unread notifications'}
+            </p>
+            <p className="mt-0.5 text-[10px] text-slate-500">
+              {unreadCount > 0
+                ? 'Open the notification center to review them.'
+                : 'New system events will appear here.'}
+            </p>
+          </div>
+        </div>
+        <Link
+          to="/admin/notifications"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-2 text-[10px] font-medium text-cyan-300 transition hover:border-cyan-400/20 hover:text-cyan-200"
+        >
+          View notifications
+        </Link>
       </section>
 
-      {(localDataError || productError || userError) && (
-        <p
+      {dashboardError && (
+        <section
           role="alert"
-          className="rounded-xl border border-rose-300/15 bg-rose-400/[0.05] px-4 py-3 text-xs text-rose-200"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-400/20 bg-rose-500/[0.08] px-4 py-3"
         >
-          {localDataError || productError || userError}
-        </p>
+          <p className="text-sm text-rose-100">{dashboardError}</p>
+          <button
+            type="button"
+            onClick={refreshDashboard}
+            className="inline-flex items-center gap-2 rounded-lg border border-rose-300/20 px-3 py-2 text-xs font-medium text-rose-100 transition hover:bg-rose-400/10"
+          >
+            <RefreshCw aria-hidden="true" size={13} />
+            Try again
+          </button>
+        </section>
       )}
 
-      <section className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.9fr)] 2xl:gap-5">
-        <section className="min-w-0 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 sm:p-5 lg:p-6">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold text-white">
-                  Scraping activity
-                </h3>
-                <span className="rounded-md border border-blue-300/10 bg-blue-400/[0.06] px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-wide text-blue-200">
-                  Demo · last 7 days
-                </span>
-              </div>
-              <p className="mt-1 text-[10px] text-slate-500">
-                Completed and failed simulated runs; no live scraping is performed.
-              </p>
-            </div>
-            <div className="flex items-center gap-3 text-[9px] text-slate-500">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="size-1.5 rounded-full bg-cyan-300" />
-                Completed
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="size-1.5 rounded-full bg-rose-300" />
-                Failed
-              </span>
-            </div>
+      <section aria-label="Key performance indicators">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-400">
+              Key metrics
+            </h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Live totals sourced from the dashboard and backend APIs.
+            </p>
           </div>
-          {hasScrapingActivity ? (
-            <div className="mt-5 h-[235px] w-full min-w-0 sm:h-[270px]">
+        </div>
+
+        {dashboardLoading && !dashboard ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {Array.from({ length: 6 }, (_, index) => (
+              <SkeletonCard key={index} />
+            ))}
+          </div>
+        ) : dashboard ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {kpis.map((card) => (
+              <StatCard key={card.label} {...card} />
+            ))}
+          </div>
+        ) : (
+          <EmptyPanel
+            icon={Database}
+            title="Dashboard data unavailable"
+            description="The backend did not return dashboard metrics."
+          />
+        )}
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(340px,1fr)]">
+        <SectionCard
+          title="Scraping Activity"
+          description="Recent scraping execution records aggregated from available dashboard activity data."
+          action={
+            <span className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[10px] font-medium text-slate-400">
+              {totalScrapingJobs.toLocaleString()} total records
+            </span>
+          }
+          className="min-w-0"
+        >
+          {dashboardLoading && !dashboard ? (
+            <div className="h-[300px] animate-pulse rounded-xl bg-white/[0.03]" />
+          ) : scrapingActivityData.length === 0 ? (
+            <EmptyPanel
+              icon={Activity}
+              title="No scraping activity available"
+              description="Scraping execution history is not available yet or no dated scraping records were returned by the dashboard API."
+            />
+          ) : (
+            <div className="h-[320px] w-full min-w-0">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart
-                  data={chartData}
-                  margin={{ top: 8, right: 6, left: -18, bottom: 0 }}
-                >
+                <AreaChart data={scrapingActivityData} margin={{ top: 10, right: 8, left: -10, bottom: 0 }}>
                   <defs>
-                    <linearGradient
-                      id="admin-success-gradient"
-                      x1="0"
-                      y1="0"
-                      x2="0"
-                      y2="1"
-                    >
-                      <stop offset="0%" stopColor="#38bdf8" stopOpacity={0.22} />
-                      <stop offset="100%" stopColor="#38bdf8" stopOpacity={0} />
+                    <linearGradient id="scrape-completed" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="#22d3ee" stopOpacity={0} />
                     </linearGradient>
-                    <linearGradient
-                      id="admin-failed-gradient"
-                      x1="0"
-                      y1="0"
-                      x2="0"
-                      y2="1"
-                    >
-                      <stop offset="0%" stopColor="#fb7185" stopOpacity={0.14} />
+                    <linearGradient id="scrape-failed" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#fb7185" stopOpacity={0.3} />
                       <stop offset="100%" stopColor="#fb7185" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid
-                    stroke="rgba(148, 163, 184, 0.10)"
-                    strokeDasharray="3 5"
-                    vertical={false}
-                  />
+                  <CartesianGrid stroke="rgba(148,163,184,0.12)" strokeDasharray="3 5" vertical={false} />
                   <XAxis
-                    dataKey="day"
-                    tick={{ fill: '#64748b', fontSize: 10 }}
+                    dataKey="label"
+                    tick={{ fill: '#94a3b8', fontSize: 11 }}
                     tickLine={false}
                     axisLine={false}
-                    dy={9}
+                    dy={8}
                   />
                   <YAxis
                     allowDecimals={false}
-                    tick={{ fill: '#64748b', fontSize: 9 }}
+                    tick={{ fill: '#94a3b8', fontSize: 11 }}
                     tickLine={false}
                     axisLine={false}
-                    width={38}
+                    width={32}
                   />
                   <Tooltip
-                    cursor={{
-                      stroke: 'rgba(148, 163, 184, 0.22)',
-                      strokeDasharray: '4 4',
-                    }}
                     contentStyle={{
-                      background: '#111827',
+                      background: '#0f1728',
                       border: '1px solid rgba(255,255,255,0.1)',
                       borderRadius: '12px',
                       color: '#e2e8f0',
-                      fontSize: '11px',
+                      fontSize: '12px',
                     }}
-                    labelStyle={{ color: '#94a3b8', marginBottom: 5 }}
+                    labelStyle={{ color: '#94a3b8', marginBottom: 4 }}
                   />
                   <Area
                     type="monotone"
-                    dataKey="successful"
-                    name="Completed demo runs"
-                    stroke="#38bdf8"
+                    dataKey="completed"
+                    name="Completed"
+                    stroke="#22d3ee"
                     strokeWidth={2}
-                    fill="url(#admin-success-gradient)"
-                    activeDot={{ r: 4, fill: '#67e8f9', stroke: '#0d1320' }}
+                    fill="url(#scrape-completed)"
+                    activeDot={{ r: 4, fill: '#67e8f9', stroke: '#0f1728' }}
                   />
                   <Area
                     type="monotone"
                     dataKey="failed"
-                    name="Failed demo runs"
+                    name="Failed"
                     stroke="#fb7185"
-                    strokeWidth={1.6}
-                    fill="url(#admin-failed-gradient)"
-                    activeDot={{ r: 3, fill: '#fda4af', stroke: '#0d1320' }}
+                    strokeWidth={2}
+                    fill="url(#scrape-failed)"
+                    activeDot={{ r: 4, fill: '#fda4af', stroke: '#0f1728' }}
                   />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
-          ) : (
-            <p className="mt-5 flex h-[235px] items-center justify-center text-center text-xs text-slate-500 sm:h-[270px]">
-              {localData
-                ? 'No completed or failed demo runs were recorded in the last 7 days.'
-                : 'Loading browser demo job records…'}
-            </p>
           )}
-          <div className="mt-1 flex items-center justify-between border-t border-white/[0.06] pt-3 text-[9px] text-slate-600">
-            <span>Derived from this browser’s simulated job records</span>
-            <Link
-              to="/admin/scraping"
-              className="font-medium text-blue-300 transition hover:text-cyan-200"
-            >
-              View scraping management
-            </Link>
-          </div>
-        </section>
+        </SectionCard>
 
-        <section className="overflow-hidden rounded-2xl border border-white/[0.07] bg-[#0d1320]">
-          <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-4 sm:px-5">
-            <div>
-              <h3 className="text-sm font-semibold text-white">
-                Recent audit records
-              </h3>
-              <p className="mt-1 text-[10px] text-slate-500">
-                Browser demo data
-              </p>
-            </div>
+        <SectionCard
+          title="Recent Audit Records"
+          description="Latest audit log entries from the backend audit records API."
+          action={
             <Link
               to="/admin/audit-logs"
-              aria-label="View all audit logs"
-              className="rounded-lg p-2 text-slate-500 transition hover:bg-white/[0.04] hover:text-blue-200"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-2 text-xs font-medium text-slate-300 transition hover:border-cyan-400/20 hover:text-white"
             >
-              <span className="sr-only">View audit logs</span>
-              <Activity aria-hidden="true" size={16} />
+              <ClipboardList aria-hidden="true" size={14} />
+              Open audit log
             </Link>
+          }
+          className="min-w-0"
+        >
+          <div className="mb-4 flex items-center justify-between text-xs text-slate-500">
+            <span>{auditState.totalEvents.toLocaleString()} total audit events</span>
+            <span>Most recent records</span>
           </div>
-          <div className="divide-y divide-white/[0.05]">
-            {recentActivities.map((log) => {
-              const isSuccess = log.status === 'success'
-              const Icon = isSuccess ? Check : CircleAlert
-              return (
-                <article
-                  key={log.id}
-                  className="flex gap-3 px-4 py-3.5 transition hover:bg-white/[0.02] sm:px-5"
-                >
-                  <span
-                    className={`mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border ${
-                      isSuccess
-                        ? 'border-emerald-300/10 bg-emerald-400/[0.07] text-emerald-300'
-                        : 'border-rose-300/10 bg-rose-400/[0.07] text-rose-300'
-                    }`}
-                  >
-                    <Icon aria-hidden="true" size={15} />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
-                      <h4 className="text-[11px] font-medium text-slate-200">
-                        {log.action}
-                      </h4>
-                      <span className="text-[9px] text-slate-600">
-                        {formatActivityTime(log.timestamp)}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-[10px] leading-4 text-slate-500">
-                      {log.actor_name} · {log.description}
-                    </p>
-                  </div>
-                </article>
-              )
-            })}
-            {localData && recentActivities.length === 0 && (
-              <p className="px-5 py-8 text-center text-xs text-slate-500">
-                No browser audit records are available.
-              </p>
-            )}
-            {!localData && (
-              <p className="px-5 py-8 text-center text-xs text-slate-500">
-                {localDataError || 'Loading browser audit records…'}
-              </p>
-            )}
-          </div>
-          <Link
-            to="/admin/audit-logs"
-            className="block border-t border-white/[0.06] px-4 py-3 text-center text-[10px] font-medium text-slate-400 transition hover:bg-white/[0.025] hover:text-blue-200"
-          >
-            Open audit log
-          </Link>
-        </section>
+          <AuditRecords state={auditState} />
+        </SectionCard>
       </section>
 
       <section>
         <div className="mb-3">
-          <h3 className="text-sm font-semibold text-white">Data source status</h3>
-          <p className="mt-1 text-[10px] text-slate-500">
-            Current connectivity and execution scope; worker telemetry is not configured.
+          <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-400">
+            Data Source Status
+          </h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Connectivity and source availability for the admin dashboard.
           </p>
         </div>
-        <div className="grid gap-3 md:grid-cols-3">
-          <article className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 sm:p-5">
-            <div className="flex items-center gap-2.5">
-              <span className="flex size-8 items-center justify-center rounded-lg bg-blue-400/[0.08] text-blue-300">
-                <Server aria-hidden="true" size={16} />
-              </span>
-              <h4 className="text-[11px] font-medium text-slate-300">Backend API</h4>
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <article className="rounded-2xl border border-white/[0.08] bg-[#0f1728]/90 p-5 transition hover:border-cyan-400/20">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="flex size-10 items-center justify-center rounded-xl border border-blue-400/15 bg-blue-500/10 text-blue-300">
+                  <Server aria-hidden="true" size={18} />
+                </span>
+                <div>
+                  <h4 className="text-sm font-semibold text-white">Backend API</h4>
+                  <p className="mt-0.5 text-xs text-slate-500">Health and request availability</p>
+                </div>
+              </div>
+              <StatusBadge status={apiStatus} />
             </div>
-            <p className={`mt-4 text-lg font-semibold ${apiStatusTone}`}>
+            <p className="mt-4 text-sm text-slate-300">
               {apiStatus === 'online'
-                ? 'Online'
+                ? 'The backend health endpoint responded successfully.'
                 : apiStatus === 'offline'
-                  ? 'Unavailable'
-                  : 'Checking…'}
-            </p>
-            <p className="mt-1 text-[10px] text-slate-500">
-              {apiStatus === 'online'
-                ? 'Health endpoint responded successfully.'
-                : apiStatus === 'offline'
-                  ? 'Could not reach the backend health endpoint.'
-                  : 'Checking backend connectivity.'}
+                  ? 'The dashboard could not reach the backend health endpoint.'
+                  : 'Checking backend connectivity…'}
             </p>
           </article>
-          <article className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 sm:p-5">
-            <div className="flex items-center gap-2.5">
-              <span className="flex size-8 items-center justify-center rounded-lg bg-cyan-400/[0.08] text-cyan-300">
-                <Database aria-hidden="true" size={16} />
-              </span>
-              <h4 className="text-[11px] font-medium text-slate-300">
-                MongoDB product catalog
-              </h4>
+
+          <article className="rounded-2xl border border-white/[0.08] bg-[#0f1728]/90 p-5 transition hover:border-cyan-400/20">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="flex size-10 items-center justify-center rounded-xl border border-emerald-400/15 bg-emerald-500/10 text-emerald-300">
+                  <Database aria-hidden="true" size={18} />
+                </span>
+                <div>
+                  <h4 className="text-sm font-semibold text-white">MongoDB Product Catalog</h4>
+                  <p className="mt-0.5 text-xs text-slate-500">Dashboard aggregate data source</p>
+                </div>
+              </div>
+              <StatusBadge status={catalogStatus} />
             </div>
-            <p className="mt-4 text-lg font-semibold text-white">
-              {productCount === null
-                ? productError
-                  ? 'Unavailable'
-                  : 'Loading…'
-                : `${productCount.toLocaleString()} products`}
+            <p className="mt-4 text-sm text-slate-300">
+              {dashboard
+                ? `Live dashboard payload loaded from ${dashboard.meta.source} at ${formatDateTime(
+                    dashboard.meta.generated_at,
+                  )}.`
+                : dashboardLoading
+                  ? 'Loading catalog-backed dashboard data…'
+                  : 'Catalog-backed dashboard data is unavailable.'}
             </p>
-            <p className="mt-1 text-[10px] text-slate-500">
-              {productError || 'Count loaded from the admin product API.'}
-            </p>
+            {dashboard && (
+              <p className="mt-2 text-xs text-slate-500">
+                {dashboard.kpis.total_products.toLocaleString()} products across{' '}
+                {dashboard.kpis.total_stores.toLocaleString()} stores.
+              </p>
+            )}
           </article>
-          <article className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 sm:p-5">
-            <div className="flex items-center gap-2.5">
-              <span className="flex size-8 items-center justify-center rounded-lg bg-violet-400/[0.08] text-violet-300">
-                <Activity aria-hidden="true" size={16} />
-              </span>
-              <h4 className="text-[11px] font-medium text-slate-300">
-                Scraping execution
-              </h4>
+
+          <article className="rounded-2xl border border-white/[0.08] bg-[#0f1728]/90 p-5 transition hover:border-cyan-400/20">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="flex size-10 items-center justify-center rounded-xl border border-violet-400/15 bg-violet-500/10 text-violet-300">
+                  <Activity aria-hidden="true" size={18} />
+                </span>
+                <div>
+                  <h4 className="text-sm font-semibold text-white">Scraping Execution</h4>
+                  <p className="mt-0.5 text-xs text-slate-500">Recorded jobs and activity status</p>
+                </div>
+              </div>
+              <StatusBadge status={scrapingExecutionStatus} />
             </div>
-            <p className="mt-4 text-lg font-semibold text-white">
-              Simulated only
+            <p className="mt-4 text-sm text-slate-300">
+              {dashboard
+                ? `${totalScrapingJobs.toLocaleString()} scraping activity records available, with ${dashboard.kpis.active_scraping_jobs.toLocaleString()} active jobs reported.`
+                : dashboardLoading
+                  ? 'Loading scraping execution status…'
+                  : 'Scraping execution status is unavailable.'}
             </p>
-            <p className="mt-1 text-[10px] text-slate-500">
-              Demo controls do not start a scraper or network worker.
-            </p>
+            {dashboard && (
+              <p className="mt-2 text-xs text-slate-500">
+                Completed: {completedScrapingJobs.toLocaleString()} · Failed:{' '}
+                {failedScrapingJobs.toLocaleString()}
+              </p>
+            )}
           </article>
         </div>
       </section>
-
-      <p className="flex items-center justify-center gap-1.5 pb-1 text-center text-[9px] text-slate-600">
-        <Database aria-hidden="true" size={12} />
-        Product totals are MongoDB-backed; other counts and audit activity are
-        browser demo data.
-      </p>
     </div>
   )
 }

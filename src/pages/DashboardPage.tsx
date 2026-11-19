@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import {
   ArrowDownRight,
   ArrowRight,
@@ -8,43 +7,43 @@ import {
   Store,
 } from 'lucide-react'
 import { Link, useOutletContext } from 'react-router-dom'
-import { PriceTrendChart, RecentPriceChanges } from '../components/dashboard/PriceTrendChart'
+import {
+  PriceTrendChart,
+  RecentPriceChanges,
+} from '../components/dashboard/PriceTrendChart'
 import { PriceHighlights } from '../components/dashboard/PriceHighlights'
 import { StatCard } from '../components/dashboard/StatCard'
 import { DashboardErrorState } from '../components/dashboard/DashboardDataState'
-import type { AppOutletContext } from '../context/AppOutletContext'
+import type {
+  AppOutletContext,
+  ConnectionStatus,
+} from '../context/AppOutletContext'
 
-const dashboardDemoStates = ['loading', 'ready', 'empty', 'error'] as const
-type DashboardDemoState = (typeof dashboardDemoStates)[number]
+const statusLabels: Record<ConnectionStatus, string> = {
+  checking: 'Checking connection',
+  connected: 'MongoDB connected',
+  disconnected: 'MongoDB disconnected',
+  error: 'Connection unavailable',
+}
 
-function isDashboardDemoState(value: string): value is DashboardDemoState {
-  return dashboardDemoStates.some((state) => state === value)
+const statusDots: Record<ConnectionStatus, string> = {
+  checking: 'bg-blue-400',
+  connected: 'bg-emerald-400',
+  disconnected: 'bg-amber-400',
+  error: 'bg-rose-400',
 }
 
 export function DashboardPage() {
-  const { products, searchQuery, watchlistIds } =
-    useOutletContext<AppOutletContext>()
-  const [demoState, setDemoState] = useState<DashboardDemoState>('loading')
+  const {
+    products,
+    searchQuery,
+    watchlistIds,
+    dataSource,
+    dataError,
+    connectionStatus,
+    reloadData,
+  } = useOutletContext<AppOutletContext>()
 
-  useEffect(() => {
-    if (demoState !== 'loading') return
-
-    const timeoutId = window.setTimeout(() => setDemoState('ready'), 700)
-    return () => window.clearTimeout(timeoutId)
-  }, [demoState])
-
-  const statusLabel = {
-    loading: 'Loading demo data',
-    ready: 'All systems operational',
-    empty: 'No demo data',
-    error: 'Data unavailable',
-  }[demoState]
-  const statusDot = {
-    loading: 'bg-blue-400',
-    ready: 'bg-emerald-400',
-    empty: 'bg-slate-400',
-    error: 'bg-rose-400',
-  }[demoState]
   const storeCount = new Set(products.map((product) => product.store)).size
   const priceDropCount = products.filter(
     (product) => product.price < product.previousPrice,
@@ -62,97 +61,76 @@ export function DashboardPage() {
             Here&apos;s what&apos;s happening with tracked prices today.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-[#0d1320] px-3 py-2 text-[11px] text-slate-500">
-            <span>Preview</span>
-            <select
-              aria-label="Preview dashboard data state"
-              value={demoState}
-              onChange={(event) => {
-                const nextState = event.currentTarget.value
-                if (isDashboardDemoState(nextState)) setDemoState(nextState)
-              }}
-              className="cursor-pointer bg-transparent text-[11px] text-slate-300 outline-none"
-            >
-              <option value="ready">Ready</option>
-              <option value="loading">Loading</option>
-              <option value="empty">Empty</option>
-              <option value="error">Error</option>
-            </select>
-          </label>
-          <div className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-[#0d1320] px-3 py-2 text-[11px] text-slate-400">
-            <span className={`size-1.5 rounded-full ${statusDot}`} />
-            {statusLabel}
-          </div>
+        <div
+          className="flex items-center gap-2 rounded-xl border border-white/[0.07] bg-[#0d1320] px-3 py-2 text-[11px] text-slate-400"
+          aria-live="polite"
+        >
+          <span className={`size-1.5 rounded-full ${statusDots[connectionStatus]}`} />
+          {statusLabels[connectionStatus]}
         </div>
       </section>
 
-      {demoState === 'error' ? (
-        <DashboardErrorState onRetry={() => setDemoState('loading')} />
+      {dataSource === 'error' ? (
+        <DashboardErrorState onRetry={reloadData} message={dataError} />
       ) : (
         <>
-          <section aria-label="Price tracking summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <section
+            aria-label="Price tracking summary"
+            className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+          >
             <StatCard
               label="Total Products"
               value={products.length}
-              change="+12"
-              detail="this month"
+              detail="in the catalog"
               icon={PackageSearch}
               tone="blue"
-              loading={demoState === 'loading'}
-              empty={demoState === 'empty'}
+              loading={dataSource === 'loading'}
             />
             <StatCard
               label="Total Stores"
               value={storeCount}
-              change="+3"
-              detail="being monitored"
+              detail="in the catalog"
               icon={Store}
               tone="emerald"
-              loading={demoState === 'loading'}
-              empty={demoState === 'empty'}
+              loading={dataSource === 'loading'}
             />
             <StatCard
               label="Price Drops"
               value={priceDropCount}
-              change="+18.2%"
-              detail="this month"
+              detail="from stored prices"
               icon={ArrowDownRight}
               tone="emerald"
-              loading={demoState === 'loading'}
-              empty={demoState === 'empty'}
+              loading={dataSource === 'loading'}
             />
             <StatCard
               label="Watchlist"
               value={watchlistIds.length}
-              change="Synced"
-              detail="with Watchlist"
+              detail="saved products"
               icon={Bookmark}
               tone="blue"
-              loading={demoState === 'loading'}
-              empty={demoState === 'empty'}
+              loading={dataSource === 'loading'}
             />
           </section>
 
           <section className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,1fr)]">
             <PriceTrendChart
               products={products}
-              loading={demoState === 'loading'}
-              empty={demoState === 'empty'}
+              loading={dataSource === 'loading'}
+              empty={products.length === 0}
               searchQuery={searchQuery}
             />
             <RecentPriceChanges
               products={products}
-              loading={demoState === 'loading'}
-              empty={demoState === 'empty'}
+              loading={dataSource === 'loading'}
+              empty={products.length === 0}
               searchQuery={searchQuery}
             />
           </section>
 
           <PriceHighlights
             products={products}
-            loading={demoState === 'loading'}
-            empty={demoState === 'empty'}
+            loading={dataSource === 'loading'}
+            empty={products.length === 0}
             searchQuery={searchQuery}
           />
         </>

@@ -28,13 +28,11 @@ import type {
 } from '../context/AppOutletContext'
 import { api } from '../api/client'
 import type { Channel3Product } from '../api/client'
-import { createStorePriceHistory } from '../data/priceHistory'
 import type {
   PriceHistoryPeriod,
   PriceHistoryPoint,
 } from '../data/priceHistory'
 import type { DemoProduct } from '../data/products'
-import { getStoreOffers } from '../data/storeOffers'
 import type { StoreOffer } from '../data/storeOffers'
 
 type StoreHistory = { store: string; points: PriceHistoryPoint[] }
@@ -394,22 +392,19 @@ export function ProductDetailPage() {
     }
   }, [product])
 
-  const storeOffers = useMemo(() => {
-    if (dataSource === 'demo') {
-      return product ? getStoreOffers(product) : []
-    }
-
-    return remoteData && remoteData.productId === product?.id
-      ? remoteData.offers
-      : []
-  }, [dataSource, product, remoteData])
+  const storeOffers = useMemo(
+    () =>
+      remoteData && remoteData.productId === product?.id
+        ? remoteData.offers
+        : [],
+    [product, remoteData],
+  )
   const sortedOffers = useMemo(
     () => [...storeOffers].sort((first, second) => first.price - second.price),
     [storeOffers],
   )
   const histories = useMemo<StoreHistory[]>(() => {
     if (
-      dataSource === 'backend' &&
       remoteData &&
       remoteData.productId === product?.id &&
       remoteData.period === period
@@ -417,22 +412,8 @@ export function ProductDetailPage() {
       return remoteData.histories
     }
 
-    if (dataSource === 'demo') {
-      return product
-        ? storeOffers.map((offer, index) => ({
-            store: offer.store,
-            points: createStorePriceHistory(
-              product,
-              offer.price,
-              period,
-              index,
-            ),
-          }))
-        : []
-    }
-
     return []
-  }, [dataSource, period, product, remoteData, storeOffers])
+  }, [product, remoteData, period])
 
   if (!product) {
     return (
@@ -622,7 +603,7 @@ export function ProductDetailPage() {
           <div className="mt-6 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-white/[0.06] pt-4 text-[10px] text-slate-500">
             <span className="inline-flex items-center gap-1.5 text-emerald-300">
               <span className="size-1.5 rounded-full bg-emerald-400" />
-              Demo data current
+              Catalog data current
             </span>
             <span aria-hidden="true">·</span>
             <span>Last updated {lastUpdated}</span>
@@ -639,7 +620,7 @@ export function ProductDetailPage() {
           <p className="mt-1 text-[10px] text-slate-500">
             {channel3Product
               ? 'Product details from your catalog and Channel3'
-              : 'Product details from the demo catalog'}
+              : 'Product details from the shared catalog'}
           </p>
         </div>
         <dl className="grid gap-2 sm:grid-cols-2">

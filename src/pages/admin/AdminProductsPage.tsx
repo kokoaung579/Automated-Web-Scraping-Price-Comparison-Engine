@@ -1,4 +1,4 @@
-import { createElement, useEffect, useMemo, useState } from 'react'
+import { createElement, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   ArrowDown,
@@ -28,13 +28,19 @@ import {
 import {
   getProductCategories,
 } from '../../data/adminCategories'
-import { loadAdminStores } from '../../data/adminStores'
+import type { AdminStore } from '../../data/adminStores'
+import { getStores } from '../../services/storesApi'
 import type {
   ProductImportResult,
   ProductImportRow,
 } from '../../data/adminProducts'
 import type { Product } from '../../types/product'
-import { api } from '../../api/client'
+import {
+  api,
+  type BulkDeleteResponse,
+  type ProductExportAuditPayload,
+  type ProductImportAuditPayload,
+} from '../../api/client'
 import { products as demoProducts } from '../../data/products'
 
 type ProductFormValues = Pick<
@@ -156,18 +162,21 @@ function defaultFormValues(product: Product | null): ProductFormValues {
 function ProductFormDialog({
   product,
   products,
+  managedStores,
   onClose,
   onSave,
 }: {
   product: Product | null
   products: Product[]
+  managedStores: AdminStore[]
   onClose: () => void
-  onSave: (product: Product) => void
+  onSave: (product: Product) => Promise<void>
 }) {
   const [values, setValues] = useState<ProductFormValues>(() =>
     defaultFormValues(product),
   )
   const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
 
   function updateField(
     field: keyof ProductFormValues,
@@ -177,8 +186,9 @@ function ProductFormDialog({
     setError('')
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (saving) return
     const now = new Date().toISOString()
     const valuesToValidate = {
       ...values,
@@ -196,11 +206,15 @@ function ProductFormDialog({
       created_at: product?.created_at ?? now,
       updated_at: now,
     }
+    const knownStoreIds = new Set(managedStores.map((store) => store.store_id))
+    if (valuesToValidate.store_id) knownStoreIds.add(valuesToValidate.store_id)
+
     const result = validateProductImportRows(
       [{ rowNumber: 1, values: valuesToValidate }],
       products.filter(
         (existing) => existing.product_id !== product?.product_id,
       ),
+      knownStoreIds,
     )[0]
 
     if (!result.product) {
@@ -208,7 +222,12 @@ function ProductFormDialog({
       return
     }
 
-    onSave(result.product)
+    setSaving(true)
+    try {
+      await onSave(result.product)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -320,7 +339,15 @@ function ProductFormDialog({
                 className={`${fieldClassName} cursor-pointer`}
               >
                 <option value="">No store</option>
-                {loadAdminStores().map((store) => (
+                {values.store_id &&
+                  !managedStores.some(
+                    (store) => store.store_id === values.store_id,
+                  ) && (
+                    <option value={values.store_id}>
+                      {values.store_id} · Unassigned
+                    </option>
+                  )}
+                {managedStores.map((store) => (
                   <option key={store.store_id} value={store.store_id}>
                     {store.store_name} · {store.store_id}
                   </option>
@@ -433,7 +460,8 @@ function ProductFormDialog({
             </button>
             <button
               type="submit"
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-400"
+              disabled={saving}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Check aria-hidden="true" size={14} />
               {product ? 'Save changes' : 'Add manual product'}
@@ -578,15 +606,81 @@ function DeleteProductDialog({
   )
 }
 
+function BulkDeleteDialog({
+  count,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  count: number
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+      <button
+        type="button"
+        aria-label="Cancel bulk delete"
+        onClick={onCancel}
+        disabled={busy}
+        className="absolute inset-0 cursor-default"
+      />
+      <section
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="bulk-delete-title"
+        className="relative z-10 w-full max-w-md rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
+      >
+        <span className="flex size-10 items-center justify-center rounded-xl border border-rose-300/10 bg-rose-400/[0.07] text-rose-300">
+          <Trash2 aria-hidden="true" size={17} />
+        </span>
+        <h2
+          id="bulk-delete-title"
+          className="mt-4 text-sm font-semibold text-white"
+        >
+          Delete {count} selected {count === 1 ? 'product' : 'products'}?
+        </h2>
+        <p className="mt-1.5 text-xs leading-5 text-slate-400">
+          Only the {count} explicitly selected{' '}
+          {count === 1 ? 'product record' : 'product records'} will be removed.
+          Stores, categories, offers, price history, and audit logs are not
+          affected.
+        </p>
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-xl border border-white/[0.08] px-3.5 py-2 text-[11px] font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:opacity-40"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className="rounded-xl bg-rose-500/90 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {busy ? 'Deleting…' : `Delete ${count} selected`}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function ImportPreviewDialog({
   fileName,
   results,
+  busy,
   onCancel,
   onConfirm,
   onDownloadErrors,
 }: {
   fileName: string
   results: ProductImportResult[]
+  busy: boolean
   onCancel: () => void
   onConfirm: () => void
   onDownloadErrors: () => void
@@ -642,7 +736,8 @@ function ImportPreviewDialog({
             <button
               type="button"
               onClick={onDownloadErrors}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-2.5 py-1.5 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.04]"
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-2.5 py-1.5 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:opacity-40"
             >
               <Download aria-hidden="true" size={12} />
               Download error report
@@ -704,22 +799,32 @@ function ImportPreviewDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-xl border border-white/[0.08] px-4 py-2.5 text-xs font-medium text-slate-300 transition hover:bg-white/[0.04]"
+            disabled={busy}
+            className="rounded-xl border border-white/[0.08] px-4 py-2.5 text-xs font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:opacity-40"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={onConfirm}
-            disabled={validCount === 0}
+            disabled={busy || validCount === 0}
             className="rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Import {validCount} valid {validCount === 1 ? 'product' : 'products'}
+            {busy
+              ? 'Importing…'
+              : `Import ${validCount} valid ${validCount === 1 ? 'product' : 'products'}`}
           </button>
         </div>
       </section>
     </div>
   )
+}
+
+function newAuditOperationId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 function formatPrice(price: number, currency: string): string {
@@ -839,6 +944,7 @@ export function AdminProductsPage() {
     products: Product[]
     error: string
   }>({ products: [], error: '' })
+  const [managedStores, setManagedStores] = useState<AdminStore[]>([])
   const [loading, setLoading] = useState(true)
   const products = catalog.products
   const [searchQuery, setSearchQuery] = useState('')
@@ -854,12 +960,23 @@ export function AdminProductsPage() {
   const [deletingProduct, setDeletingProduct] = useState<Product | null>(
     null,
   )
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(
+    () => new Set(),
+  )
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [importPreview, setImportPreview] = useState<{
     fileName: string
+    operationId: string
     results: ProductImportResult[]
   } | null>(null)
   const [feedback, setFeedback] = useState('')
   const [busy, setBusy] = useState(false)
+  const saveInFlight = useRef(false)
+  const importInFlight = useRef(false)
+  const exportInFlight = useRef(false)
+  const bulkExportInFlight = useRef(false)
+  const bulkDeleteInFlight = useRef(false)
+  const selectAllRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -885,7 +1002,17 @@ export function AdminProductsPage() {
       }
     }
 
+    async function loadManagedStores() {
+      try {
+        const stores = await getStores()
+        if (!cancelled) setManagedStores(stores)
+      } catch (error) {
+        console.error('Unable to load MongoDB stores for products', error)
+      }
+    }
+
     void loadProducts()
+    void loadManagedStores()
 
     return () => {
       cancelled = true
@@ -897,15 +1024,12 @@ export function AdminProductsPage() {
     [products],
   )
   const stores = useMemo(
-    () =>
-      [
-        ...new Set(
-          products
-            .map((product) => product.store_id)
-            .filter((storeId): storeId is string => storeId !== null),
-        ),
-      ].sort(),
-    [products],
+    () => managedStores.map((store) => store.store_id).sort(),
+    [managedStores],
+  )
+  const knownStoreIds = useMemo(
+    () => new Set(stores),
+    [stores],
   )
   const filteredProducts = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -917,10 +1041,15 @@ export function AdminProductsPage() {
         product.category.toLowerCase().includes(query) ||
         (product.store_id ?? '').toLowerCase().includes(query) ||
         product.product_id.toLowerCase().includes(query)
+      const matchesStore =
+        storeFilter === 'all' ||
+        (storeFilter === 'unassigned'
+          ? !product.store_id || !knownStoreIds.has(product.store_id)
+          : product.store_id === storeFilter)
       return (
         matchesSearch &&
         (categoryFilter === 'all' || product.category === categoryFilter) &&
-        (storeFilter === 'all' || product.store_id === storeFilter) &&
+        matchesStore &&
         (availabilityFilter === 'all' ||
           product.availability === availabilityFilter) &&
         (sourceFilter === 'all' || product.source_type === sourceFilter)
@@ -929,11 +1058,66 @@ export function AdminProductsPage() {
   }, [
     availabilityFilter,
     categoryFilter,
+    knownStoreIds,
     products,
     searchQuery,
     sourceFilter,
     storeFilter,
   ])
+
+  // A selection only ever contains rows that are currently visible. Filtering
+  // the catalog therefore cannot leave an invisible product selected.
+  const selectedProducts = useMemo(
+    () =>
+      filteredProducts.filter((product) =>
+        selectedProductIds.has(product.product_id),
+      ),
+    [filteredProducts, selectedProductIds],
+  )
+  const selectedCount = selectedProducts.length
+  const allVisibleSelected =
+    filteredProducts.length > 0 && selectedCount === filteredProducts.length
+  const someVisibleSelected = selectedCount > 0 && !allVisibleSelected
+
+  useEffect(() => {
+    const visibleIds = new Set(
+      filteredProducts.map((product) => product.product_id),
+    )
+    setSelectedProductIds((previous) => {
+      const next = new Set<string>()
+      previous.forEach((id) => {
+        if (visibleIds.has(id)) next.add(id)
+      })
+      return next.size === previous.size ? previous : next
+    })
+  }, [filteredProducts])
+
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate = someVisibleSelected
+    }
+  }, [someVisibleSelected])
+
+  function toggleProductSelection(productId: string) {
+    setSelectedProductIds((previous) => {
+      const next = new Set(previous)
+      if (next.has(productId)) next.delete(productId)
+      else next.add(productId)
+      return next
+    })
+  }
+
+  function toggleAllVisibleSelection() {
+    setSelectedProductIds(
+      allVisibleSelected
+        ? new Set()
+        : new Set(filteredProducts.map((product) => product.product_id)),
+    )
+  }
+
+  function clearSelection() {
+    setSelectedProductIds(new Set())
+  }
 
   function openCreateForm() {
     setEditingProduct(null)
@@ -948,7 +1132,14 @@ export function AdminProductsPage() {
   }
 
   async function saveProduct(product: Product) {
+    if (saveInFlight.current) return
+    saveInFlight.current = true
+
     const existing = editingProduct
+    const successMessage = existing
+      ? `${product.product_name} updated.`
+      : `${product.product_name} added as a manual product.`
+
     setBusy(true)
     setFeedback('')
 
@@ -959,15 +1150,20 @@ export function AdminProductsPage() {
         await api.createAdminProduct(product)
       }
 
-      const refreshedProducts = await api.adminProducts()
-      setCatalog({ products: refreshedProducts, error: '' })
-      setFeedback(
-        existing
-          ? `${product.product_name} updated.`
-          : `${product.product_name} added as a manual product.`,
-      )
+      // The write succeeded. Close the form before refreshing so a failed GET
+      // cannot make the user submit the same CREATE action a second time.
       setFormOpen(false)
       setEditingProduct(null)
+      setFeedback(successMessage)
+      try {
+        const refreshedProducts = await api.adminProducts()
+        setCatalog({ products: refreshedProducts, error: '' })
+      } catch {
+        setCatalog((previous) => ({
+          ...previous,
+          error: `${successMessage} The catalog could not be refreshed; reload the page to see the latest data.`,
+        }))
+      }
     } catch (error) {
       setFeedback(
         error instanceof Error
@@ -975,6 +1171,7 @@ export function AdminProductsPage() {
           : 'Could not save product changes.',
       )
     } finally {
+      saveInFlight.current = false
       setBusy(false)
     }
   }
@@ -1002,20 +1199,168 @@ export function AdminProductsPage() {
     }
   }
 
+  async function recordImportAudit(
+    payload: ProductImportAuditPayload,
+  ): Promise<boolean> {
+    try {
+      await api.recordProductImportAudit(payload)
+      return true
+    } catch (error) {
+      console.error('Unable to record product import audit', error)
+      return false
+    }
+  }
+
+  async function recordExportAudit(
+    payload: ProductExportAuditPayload,
+  ): Promise<boolean> {
+    try {
+      await api.recordProductExportAudit(payload)
+      return true
+    } catch (error) {
+      console.error('Unable to record product export audit', error)
+      return false
+    }
+  }
+
   async function exportProducts() {
+    if (exportInFlight.current) return
+    exportInFlight.current = true
+
+    const fileName = 'pricepilot-products.xlsx'
+    const operationId = newAuditOperationId()
+    const filters: Record<string, string> = {}
+    if (searchQuery.trim()) filters.search = searchQuery.trim()
+    if (categoryFilter !== 'all') filters.category = categoryFilter
+    if (storeFilter !== 'all') filters.store = storeFilter
+    if (availabilityFilter !== 'all') filters.availability = availabilityFilter
+    if (sourceFilter !== 'all') filters.source = sourceFilter
+
+    setBusy(true)
+    setFeedback('')
     try {
       await downloadWorkbook(
-        products,
-        'pricepilot-products.xlsx',
+        filteredProducts,
+        fileName,
         PRODUCT_SCHEMA_FIELDS,
       )
-      setFeedback(`Exported ${products.length} products to Excel.`)
+      const auditRecorded = await recordExportAudit({
+        operationId,
+        fileName,
+        exportedCount: filteredProducts.length,
+        filters,
+      })
+      setFeedback(
+        `Exported ${filteredProducts.length} products to Excel.${auditRecorded ? '' : ' Audit event could not be recorded.'}`,
+      )
+    } catch (error) {
+      await recordExportAudit({
+        operationId,
+        fileName,
+        exportedCount: 0,
+        filters,
+        failed: true,
+        reason: 'workbook generation failed',
+      })
+      setFeedback(
+        `${error instanceof Error ? `Export failed: ${error.message}` : 'Export failed.'} The failure was recorded in Audit Logs.`,
+      )
+    } finally {
+      setBusy(false)
+      exportInFlight.current = false
+    }
+  }
+
+  async function exportSelectedProducts() {
+    if (selectedCount === 0 || bulkExportInFlight.current) return
+    bulkExportInFlight.current = true
+
+    const fileName = 'pricepilot-selected-products.xlsx'
+    const operationId = newAuditOperationId()
+    const exportedProducts = [...selectedProducts]
+
+    setBusy(true)
+    setFeedback('')
+    try {
+      await downloadWorkbook(
+        exportedProducts,
+        fileName,
+        PRODUCT_SCHEMA_FIELDS,
+      )
+      // Audit only after the download has actually completed. A failed or
+      // cancelled bulk export deliberately produces no event.
+      const auditRecorded = await recordExportAudit({
+        operationId,
+        fileName,
+        exportedCount: exportedProducts.length,
+        selectedCount: exportedProducts.length,
+        scope: 'selected',
+      })
+      setFeedback(
+        `Exported ${exportedProducts.length} selected products to Excel.${auditRecorded ? '' : ' Audit event could not be recorded.'}`,
+      )
     } catch (error) {
       setFeedback(
         error instanceof Error
-          ? `Export failed: ${error.message}`
-          : 'Export failed.',
+          ? `Bulk export failed: ${error.message}`
+          : 'Bulk export failed.',
       )
+    } finally {
+      setBusy(false)
+      bulkExportInFlight.current = false
+    }
+  }
+
+  async function confirmBulkDelete() {
+    if (selectedCount === 0 || bulkDeleteInFlight.current) return
+    bulkDeleteInFlight.current = true
+
+    const productIds = selectedProducts.map((product) => product.product_id)
+    const operationId = newAuditOperationId()
+
+    setBusy(true)
+    setFeedback('')
+    try {
+      const result: BulkDeleteResponse = await api.bulkDeleteProducts({
+        operationId,
+        productIds,
+        confirm: true,
+      })
+
+      setBulkDeleteOpen(false)
+      setSelectedProductIds(new Set())
+      try {
+        const refreshedProducts = await api.adminProducts()
+        setCatalog({ products: refreshedProducts, error: '' })
+      } catch {
+        setCatalog((previous) => ({
+          ...previous,
+          error: 'The catalog could not be refreshed; reload the page to see the latest data.',
+        }))
+      }
+
+      const failureIds = result.failed
+        .map((item) => item.product_id)
+        .slice(0, 5)
+        .join(', ')
+      const failureNote = result.failed_count
+        ? ` ${result.failed_count} failed${failureIds ? `: ${failureIds}` : ''}.`
+        : ''
+      const auditNote = result.audit_recorded
+        ? ''
+        : ' Audit event could not be recorded.'
+      setFeedback(
+        `Deleted ${result.deleted_count} of ${result.requested_count} selected products.${failureNote}${auditNote}`,
+      )
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? `Could not delete selected products: ${error.message}`
+          : 'Could not delete selected products.',
+      )
+    } finally {
+      setBusy(false)
+      bulkDeleteInFlight.current = false
     }
   }
 
@@ -1037,25 +1382,47 @@ export function AdminProductsPage() {
   }
 
   async function handleImportFile(file: File | undefined) {
+    // A cancelled file picker supplies no file and must not create an audit event.
     if (!file) return
+
+    const operationId = newAuditOperationId()
     setFeedback('')
     if (!file.name.toLowerCase().endsWith('.xlsx')) {
-      setFeedback('Choose an .xlsx workbook to import.')
+      const auditRecorded = await recordImportAudit({
+        operationId,
+        fileName: file.name,
+        totalRows: 0,
+        importedCount: 0,
+        failedCount: 0,
+        failed: true,
+        reason: 'unsupported file type',
+      })
+      setFeedback(
+        `Choose an .xlsx workbook to import.${auditRecorded ? ' The failure was recorded in Audit Logs.' : ''}`,
+      )
       return
     }
+
     setBusy(true)
     try {
       const rows = await parseImportRows(file)
       if (!rows.length) {
         throw new Error('The worksheet does not contain any product rows.')
       }
-      const results = validateProductImportRows(rows, products)
-      setImportPreview({ fileName: file.name, results })
+      const results = validateProductImportRows(rows, products, stores)
+      setImportPreview({ fileName: file.name, operationId, results })
     } catch (error) {
+      const auditRecorded = await recordImportAudit({
+        operationId,
+        fileName: file.name,
+        totalRows: 0,
+        importedCount: 0,
+        failedCount: 0,
+        failed: true,
+        reason: 'workbook could not be read',
+      })
       setFeedback(
-        error instanceof Error
-          ? `Import could not be previewed: ${error.message}`
-          : 'Import could not be previewed.',
+        `${error instanceof Error ? `Import could not be previewed: ${error.message}` : 'Import could not be previewed.'}${auditRecorded ? ' The failure was recorded in Audit Logs.' : ''}`,
       )
     } finally {
       setBusy(false)
@@ -1095,11 +1462,17 @@ export function AdminProductsPage() {
   }
 
   async function confirmImport() {
-    if (!importPreview) return
-    const validProducts = importPreview.results.flatMap((row) =>
+    if (!importPreview || importInFlight.current) return
+    importInFlight.current = true
+
+    const { fileName, operationId, results } = importPreview
+    const validProducts = results.flatMap((row) =>
       row.product ? [row.product] : [],
     )
-    if (!validProducts.length) return
+    if (!validProducts.length) {
+      importInFlight.current = false
+      return
+    }
 
     setBusy(true)
     setFeedback('')
@@ -1116,27 +1489,56 @@ export function AdminProductsPage() {
         }
       }
 
-      const refreshedProducts = await api.adminProducts()
-      setCatalog({ products: refreshedProducts, error: '' })
+      // One summary event for the whole operation, after every row write has
+      // finished. Individual product CREATE events remain unchanged.
+      const auditRecorded = await recordImportAudit({
+        operationId,
+        fileName,
+        totalRows: results.length,
+        importedCount,
+        failedCount: results.length - importedCount,
+      })
+
+      try {
+        const refreshedProducts = await api.adminProducts()
+        setCatalog({ products: refreshedProducts, error: '' })
+      } catch {
+        setCatalog((previous) => ({
+          ...previous,
+          error: 'The catalog could not be refreshed; reload the page to see the latest data.',
+        }))
+      }
       setImportPreview(null)
 
+      const auditNote = auditRecorded
+        ? ''
+        : ' Audit event could not be recorded.'
       if (failedIds.length > 0) {
         setFeedback(
-          `Imported ${importedCount} products. ${failedIds.length} failed: ${failedIds.slice(0, 5).join(', ')}${failedIds.length > 5 ? ', …' : ''}.`,
+          `Imported ${importedCount} products. ${failedIds.length} failed: ${failedIds.slice(0, 5).join(', ')}${failedIds.length > 5 ? ', …' : ''}.${auditNote}`,
         )
       } else {
         setFeedback(
-          `Imported ${importedCount} valid products. Invalid rows were skipped.`,
+          `Imported ${importedCount} valid products. Invalid rows were skipped.${auditNote}`,
         )
       }
     } catch (error) {
+      const auditRecorded = await recordImportAudit({
+        operationId,
+        fileName,
+        totalRows: results.length,
+        importedCount,
+        failedCount: results.length - importedCount,
+        failed: true,
+        reason: 'import operation failed',
+      })
+      setImportPreview(null)
       setFeedback(
-        error instanceof Error
-          ? `Import completed with a refresh error: ${error.message}`
-          : 'Import completed, but the product list could not be refreshed.',
+        `${error instanceof Error ? `Import failed: ${error.message}` : 'Import failed.'}${auditRecorded ? ' The failure was recorded in Audit Logs.' : ''}`,
       )
     } finally {
       setBusy(false)
+      importInFlight.current = false
     }
   }
 
@@ -1146,6 +1548,8 @@ export function AdminProductsPage() {
   const manualCount = products.filter(
     (product) => product.source_type === 'manual',
   ).length
+  const bulkActionsDisabled =
+    loading || busy || Boolean(catalog.error) || selectedCount === 0
 
   return (
     <div className="space-y-6 sm:space-y-7">
@@ -1172,7 +1576,7 @@ export function AdminProductsPage() {
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.025] px-3.5 py-2.5 text-[11px] font-medium text-slate-300 transition hover:bg-white/[0.06] disabled:opacity-40"
           >
             <FileSpreadsheet aria-hidden="true" size={14} />
-            Download Template
+            Download Files
           </button>
           <button
             type="button"
@@ -1223,7 +1627,9 @@ export function AdminProductsPage() {
         <p
           role="status"
           className={`rounded-xl border px-4 py-2.5 text-xs ${
-            feedback.includes('could not') || feedback.includes('Could not')
+            feedback.includes('could not') ||
+            feedback.includes('Could not') ||
+            feedback.includes('failed')
               ? 'border-rose-300/10 bg-rose-400/[0.05] text-rose-200'
               : 'border-emerald-300/10 bg-emerald-400/[0.05] text-emerald-200'
           }`}
@@ -1315,6 +1721,7 @@ export function AdminProductsPage() {
                 className={`${fieldClassName} cursor-pointer`}
               >
                 <option value="all">All stores</option>
+                <option value="unassigned">Unassigned</option>
                 {stores.map((store) => (
                   <option key={store} value={store}>
                     {store}
@@ -1352,13 +1759,60 @@ export function AdminProductsPage() {
               </select>
             </label>
           </div>
+
+          <div className="flex flex-col gap-2 border-t border-white/[0.06] px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+            <div className="flex items-center gap-2 text-[11px] text-slate-400">
+              <span aria-live="polite">
+                {selectedCount} {selectedCount === 1 ? 'product' : 'products'} selected
+              </span>
+              <button
+                type="button"
+                onClick={clearSelection}
+                disabled={selectedCount === 0 || busy}
+                className="rounded-lg border border-white/[0.08] px-2.5 py-1 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Clear Selection
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={exportSelectedProducts}
+                disabled={bulkActionsDisabled}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-cyan-300/10 bg-cyan-400/[0.05] px-3 py-2 text-[10px] font-medium text-cyan-200 transition hover:bg-cyan-400/[0.1] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Download aria-hidden="true" size={12} />
+                Export Selected
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkDeleteOpen(true)}
+                disabled={bulkActionsDisabled}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-rose-300/10 bg-rose-400/[0.05] px-3 py-2 text-[10px] font-medium text-rose-200 transition hover:bg-rose-400/[0.1] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Trash2 aria-hidden="true" size={12} />
+                Delete Selected
+              </button>
+            </div>
+          </div>
         </div>
 
         {filteredProducts.length > 0 ? (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1120px] border-collapse text-left">
+            <table className="w-full min-w-[1160px] border-collapse text-left">
               <thead>
                 <tr className="border-b border-white/[0.06] bg-white/[0.015] text-[9px] font-semibold uppercase tracking-[0.13em] text-slate-500">
+                  <th scope="col" className="px-4 py-3.5 font-semibold">
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      aria-label="Select all visible products"
+                      checked={allVisibleSelected}
+                      onChange={toggleAllVisibleSelection}
+                      disabled={filteredProducts.length === 0}
+                      className="size-3.5 cursor-pointer accent-blue-500"
+                    />
+                  </th>
                   <th scope="col" className="px-5 py-3.5 font-semibold">
                     Image
                   </th>
@@ -1391,6 +1845,17 @@ export function AdminProductsPage() {
                     key={product.product_id}
                     className="group transition-colors hover:bg-white/[0.02]"
                   >
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${product.product_id}`}
+                        checked={selectedProductIds.has(product.product_id)}
+                        onChange={() =>
+                          toggleProductSelection(product.product_id)
+                        }
+                        className="size-3.5 cursor-pointer accent-blue-500"
+                      />
+                    </td>
                     <td className="px-5 py-3">
                       <ProductThumbnail product={product} />
                     </td>
@@ -1417,7 +1882,9 @@ export function AdminProductsPage() {
                           size={12}
                           className="text-slate-600"
                         />
-                        {product.store_id ?? '—'}
+                        {product.store_id && knownStoreIds.has(product.store_id)
+                          ? product.store_id
+                          : 'Unassigned'}
                       </span>
                     </td>
                     <td className="px-3 py-3 text-right text-xs font-semibold text-slate-200">
@@ -1503,6 +1970,7 @@ export function AdminProductsPage() {
           key={editingProduct?.product_id ?? 'new'}
           product={editingProduct}
           products={products}
+          managedStores={managedStores}
           onClose={() => {
             setFormOpen(false)
             setEditingProduct(null)
@@ -1523,10 +1991,19 @@ export function AdminProductsPage() {
           onConfirm={confirmDelete}
         />
       )}
+      {bulkDeleteOpen && (
+        <BulkDeleteDialog
+          count={selectedCount}
+          busy={busy}
+          onCancel={() => setBulkDeleteOpen(false)}
+          onConfirm={confirmBulkDelete}
+        />
+      )}
       {importPreview && (
         <ImportPreviewDialog
           fileName={importPreview.fileName}
           results={importPreview.results}
+          busy={busy}
           onCancel={() => setImportPreview(null)}
           onConfirm={confirmImport}
           onDownloadErrors={downloadErrorReport}

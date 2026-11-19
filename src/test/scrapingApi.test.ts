@@ -1,10 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getSeedScrapingJobs } from '../data/adminScraping'
+import type { AdminStore } from '../data/adminStores'
 import {
   createScrapingApiClient,
   resolveScrapingApiMode,
 } from '../services/scrapingApi'
 import type { ScrapingApiEndpoints } from '../services/scrapingApi'
+
+const amazonStore: AdminStore = {
+  store_id: 'amazon',
+  store_name: 'Amazon',
+  website_url: 'https://www.amazon.com',
+  logo_url: null,
+  status: 'Active',
+  created_at: '2026-11-13T00:00:00.000Z',
+  updated_at: '2026-11-13T00:00:00.000Z',
+}
 
 const endpoints: ScrapingApiEndpoints = {
   createJob: { path: '/jobs', method: 'POST' },
@@ -34,7 +45,7 @@ describe('scraping API configuration and client', () => {
   })
 
   it('sends typed job operations to configured paths without hardcoding endpoint routes', async () => {
-    const job = getSeedScrapingJobs()[0]
+    const job = getSeedScrapingJobs([amazonStore])[0]
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify(job), {
         status: 200,

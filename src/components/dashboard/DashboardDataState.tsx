@@ -39,8 +39,10 @@ export function DashboardEmptyState({
 
 export function DashboardErrorState({
   onRetry,
+  message,
 }: {
   onRetry: () => void
+  message?: string | null
 }) {
   return (
     <section
@@ -54,8 +56,9 @@ export function DashboardErrorState({
         Dashboard data couldn&apos;t load
       </h2>
       <p className="mt-1 max-w-sm text-xs leading-5 text-slate-500">
-        Something went wrong while preparing the demo data. Try loading it
-        again.
+        {message
+          ? `Unable to load data from the backend: ${message}`
+          : 'Something went wrong while loading data from the backend. Try again.'}
       </p>
       <button
         type="button"

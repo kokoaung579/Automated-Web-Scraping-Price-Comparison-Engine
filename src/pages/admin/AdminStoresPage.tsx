@@ -1,5 +1,5 @@
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   createStore,
@@ -7,6 +7,7 @@ import {
   getStores,
   updateStore,
 } from '../../services/storesApi'
+import type { StoreWithProductCount } from '../../services/storesApi'
 import {
   Check,
   Globe2,
@@ -21,15 +22,9 @@ import {
 import {
   getStoreIdFromName,
   isValidStoreWebsiteUrl,
-  loadAdminStores,
   normalizeStoreWebsiteUrl,
-  saveAdminStores,
 } from '../../data/adminStores'
 import type { AdminStore } from '../../data/adminStores'
-import { loadAdminProducts } from '../../data/adminProducts'
-import type { Product } from '../../types/product'
-import { getStoreOffers } from '../../data/storeOffers'
-import { products as demoProducts } from '../../data/products'
 
 type StoreValues = Pick<
   AdminStore,
@@ -59,9 +54,12 @@ function StoreDialog({
     store?.status ?? 'Active',
   )
   const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const saveInFlight = useRef(false)
 
-async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-  event.preventDefault()
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (saveInFlight.current) return
 
     const normalizedName = storeName.trim()
     const normalizedWebsite = websiteUrl.trim()
@@ -109,15 +107,25 @@ async function handleSubmit(event: FormEvent<HTMLFormElement>) {
       return
     }
 
-    const saveError = await onSave({
-  store_name: normalizedName,
-  website_url: normalizedWebsite,
-  logo_url: normalizedLogo || null,
-  status,
-})
+    saveInFlight.current = true
+    setSaving(true)
+    try {
+      const saveError = await onSave({
+        store_name: normalizedName,
+        website_url: normalizedWebsite,
+        logo_url: normalizedLogo || null,
+        status,
+      })
 
-if (saveError) setError(saveError)
-else onClose()
+      if (saveError) {
+        setError(saveError)
+        return
+      }
+      onClose()
+    } finally {
+      saveInFlight.current = false
+      setSaving(false)
+    }
   }
 
   const storeId = store?.store_id ?? getStoreIdFromName(storeName)
@@ -270,10 +278,11 @@ else onClose()
 
             <button
               type="submit"
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-400"
+              disabled={saving}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Check aria-hidden="true" size={14} />
-              Save store
+              {saving ? 'Saving…' : 'Save store'}
             </button>
           </div>
         </form>
@@ -285,14 +294,12 @@ else onClose()
 function DeleteStoreDialog({
   store,
   productCount,
-  offerCount,
   error,
   onCancel,
   onConfirm,
 }: {
   store: AdminStore
   productCount: number
-  offerCount: number
   error: string
   onCancel: () => void
   onConfirm: () => void
@@ -330,11 +337,10 @@ function DeleteStoreDialog({
           will be removed from the store directory.
         </p>
 
-        {productCount > 0 || offerCount > 0 ? (
+        {productCount > 0 ? (
           <p className="mt-3 rounded-lg border border-amber-300/10 bg-amber-400/[0.06] px-3 py-2 text-[10px] leading-4 text-amber-100">
             Cannot delete this store: it is linked to {productCount}{' '}
-            {productCount === 1 ? 'product' : 'products'} and {offerCount}{' '}
-            {offerCount === 1 ? 'price offer' : 'price offers'}.
+            {productCount === 1 ? 'product' : 'products'}.
           </p>
         ) : null}
 
@@ -359,7 +365,7 @@ function DeleteStoreDialog({
           <button
             type="button"
             onClick={onConfirm}
-            disabled={productCount > 0 || offerCount > 0}
+            disabled={productCount > 0}
             className="rounded-xl bg-rose-500/90 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Delete store
@@ -371,136 +377,62 @@ function DeleteStoreDialog({
 }
 
 export function AdminStoresPage() {
-  const [catalog, setCatalog] = useState(() => {
-    try {
-      return {
-        stores: loadAdminStores(),
-        products: loadAdminProducts(),
-        error: '',
-      }
-    } catch (error) {
-      return {
-        stores: [] as AdminStore[],
-        products: [] as Product[],
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Could not load saved store data.',
-      }
-    }
-  })
-
+  const [stores, setStores] = useState<StoreWithProductCount[]>([])
+  const [storeError, setStoreError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<
     'all' | AdminStore['status']
   >('all')
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingStore, setEditingStore] = useState<AdminStore | null>(null)
-  const [deletingStore, setDeletingStore] = useState<AdminStore | null>(null)
+  const [deletingStore, setDeletingStore] =
+    useState<StoreWithProductCount | null>(null)
   const [deleteError, setDeleteError] = useState('')
   const [feedback, setFeedback] = useState('')
 
-  const [backendProductCounts, setBackendProductCounts] = useState<
-    Map<string, number>
-  >(() => new Map())
-  const [backendStoreIds, setBackendStoreIds] = useState<Set<string>>(
-  () => new Set(),
-)
-
-  const stores = catalog.stores
-  const products = catalog.products
+  async function refreshStores() {
+    try {
+      const backendStores = await getStores()
+      setStores(
+        [...backendStores].sort((a, b) =>
+          a.store_name.localeCompare(b.store_name),
+        ),
+      )
+      setStoreError('')
+    } catch (error) {
+      setStoreError(
+        error instanceof Error
+          ? error.message
+          : 'Could not load stores from server.',
+      )
+    }
+  }
 
   useEffect(() => {
-    let cancelled = false
+    let active = true
 
-    async function fetchStores() {
-      try {
-        const backendStores = await getStores()
-
-        if (cancelled) return
-
-        setBackendProductCounts(
-          new Map(
-            backendStores.map((store) => [
-              store.store_id,
-              store.product_count,
-            ]),
+    getStores()
+      .then((backendStores) => {
+        if (!active) return
+        setStores(
+          [...backendStores].sort((a, b) =>
+            a.store_name.localeCompare(b.store_name),
           ),
         )
-        setBackendStoreIds(
-  new Set(backendStores.map((store) => store.store_id)),
-)
-
-        setCatalog((current) => {
-          const backendStoreIds = new Set(
-            backendStores.map((store) => store.store_id),
-          )
-
-          const localOnlyStores = current.stores.filter(
-            (store) => !backendStoreIds.has(store.store_id),
-          )
-
-          return {
-            ...current,
-            stores: [
-              ...backendStores.map(
-                ({ product_count, ...store }) => store,
-              ),
-              ...localOnlyStores,
-            ].sort((a, b) =>
-              a.store_name.localeCompare(b.store_name),
-            ),
-            error: '',
-          }
-        })
-      } catch (error) {
-        if (!cancelled) {
-          setCatalog((current) => ({
-            ...current,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'Could not load stores from server.',
-          }))
-        }
-      }
-    }
-
-    fetchStores()
+        setStoreError('')
+      })
+      .catch((error: unknown) => {
+        if (!active) return
+        setStoreError(
+          error instanceof Error
+            ? error.message
+            : 'Could not load stores from server.',
+        )
+      })
 
     return () => {
-      cancelled = true
+      active = false
     }
-  }, [])
-
-  const productCounts = useMemo(() => {
-    const counts = new Map<string, number>()
-
-    products.forEach((product) => {
-      if (product.store_id) {
-        const storeId = getStoreIdFromName(product.store_id)
-
-        counts.set(
-          storeId,
-          (counts.get(storeId) ?? 0) + 1,
-        )
-      }
-    })
-
-    return counts
-  }, [products])
-
-  const offerCounts = useMemo(() => {
-    const counts = new Map<string, number>()
-
-    demoProducts.forEach((product) => {
-      getStoreOffers(product).forEach((offer) => {
-        const storeId = getStoreIdFromName(offer.store)
-        counts.set(storeId, (counts.get(storeId) ?? 0) + 1)
-      })
-    })
-
-    return counts
   }, [])
 
   const filteredStores = useMemo(() => {
@@ -519,40 +451,6 @@ export function AdminStoresPage() {
       )
     })
   }, [searchQuery, statusFilter, stores])
-
-  function getProductCount(storeId: string): number {
-    return (
-      backendProductCounts.get(storeId) ??
-      productCounts.get(storeId) ??
-      0
-    )
-  }
-
-  function persistStores(
-    nextStores: AdminStore[],
-    message: string,
-  ): string | null {
-    try {
-      saveAdminStores(nextStores)
-
-      setCatalog((current) => ({
-        ...current,
-        stores: nextStores,
-        error: '',
-      }))
-
-      setFeedback(message)
-      return null
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? `Could not save store changes: ${error.message}`
-          : 'Could not save store changes.'
-
-      setFeedback(message)
-      return message
-    }
-  }
 
   function openCreateForm() {
     setEditingStore(null)
@@ -592,86 +490,52 @@ export function AdminStoresPage() {
       created_at: existing?.created_at ?? now,
       updated_at: now,
     }
+
     try {
-  if (existing && backendStoreIds.has(existing.store_id)) {
-    await updateStore(existing.store_id, store)
-  } else if (!existing) {
-    await createStore(store)
-    setBackendStoreIds((current) => new Set(current).add(storeId))
-    setBackendProductCounts((current) => new Map(current).set(storeId, 0))
-  }
-} catch (error) {
-  return error instanceof Error
-    ? error.message
-    : 'Could not save store to the server.'
-}
+      if (existing) {
+        await updateStore(existing.store_id, store)
+      } else {
+        await createStore(store)
+      }
+      await refreshStores()
+    } catch (error) {
+      return error instanceof Error
+        ? error.message
+        : 'Could not save store to the server.'
+    }
 
-    const nextStores = existing
-      ? stores.map((item) =>
-          item.store_id === existing.store_id ? store : item,
-        )
-      : [...stores, store].sort((a, b) =>
-          a.store_name.localeCompare(b.store_name),
-        )
-
-    return persistStores(
-      nextStores,
-      existing
-        ? `${store.store_name} updated.`
-        : `${store.store_name} added.`,
+    setFeedback(
+      `${store.store_name} ${existing ? 'updated' : 'added'}.`,
     )
+    return null
   }
 
-async function confirmDelete() {
-  if (!deletingStore) return
+  async function confirmDelete() {
+    if (!deletingStore) return
 
-    const productCount = getProductCount(deletingStore.store_id)
-    const offerCount = offerCounts.get(deletingStore.store_id) ?? 0
+    const productCount = deletingStore.product_count
 
-    if (productCount > 0 || offerCount > 0) {
-      setFeedback(
+    if (productCount > 0) {
+      setDeleteError(
         `Cannot delete ${deletingStore.store_name}: it is linked to ${productCount} ${
           productCount === 1 ? 'product' : 'products'
-        } and ${offerCount} ${
-          offerCount === 1 ? 'price offer' : 'price offers'
         }.`,
       )
       return
     }
 
     try {
-  if (backendStoreIds.has(deletingStore.store_id)) {
-    await deleteStore(deletingStore.store_id)
-    setBackendStoreIds((current) => {
-      const next = new Set(current)
-      next.delete(deletingStore.store_id)
-      return next
-    })
-    setBackendProductCounts((current) => {
-      const next = new Map(current)
-      next.delete(deletingStore.store_id)
-      return next
-    })
-  }
-
-  const saveError = persistStores(
-    stores.filter(
-      (store) => store.store_id !== deletingStore.store_id,
-    ),
-    `${deletingStore.store_name} deleted.`,
-  )
-
-  if (saveError) setDeleteError(saveError)
-  else setDeletingStore(null)
-} catch (error) {
-  setDeleteError(
-    error instanceof Error
-      ? error.message
-      : 'Could not delete store from the server.',
-  )
-}
-
-    setDeletingStore(null)
+      await deleteStore(deletingStore.store_id)
+      await refreshStores()
+      setFeedback(`${deletingStore.store_name} deleted.`)
+      setDeletingStore(null)
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error
+          ? error.message
+          : 'Could not delete store from the server.',
+      )
+    }
   }
 
   return (
@@ -698,7 +562,7 @@ async function confirmDelete() {
         <button
           type="button"
           onClick={openCreateForm}
-          disabled={Boolean(catalog.error)}
+          disabled={Boolean(storeError)}
           className="inline-flex items-center justify-center gap-2 self-start rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-950/20 transition hover:bg-blue-400 disabled:opacity-40 sm:self-auto"
         >
           <Plus aria-hidden="true" size={15} />
@@ -706,12 +570,12 @@ async function confirmDelete() {
         </button>
       </section>
 
-      {catalog.error && (
+      {storeError && (
         <p
           role="alert"
           className="rounded-xl border border-rose-300/10 bg-rose-400/[0.06] px-4 py-3 text-xs leading-5 text-rose-200"
         >
-          {catalog.error}
+          {storeError}
         </p>
       )}
 
@@ -804,10 +668,8 @@ async function confirmDelete() {
 
             <tbody className="divide-y divide-white/[0.05]">
               {filteredStores.map((store) => {
-                const productCount = getProductCount(store.store_id)
-                const offerCount =
-                  offerCounts.get(store.store_id) ?? 0
-                const inUse = productCount > 0 || offerCount > 0
+                const productCount = store.product_count
+                const inUse = productCount > 0
 
                 const initials = store.store_name
                   .split(/\s+/)
@@ -892,13 +754,6 @@ async function confirmDelete() {
                       <span className="text-xs font-medium tabular-nums text-slate-300">
                         {productCount}
                       </span>
-
-                      {offerCount > 0 && (
-                        <p className="mt-1 text-[9px] text-slate-600">
-                          {offerCount} demo price{' '}
-                          {offerCount === 1 ? 'offer' : 'offers'}
-                        </p>
-                      )}
                     </td>
 
                     <td className="px-5 py-4">
@@ -922,10 +777,10 @@ async function confirmDelete() {
                             setDeleteError('')
                             setFeedback('')
                           }}
-                          disabled={Boolean(catalog.error)}
+                          disabled={Boolean(storeError)}
                           aria-label={
                             inUse
-                              ? `Cannot delete ${store.store_name}; linked to ${productCount} products and ${offerCount} price offers`
+                              ? `Cannot delete ${store.store_name}; linked to ${productCount} products`
                               : `Delete ${store.store_name}`
                           }
                           className="rounded-lg p-2 text-slate-500 transition hover:bg-rose-400/[0.07] hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-30"
@@ -968,8 +823,8 @@ async function confirmDelete() {
         </div>
 
         <div className="border-t border-white/[0.06] px-5 py-3 text-[10px] text-slate-600">
-          Store data is saved in this browser. Store IDs remain stable for
-          canonical product references.
+          Store data is saved in MongoDB. Product counts come from catalog
+          records that reference each store ID.
         </div>
       </section>
 
@@ -988,10 +843,7 @@ async function confirmDelete() {
       {deletingStore && (
         <DeleteStoreDialog
           store={deletingStore}
-          productCount={getProductCount(deletingStore.store_id)}
-          offerCount={
-            offerCounts.get(deletingStore.store_id) ?? 0
-          }
+          productCount={deletingStore.product_count}
           error={deleteError}
           onCancel={() => setDeletingStore(null)}
           onConfirm={confirmDelete}
