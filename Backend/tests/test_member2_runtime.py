@@ -442,6 +442,8 @@ def test_main_lifespan_stops_member2_before_closing_async_client(monkeypatch):
 
     monkeypatch.setattr(main, "connect_db", connect_db)
     monkeypatch.setattr(main, "initialize_auth_database", no_op)
+    monkeypatch.setattr(main, "initialize_audit_database", no_op)
+    monkeypatch.setattr(main, "initialize_notification_database", no_op)
     monkeypatch.setattr(main, "ensure_bootstrap_admin", no_op)
     monkeypatch.setattr(main, "migrate_legacy_admin_products", no_op)
     monkeypatch.setattr(main, "sync_existing_admin_product_prices", no_op)
@@ -508,6 +510,8 @@ def test_main_lifespan_closes_async_client_after_member2_startup_failure(
 
     monkeypatch.setattr(main, "connect_db", connect_db)
     monkeypatch.setattr(main, "initialize_auth_database", no_op)
+    monkeypatch.setattr(main, "initialize_audit_database", no_op)
+    monkeypatch.setattr(main, "initialize_notification_database", no_op)
     monkeypatch.setattr(main, "ensure_bootstrap_admin", no_op)
     monkeypatch.setattr(main, "migrate_legacy_admin_products", no_op)
     monkeypatch.setattr(main, "sync_existing_admin_product_prices", no_op)

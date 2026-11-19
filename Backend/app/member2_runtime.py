@@ -1,10 +1,17 @@
 import asyncio
 import logging
+import sys
+from pathlib import Path
+
+# Ensure the repository root (parent of Backend) is importable so the
+# sibling `member2` package can be resolved when running from Backend/.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from dataclasses import dataclass
 
 from pymongo import MongoClient
-from member2.app.job_config import JobManagementConfig
-
 from member2.app.job_config import JobManagementConfig
 from member2.app.job_config import StoreScraperBinding
 from member2.app.job_repository import MongoJobRepository

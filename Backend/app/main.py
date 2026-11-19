@@ -134,7 +134,11 @@ app.include_router(audit_router)
 app.include_router(product_bulk_router)
 app.include_router(admin_notifications_router)
 app.include_router(dashboard_router)
-
+app.include_router(
+    member2_jobs_router,
+    prefix="/api/admin",
+    dependencies=[Depends(require_admin)],
+)
 
 def get_database():
     return app.state.database
