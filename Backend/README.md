@@ -23,6 +23,27 @@ Set `CHANNEL3_API_KEY` in the same file to enable live Channel3 product
 searches. Keep the key in the backend environment only; do not add it to
 frontend environment variables or commit it.
 
+Account verification emails require `GMAIL_SMTP_EMAIL` and
+`GMAIL_APP_PASSWORD` in `Backend\.env`. For Gmail, use an app password (with
+2-Step Verification enabled), not your normal account password.
+`GMAIL_SMTP_HOST` and `GMAIL_SMTP_PORT` default to `smtp.gmail.com` and `587`.
+Restart the backend after changing environment settings.
+
+Registration, login, and admin user management use the MongoDB `users`
+collection. Configure `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_USERNAME`,
+and `BOOTSTRAP_ADMIN_PASSWORD` together to create the first administrator
+when that email is not already registered. The password must be at least
+12 characters; there is no default admin password. Keep these values only in
+`Backend\.env` or the deployment secret manager. `APP_ENV=development` enables
+the local HTTP session cookie; leave it unset or use a non-development value
+for HTTPS deployments.
+
+When an administrator first opens User Management, existing browser-local
+accounts are offered for a one-time import into MongoDB. Existing password
+hashes are retained for sign-in and upgraded after a successful login;
+imported roles are set to `User`, and the configured administrator account is
+not overwritten. The browser copy is not deleted.
+
 Run the API from the `Backend` directory:
 
 ```powershell
@@ -30,9 +51,9 @@ cd Backend
 .\venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-The local Vite origin `http://localhost:5173` is allowed by CORS (as is
-`http://127.0.0.1:5173`). Interactive API documentation is available at
-`http://127.0.0.1:8000/docs`.
+The local Vite origins on ports `5173` and `5175` are allowed by CORS
+(including `localhost` and `127.0.0.1`). Interactive API documentation is
+available at `http://127.0.0.1:8000/docs`.
 
 ## Import Channel3 products
 
@@ -49,9 +70,41 @@ pagination cap, and stores products under `channel3-<product-id>`. Products
 without USD offers are skipped because the catalog requires a comparable price.
 Re-run the command to update existing imported products and offers.
 
+Admin-managed products and scraped Amazon products use the same MongoDB
+`products` collection as the public catalog, so they appear in the user-facing
+product list. Admin price changes also update the matching store offer and add
+the current price to price history. Existing records from the former
+`admin_products` collection are copied into `products` at startup if missing;
+the migration does not overwrite existing catalog records after its first run.
+
+## How workspace pages relate
+
+- **Products** shows the catalog price at the product's listed store.
+- **Price comparison** includes that store offer alongside other recorded
+  store offers. The cheapest offer can differ from the catalog price when a
+  different store is cheaper.
+- **Price history** shows stored observations. Admin and scraping price
+  changes add a point; it does not substitute a generated trend for backend
+  history.
+- **Watchlist** and **Alerts** refer to catalog product IDs. Deleting a
+  product removes its store offers, watchlist entry, and alerts; existing
+  notifications remain as historical records.
+- **Alerts** evaluate the same listed-store catalog price shown on Products.
+  When the workspace loads, active alerts whose target has been reached are
+  marked triggered. If in-app alerts are enabled, a linked notification is
+  created once. Email delivery is not configured.
+- **Settings** preferences are saved in the current browser. Theme, in-app
+  alerts, and system-update display are user preferences, not product prices.
+
 ## API
 
 - `GET /api/health`
+- `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/session`,
+  `POST /api/auth/logout`
+- `GET /api/admin/users`, `PATCH /api/admin/users/{email}/status`,
+  `POST /api/admin/users/import-browser` (admin session required)
+- `GET /api/admin/products`, `POST /api/admin/products`,
+  `PUT /api/admin/products/{product_id}`, `DELETE /api/admin/products/{product_id}`
 - `GET /api/products`
 - `GET /api/products/{product_id}/channel3`
 - `GET /api/channel3/search?q={query}&limit={limit}`

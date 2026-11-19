@@ -16,7 +16,7 @@ import type {
 } from '../../context/AppOutletContext'
 import { products as demoProducts } from '../../data/products'
 import { api } from '../../api/client'
-import type { LocalSession } from '../../auth/localAuth'
+import type { AuthUser } from '../../types/auth'
 import type { DemoProduct } from '../../data/products'
 import { AppHeader } from './AppHeader'
 import { Sidebar } from './Sidebar'
@@ -35,7 +35,7 @@ type AppState = {
 }
 
 type AppLayoutProps = {
-  currentUser: LocalSession
+  currentUser: AuthUser
 }
 
 type AppAction =
@@ -68,6 +68,7 @@ type AppAction =
   | { type: 'dismiss-toast'; toastId: number }
 
 const themeStorageKey = 'pricepilot-theme'
+const preferencesStorageKey = 'pricepilot-preferences'
 
 function getSavedTheme(): UserPreferences['theme'] {
   if (typeof window === 'undefined') return 'dark'
@@ -83,11 +84,38 @@ function getSavedTheme(): UserPreferences['theme'] {
 }
 
 function createInitialPreferences(): UserPreferences {
-  return {
+  const defaults: UserPreferences = {
     theme: getSavedTheme(),
     emailPriceAlerts: true,
     inAppPriceAlerts: true,
     systemUpdates: false,
+  }
+  if (typeof window === 'undefined') return defaults
+
+  try {
+    const stored = window.localStorage.getItem(preferencesStorageKey)
+    if (!stored) return defaults
+    const parsed: unknown = JSON.parse(stored)
+    if (!parsed || typeof parsed !== 'object') return defaults
+    const saved = parsed as Partial<UserPreferences>
+    return {
+      theme: saved.theme === 'light' ? 'light' : defaults.theme,
+      emailPriceAlerts:
+        typeof saved.emailPriceAlerts === 'boolean'
+          ? saved.emailPriceAlerts
+          : defaults.emailPriceAlerts,
+      inAppPriceAlerts:
+        typeof saved.inAppPriceAlerts === 'boolean'
+          ? saved.inAppPriceAlerts
+          : defaults.inAppPriceAlerts,
+      systemUpdates:
+        typeof saved.systemUpdates === 'boolean'
+          ? saved.systemUpdates
+          : defaults.systemUpdates,
+    }
+  } catch (error) {
+    console.error('Unable to read saved PricePilot preferences', error)
+    return defaults
   }
 }
 
@@ -318,6 +346,8 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
   const [preferences, setPreferences] = useState(createInitialPreferences)
   const [theme, setTheme] = useState(preferences.theme)
   const [products, setProducts] = useState(demoProducts)
+  const [dataSource, setDataSource] =
+    useState<'loading' | 'backend' | 'demo'>('loading')
   const [{ watchlistEntries, alerts, notifications, toast }, dispatch] =
     useReducer(appReducer, {
       watchlistEntries: [],
@@ -325,7 +355,20 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
       notifications: initialNotifications,
       toast: null,
     })
-  const watchlistIds = watchlistEntries.map((entry) => entry.productId)
+  const catalogProductIds = new Set(products.map((product) => product.id))
+  const visibleWatchlistEntries = watchlistEntries.filter((entry) =>
+    catalogProductIds.has(entry.productId),
+  )
+  const visibleAlerts = alerts.filter((alert) =>
+    catalogProductIds.has(alert.productId),
+  )
+  const visibleNotifications = notifications.filter(
+    (notification) =>
+      notification.type !== 'system' || preferences.systemUpdates,
+  )
+  const watchlistIds = visibleWatchlistEntries.map(
+    (entry) => entry.productId,
+  )
   const toastSequence = useRef(0)
   const alertSequence = useRef(0)
   const notificationSequence = useRef(0)
@@ -339,19 +382,86 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
       api.watchlist(),
       api.notifications(),
     ])
-      .then(([remoteProducts, remoteAlerts, remoteWatchlist, remoteNotifications]) => {
+      .then(async ([remoteProducts, remoteAlerts, remoteWatchlist, remoteNotifications]) => {
+        if (!active) return
+
+        let currentAlerts = remoteAlerts
+        let currentNotifications = remoteNotifications
+        for (const alert of remoteAlerts) {
+          const product = remoteProducts.find(
+            (item) => item.id === alert.productId,
+          )
+          if (
+            alert.status !== 'active' ||
+            !product ||
+            product.price > alert.targetPrice
+          ) {
+            continue
+          }
+
+          if (
+            preferences.inAppPriceAlerts &&
+            !currentNotifications.some(
+              (notification) => notification.alertId === alert.id,
+            )
+          ) {
+            const notification: DemoNotification = {
+              id: `notification-${alert.id}`,
+              type: 'price-alert',
+              alertId: alert.id,
+              productId: product.id,
+              message:
+                alert.type === 'target-price'
+                  ? `${product.name} reached your ${formatPrice(alert.targetPrice)} target price.`
+                  : `${product.name} dropped ${alert.threshold}% to ${formatPrice(product.price)}.`,
+              price: product.price,
+              createdAt: new Date().toISOString(),
+              isRead: false,
+            }
+            try {
+              const savedNotification =
+                await api.createNotification(notification)
+              currentNotifications = [
+                ...currentNotifications,
+                savedNotification,
+              ]
+            } catch (error) {
+              console.error(
+                'Unable to save the triggered price alert notification',
+                error,
+              )
+              continue
+            }
+          }
+
+          const triggeredAlert: PriceAlert = {
+            ...alert,
+            status: 'triggered',
+          }
+          try {
+            const savedAlert = await api.saveAlert(triggeredAlert, true)
+            currentAlerts = currentAlerts.map((item) =>
+              item.id === savedAlert.id ? savedAlert : item,
+            )
+          } catch (error) {
+            console.error('Unable to update the triggered price alert', error)
+          }
+        }
+
         if (!active) return
         setProducts(remoteProducts)
+        setDataSource('backend')
         dispatch({
           type: 'hydrate',
           watchlistEntries: remoteWatchlist,
-          alerts: remoteAlerts,
-          notifications: remoteNotifications,
+          alerts: currentAlerts,
+          notifications: currentNotifications,
         })
       })
       .catch((error: unknown) => {
         console.error('Unable to load application data from the backend', error)
         if (active) {
+          setDataSource('demo')
           dispatch({
             type: 'notify',
             message: 'Backend unavailable; showing demo data.',
@@ -363,7 +473,7 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
     return () => {
       active = false
     }
-  }, [])
+  }, [preferences.inAppPriceAlerts])
 
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -379,7 +489,7 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
   async function toggleWatchlist(product: DemoProduct) {
     const alreadySaved = watchlistEntries.some(
       (entry) => entry.productId === product.id,
-    )
+    ) && products.some((item) => item.id === product.id)
     try {
       if (alreadySaved) {
         await api.removeFromWatchlist(product.id)
@@ -414,6 +524,10 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
 
   function savePreferences(nextPreferences: UserPreferences) {
     try {
+      window.localStorage.setItem(
+        preferencesStorageKey,
+        JSON.stringify(nextPreferences),
+      )
       window.localStorage.setItem(themeStorageKey, nextPreferences.theme)
     } catch (error) {
       console.error('Unable to save the PricePilot theme', error)
@@ -642,7 +756,7 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
     })
   }
 
-  const unreadNotificationCount = notifications.filter(
+  const unreadNotificationCount = visibleNotifications.filter(
     (notification) => !notification.isRead,
   ).length
 
@@ -682,8 +796,9 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
         isOpen={sidebarOpen}
         isCollapsed={sidebarCollapsed}
         onNavigate={closeSidebar}
+        dataSource={dataSource}
         watchlistCount={watchlistIds.length}
-        alertsCount={alerts.length}
+        alertsCount={visibleAlerts.length}
         unreadNotificationCount={unreadNotificationCount}
       />
 
@@ -696,7 +811,7 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
           currentUser={currentUser}
           onMenuClick={toggleSidebar}
           onSearchChange={setSearchQuery}
-          notifications={notifications}
+          notifications={visibleNotifications}
           products={products}
           unreadNotificationCount={unreadNotificationCount}
         />
@@ -704,15 +819,16 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
           <Outlet
             context={{
               products,
+              dataSource,
               searchQuery,
               setSearchQuery,
               watchlistIds,
-              watchlistEntries,
+              watchlistEntries: visibleWatchlistEntries,
               toggleWatchlist,
-              alerts,
+              alerts: visibleAlerts,
               saveAlert,
               deleteAlert,
-              notifications,
+              notifications: visibleNotifications,
               markNotificationRead,
               markAllNotificationsRead,
               deleteNotification,

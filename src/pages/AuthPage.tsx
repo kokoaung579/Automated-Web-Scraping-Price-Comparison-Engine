@@ -12,12 +12,9 @@ import {
   TrendingDown,
   UserRound,
 } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
-import {
-  getAuthLandingPath,
-  registerLocalAccount,
-  signInLocalAccount,
-} from '../auth/localAuth'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { api } from '../api/client'
+import { useAuth } from '../auth/useAuth'
 
 type AuthPageProps = {
   mode: 'login' | 'signup'
@@ -296,7 +293,12 @@ function PricePilotBrand() {
 
 export function AuthPage({ mode }: AuthPageProps) {
   const navigate = useNavigate()
+  const location = useLocation()
+  const { setUser } = useAuth()
   const isSignup = mode === 'signup'
+  const passwordResetSuccess =
+    (location.state as { passwordResetSuccess?: boolean } | null)
+      ?.passwordResetSuccess === true
   const [values, setValues] = useState(initialValues)
   const [errors, setErrors] = useState<AuthErrors>({})
   const [formError, setFormError] = useState('')
@@ -351,6 +353,8 @@ export function AuthPage({ mode }: AuthPageProps) {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (isSubmitting) return
+
     const nextErrors = validate()
     setErrors(nextErrors)
     setFormError('')
@@ -360,17 +364,21 @@ export function AuthPage({ mode }: AuthPageProps) {
     setIsSubmitting(true)
     try {
       if (isSignup) {
-        await registerLocalAccount(
+        await api.registerAccount(
           values.email,
           values.username,
           values.password,
         )
+        navigate('/verify-otp', {
+          replace: true,
+          state: { email: values.email.trim().toLowerCase() },
+        })
       } else {
-        await signInLocalAccount(values.email, values.password)
+        const user = await api.loginAccount(values.email, values.password)
+        setUser(user)
+        const destination = user.role === 'Admin' ? '/admin' : '/'
+        navigate(destination, { replace: true })
       }
-
-      const destination = isSignup ? '/' : getAuthLandingPath()
-      navigate(destination, { replace: true })
     } catch (error) {
       setFormError(
         error instanceof Error
@@ -476,6 +484,26 @@ export function AuthPage({ mode }: AuthPageProps) {
                 />
               )}
 
+              {!isSignup && passwordResetSuccess && (
+                <p
+                  role="status"
+                  className="rounded-xl border border-emerald-400/20 bg-emerald-400/[0.07] px-3.5 py-3 text-xs leading-5 text-emerald-200"
+                >
+                  Your password has been reset. Sign in with your new password.
+                </p>
+              )}
+
+              {!isSignup && (
+                <div className="-mt-1 flex justify-end">
+                  <Link
+                    to="/forgot-password"
+                    className="text-xs font-semibold text-blue-300 transition hover:text-cyan-200"
+                  >
+                    Forgot Password?
+                  </Link>
+                </div>
+              )}
+
               {formError && (
                 <p
                   role="alert"
@@ -521,8 +549,7 @@ export function AuthPage({ mode }: AuthPageProps) {
                 size={14}
                 className="mt-0.5 shrink-0 text-slate-400"
               />
-              Demo authentication is saved in this browser only. No account
-              data is sent to a server.
+              Account details are securely stored in the PricePilot database.
             </div>
           </div>
           <p className="mx-auto mt-5 flex max-w-[430px] items-center justify-center gap-1.5 text-[10px] text-slate-600">

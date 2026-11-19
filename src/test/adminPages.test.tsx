@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ExcelJS from 'exceljs'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppRoutes } from '../routes/AppRoutes'
 import { AdminAuditLogsPage } from '../pages/admin/AdminAuditLogsPage'
 import { AdminCategoriesPage } from '../pages/admin/AdminCategoriesPage'
@@ -16,6 +16,9 @@ import { loadAdminProducts, PRODUCT_SCHEMA_FIELDS } from '../data/adminProducts'
 import { getProductCategories } from '../data/adminCategories'
 import { getSeedAdminStores, loadAdminStores } from '../data/adminStores'
 import { loadScrapingJobs } from '../data/adminScraping'
+import type { Product } from '../types/product'
+import type { AuthUser, BrowserAccountImport } from '../types/auth'
+import { AuthProvider } from '../auth/AuthProvider'
 
 type TestAccount = {
   email: string
@@ -27,14 +30,112 @@ type TestAccount = {
   registeredAt: string
 }
 
+let backendProducts: Product[] = []
+let backendUsers: AuthUser[] = []
+let backendSession: AuthUser | null = null
+let failNextUserDelete = false
+
+function jsonResponse(data: unknown, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => data,
+  }
+}
+
+async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
+  const url = new URL(String(input), 'http://localhost')
+  const method = init?.method ?? 'GET'
+
+  if (url.pathname === '/api/auth/session') {
+    return jsonResponse(backendSession)
+  }
+  if (url.pathname === '/api/admin/users/import-browser' && method === 'POST') {
+    const body = JSON.parse(String(init?.body)) as {
+      accounts: BrowserAccountImport[]
+    }
+    for (const account of body.accounts) {
+      if (backendUsers.some((user) => user.email === account.email)) continue
+      backendUsers.push({
+        id: `user-${backendUsers.length + 1}`,
+        email: account.email,
+        username: account.username,
+        role: 'User',
+        status: account.status,
+        registeredAt: account.registered_at,
+      })
+    }
+    return jsonResponse({
+      imported: body.accounts.length,
+      skipped: 0,
+      completed: true,
+    })
+  }
+  if (url.pathname === '/api/admin/users' && method === 'GET') {
+    return jsonResponse(backendUsers)
+  }
+  const userStatusMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/status$/)
+  if (userStatusMatch && method === 'PATCH') {
+    const email = decodeURIComponent(userStatusMatch[1])
+    const { status } = JSON.parse(String(init?.body)) as {
+      status: AuthUser['status']
+    }
+    const user = backendUsers.find((candidate) => candidate.email === email)
+    if (!user) return jsonResponse({ detail: 'Not found' }, 404)
+    user.status = status
+    return jsonResponse(user)
+  }
+  const userDeleteMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/)
+  if (userDeleteMatch && method === 'DELETE') {
+    if (failNextUserDelete) {
+      failNextUserDelete = false
+      return jsonResponse({ detail: 'Unable to delete account.' }, 500)
+    }
+    const userId = decodeURIComponent(userDeleteMatch[1])
+    const exists = backendUsers.some((user) => user.id === userId)
+    if (!exists) return jsonResponse({ detail: 'Not found' }, 404)
+    backendUsers = backendUsers.filter((user) => user.id !== userId)
+    return jsonResponse(undefined, 204)
+  }
+
+  if (url.pathname === '/api/admin/products') {
+    if (method === 'GET') return jsonResponse(backendProducts)
+    if (method === 'POST') {
+      const product = JSON.parse(String(init?.body)) as Product
+      backendProducts = [...backendProducts, product]
+      return jsonResponse(product, 201)
+    }
+  }
+
+  const productMatch = url.pathname.match(/^\/api\/admin\/products\/([^/]+)$/)
+  if (productMatch) {
+    const productId = decodeURIComponent(productMatch[1])
+    if (method === 'PUT') {
+      const product = JSON.parse(String(init?.body)) as Product
+      backendProducts = backendProducts.map((item) =>
+        item.product_id === productId ? product : item,
+      )
+      return jsonResponse(product)
+    }
+    if (method === 'DELETE') {
+      backendProducts = backendProducts.filter(
+        (item) => item.product_id !== productId,
+      )
+      return jsonResponse(undefined, 204)
+    }
+  }
+
+  return jsonResponse([])
+}
+
 function seedAccounts(sessionEmail: string, sessionRole: 'Admin' | 'User') {
   const registeredAt = '2026-01-01T00:00:00.000Z'
   const accounts: TestAccount[] = [
     {
       email: 'admin@example.test',
       username: 'Admin User',
-      salt: '00',
-      passwordHash: '00',
+      salt: '00000000000000000000000000000000',
+      passwordHash: '0000000000000000000000000000000000000000000000000000000000000000',
       role: 'Admin',
       status: 'Active',
       registeredAt,
@@ -42,8 +143,8 @@ function seedAccounts(sessionEmail: string, sessionRole: 'Admin' | 'User') {
     {
       email: 'beta@example.test',
       username: 'Beta User',
-      salt: '00',
-      passwordHash: '00',
+      salt: '00000000000000000000000000000000',
+      passwordHash: '0000000000000000000000000000000000000000000000000000000000000000',
       role: 'User',
       status: 'Active',
       registeredAt,
@@ -58,6 +159,17 @@ function seedAccounts(sessionEmail: string, sessionRole: 'Admin' | 'User') {
       role: sessionRole,
     }),
   )
+  backendUsers = accounts.map((account) => ({
+    id: account.email,
+    email: account.email,
+    username: account.username,
+    role: account.role,
+    status: account.status,
+    registeredAt: account.registeredAt,
+  }))
+  const sessionUser = backendUsers.find((user) => user.email === sessionEmail)
+  backendSession =
+    sessionUser && sessionUser.role === sessionRole ? sessionUser : null
 }
 
 function CurrentPath() {
@@ -68,7 +180,9 @@ function CurrentPath() {
 function renderRoutes(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <AppRoutes />
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
       <CurrentPath />
     </MemoryRouter>,
   )
@@ -77,6 +191,11 @@ function renderRoutes(path: string) {
 describe('admin and shared user pages', () => {
   beforeEach(() => {
     window.localStorage.clear()
+    backendProducts = loadAdminProducts()
+    backendUsers = []
+    backendSession = null
+    failNextUserDelete = false
+    vi.stubGlobal('fetch', vi.fn(mockBackendFetch))
   })
 
   it('redirects anonymous and normal-user sessions away from admin routes and sends admins to admin home', async () => {
@@ -112,8 +231,13 @@ describe('admin and shared user pages', () => {
   it('supports user search, profile details, and deactivation using isolated accounts', async () => {
     const user = userEvent.setup()
     seedAccounts('admin@example.test', 'Admin')
-    render(<AdminUsersPage />)
+    render(
+      <AuthProvider>
+        <AdminUsersPage />
+      </AuthProvider>,
+    )
 
+    await screen.findByText('Admin User')
     await user.type(screen.getByRole('searchbox', { name: 'Search users' }), 'beta')
     expect(screen.getByText('Beta User')).toBeDefined()
     expect(screen.queryByText('Admin User')).toBeNull()
@@ -124,11 +248,120 @@ describe('admin and shared user pages', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Close user details' }))
 
     await user.click(screen.getByRole('button', { name: 'Deactivate' }))
-    expect(
-      JSON.parse(window.localStorage.getItem('pricepilot-accounts') ?? '[]')
-        .find((account: TestAccount) => account.email === 'beta@example.test')
-        .status,
-    ).toBe('Inactive')
+    await waitFor(() => {
+      expect(
+        backendUsers.find((account) => account.email === 'beta@example.test')
+          ?.status,
+      ).toBe('Inactive')
+    })
+  })
+
+  it('requires confirmation to delete an account and updates account counts', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    render(
+      <AuthProvider>
+        <AdminUsersPage />
+      </AuthProvider>,
+    )
+
+    await screen.findByText('Beta User')
+    await user.click(screen.getByRole('button', { name: 'Delete Beta User' }))
+    const confirmation = screen.getByRole('dialog', {
+      name: 'Delete User Account?',
+    })
+    expect(within(confirmation).getByText('beta@example.test')).toBeDefined()
+    await user.click(
+      within(confirmation).getByRole('button', { name: 'Cancel' }),
+    )
+    expect(screen.getByText('Beta User')).toBeDefined()
+    expect(backendUsers.some((account) => account.email === 'beta@example.test'))
+      .toBe(true)
+
+    await user.click(screen.getByRole('button', { name: 'Delete Beta User' }))
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Delete Account',
+      }),
+    )
+    await waitFor(() => {
+      expect(backendUsers.some((account) => account.email === 'beta@example.test'))
+        .toBe(false)
+      expect(screen.queryByText('Beta User')).toBeNull()
+    })
+    expect(screen.getByRole('status').textContent).toContain('account was deleted')
+    const summary = screen.getByRole('region', {
+      name: 'User account summary',
+    })
+    expect(within(summary).getByText('Total accounts').parentElement?.textContent)
+      .toContain('1')
+    expect(within(summary).getByText('Active').parentElement?.textContent)
+      .toContain('1')
+    expect(within(summary).getByText('Administrators').parentElement?.textContent)
+      .toContain('1')
+  })
+
+  it('clamps pagination when deleting the last account on the last page', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    for (let index = 1; index <= 7; index += 1) {
+      backendUsers.push({
+        id: `extra-${index}`,
+        email: `extra-${index}@example.test`,
+        username: `Extra User ${index}`,
+        role: 'User',
+        status: 'Active',
+        registeredAt: '2026-01-02T00:00:00.000Z',
+      })
+    }
+
+    render(
+      <AuthProvider>
+        <AdminUsersPage />
+      </AuthProvider>,
+    )
+
+    await screen.findByText('Beta User')
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    await screen.findByText('Extra User 7')
+    await user.click(screen.getByRole('button', { name: 'Delete Extra User 7' }))
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Delete Account',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(screen.queryByText('Extra User 7')).toBeNull()
+      expect(
+        screen.getByRole('button', { name: 'Next page' }).getAttribute('disabled'),
+      ).not.toBeNull()
+    })
+  })
+
+  it('keeps an account when deletion fails and shows the backend error', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    render(
+      <AuthProvider>
+        <AdminUsersPage />
+      </AuthProvider>,
+    )
+
+    await screen.findByText('Beta User')
+    failNextUserDelete = true
+    await user.click(screen.getByRole('button', { name: 'Delete Beta User' }))
+    await user.click(
+      within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Delete Account',
+      }),
+    )
+
+    const errorAlert = await screen.findByRole('alert')
+    expect(errorAlert.textContent).toContain('Unable to delete account.')
+    expect(screen.getByText('Beta User')).toBeDefined()
+    expect(backendUsers.some((account) => account.email === 'beta@example.test'))
+      .toBe(true)
   })
 
   it('keeps renamed categories synchronized with products and blocks deleting an assigned category', async () => {
@@ -206,22 +439,24 @@ describe('admin and shared user pages', () => {
     )
 
     render(<AdminProductsPage />)
-    await user.upload(screen.getByLabelText('Import Excel'), file)
+    fireEvent.change(screen.getByLabelText('Import Excel'), {
+      target: { files: [file] },
+    })
 
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('1 valid rows')).toBeDefined()
     expect(within(dialog).getByText('1 invalid rows')).toBeDefined()
     expect(within(dialog).getByText('price must be a numeric cell.')).toBeDefined()
-    expect(loadAdminProducts().some((product) => product.product_id === 'xlsx-import-test'))
+    expect(backendProducts.some((product) => product.product_id === 'xlsx-import-test'))
       .toBe(false)
 
     await user.click(within(dialog).getByRole('button', { name: 'Import 1 valid product' }))
-    const imported = loadAdminProducts().find(
+    const imported = backendProducts.find(
       (product) => product.product_id === 'xlsx-import-test',
     )
     expect(imported?.currency).toBe('USD')
     expect(imported?.brand).toBeNull()
-    expect(loadAdminProducts().some((product) => product.product_id === 'xlsx-invalid-test'))
+    expect(backendProducts.some((product) => product.product_id === 'xlsx-invalid-test'))
       .toBe(false)
   })
 

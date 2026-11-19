@@ -156,9 +156,9 @@ function OfferCard({
 }
 
 export function PriceComparisonPage() {
-  const { products } = useOutletContext<AppOutletContext>()
+  const { products, dataSource } = useOutletContext<AppOutletContext>()
   const [productSearch, setProductSearch] = useState('')
-  const [selectedProductId, setSelectedProductId] = useState(
+  const [selectedProductIdState, setSelectedProductId] = useState(
     products[0]?.id ?? '',
   )
   const [storeFilter, setStoreFilter] = useState('all')
@@ -167,6 +167,15 @@ export function PriceComparisonPage() {
     productId: string
     offers: StoreOffer[]
   } | null>(null)
+  const [offerLoadError, setOfferLoadError] = useState<{
+    productId: string
+    message: string
+  } | null>(null)
+  const selectedProductId = products.some(
+    (product) => product.id === selectedProductIdState,
+  )
+    ? selectedProductIdState
+    : products[0]?.id ?? ''
 
   const selectedProduct = products.find(
     (product) => product.id === selectedProductId,
@@ -183,7 +192,7 @@ export function PriceComparisonPage() {
   useEffect(() => {
     let active = true
     const productId = selectedProduct?.id
-    if (!productId) return
+    if (!productId || dataSource !== 'backend') return
 
     api.offers(productId)
       .then((offers) => {
@@ -191,21 +200,52 @@ export function PriceComparisonPage() {
       })
       .catch((error: unknown) => {
         console.error('Unable to load product offers from the backend', error)
+        if (active) {
+          setOfferLoadError(
+            {
+              productId,
+              message:
+                error instanceof Error
+                  ? error.message
+                  : 'Unable to load store offers.',
+            },
+          )
+        }
       })
 
     return () => {
       active = false
     }
-  }, [selectedProduct?.id])
+  }, [dataSource, selectedProduct?.id])
 
   const allOffers = useMemo(
     () =>
-      (remoteOffers && remoteOffers.productId === selectedProduct?.id
-        ? remoteOffers.offers
-        : null) ??
-      (selectedProduct ? getStoreOffers(selectedProduct) : []),
-    [remoteOffers, selectedProduct],
+      dataSource === 'demo'
+        ? selectedProduct
+          ? getStoreOffers(selectedProduct)
+          : []
+        : remoteOffers &&
+            remoteOffers.productId === selectedProduct?.id
+          ? remoteOffers.offers
+          : [],
+    [dataSource, remoteOffers, selectedProduct],
   )
+  const hasCurrentOffers = Boolean(
+    remoteOffers &&
+      selectedProduct &&
+      remoteOffers.productId === selectedProduct.id,
+  )
+  const currentOfferError =
+    !hasCurrentOffers &&
+    offerLoadError &&
+    offerLoadError.productId === selectedProduct?.id
+      ? offerLoadError.message
+      : null
+  const isLoadingOffers =
+    dataSource === 'loading' ||
+    (dataSource === 'backend' &&
+      !hasCurrentOffers &&
+      currentOfferError === null)
   const stores = [...new Set(allOffers.map((offer) => offer.store))].sort()
   const lowestPrice = allOffers.length
     ? Math.min(...allOffers.map((offer) => offer.price))
@@ -239,7 +279,8 @@ export function PriceComparisonPage() {
             Compare Prices
           </h1>
           <p className="mt-2 text-xs text-slate-500 sm:text-sm">
-            Compare current offers for the same product across stores.
+            Compare the catalog product’s current store price with offers from
+            other stores.
           </p>
         </div>
         {selectedProduct && (
@@ -448,7 +489,13 @@ export function PriceComparisonPage() {
               role="status"
               className="rounded-2xl border border-white/[0.07] bg-[#0d1320] px-5 py-10 text-center text-xs text-slate-500"
             >
-              No store offers match this filter.
+              {isLoadingOffers
+                ? 'Loading current store offers…'
+                : currentOfferError
+                  ? `Could not load current store offers: ${currentOfferError}`
+                  : allOffers.length === 0
+                    ? 'No current store offers are recorded for this product.'
+                    : 'No store offers match this filter.'}
             </section>
           )}
         </section>

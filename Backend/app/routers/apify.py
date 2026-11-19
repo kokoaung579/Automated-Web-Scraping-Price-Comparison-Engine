@@ -6,7 +6,8 @@ from httpx import HTTPStatusError, RequestError
 from pymongo.errors import DuplicateKeyError
 
 from fastapi import APIRouter, HTTPException, Request
-from app.models import AdminProduct
+from app.models import AdminProduct, admin_product_to_catalog_document
+from app.services.product_catalog import upsert_admin_product_offer
 from app.services.apify_services import (
     start_apify_actor,
     get_apify_run,
@@ -220,7 +221,7 @@ async def import_amazon_products(run_id: str, request: Request):
                 )
 
                 # 4. Do not overwrite existing manual or scraped products
-                existing = await db.admin_products.find_one(
+                existing = await db.products.find_one(
                     {"_id": product.product_id},
                     {"_id": 1},
                 )
@@ -230,14 +231,13 @@ async def import_amazon_products(run_id: str, request: Request):
                     continue
 
                 # 5. Insert into MongoDB
-                await db.admin_products.insert_one(
+                await db.products.insert_one(
                     {
                         "_id": product.product_id,
-                        **product.model_dump(
-                            exclude={"product_id"}
-                        ),
+                        **admin_product_to_catalog_document(product),
                     }
                 )
+                await upsert_admin_product_offer(db, product)
 
                 created += 1
 
@@ -249,6 +249,26 @@ async def import_amazon_products(run_id: str, request: Request):
 
                 if len(errors) < 10:
                     errors.append(str(exc))
+
+        # 6. Automatically register Amazon Store
+        if created > 0:
+            now = datetime.now(timezone.utc).isoformat()
+
+            await db.stores.update_one(
+                {"_id": "amazon"},
+                {
+                    "$setOnInsert": {
+                        "store_name": "Amazon",
+                        "website_url": "https://www.amazon.com",
+                        "logo_url": None,
+                        "status": "Active",
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                },
+                upsert=True,
+            )
+
 
         return {
             "message": "Amazon product import completed.",
