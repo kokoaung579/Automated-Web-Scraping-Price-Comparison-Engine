@@ -32,32 +32,78 @@ restart-safe persistence.
    renew their ownership leases while executions run. Expired jobs are claimed
    by a recovery worker before being finalized as failed; active leases are not
    failed when another worker starts. `JobManagementConfig` defaults to a
-   60-second lease and a 15-second heartbeat; configure both values for the
-   deployment, with the heartbeat no greater than the lease. Worker hosts must
-   have synchronized UTC clocks. Use a persistent Mongo repository when
-   multiple processes share the job store; the in-memory repository is only
-   suitable for one process and isolated development/tests. Mongo operations
-   use conditional atomic updates, but this implementation has not been tested
-   against a live MongoDB deployment.
-5. **Account for old running records and synchronous scrapers.** Recovery
+   60-second lease, a 15-second heartbeat, and a 5-second heartbeat safety
+   margin. The heartbeat interval plus its margin must be less than the lease.
+   Worker hosts must have synchronized UTC clocks. Use a persistent Mongo
+   repository when multiple processes share the job store; the in-memory
+   repository is only suitable for one process and isolated development/tests.
+5. **Configure MongoDB transactions.** Mongo ownership-checked execution and
+   result writes, plus job/execution finalization, run in transactions that
+   conditionally write the owning job document before writing child records.
+   MongoDB must run as a replica set or sharded cluster with transaction
+   support; standalone MongoDB deployments are not supported for these paths.
+   This implementation has not been validated against a live MongoDB
+   deployment. The in-memory tests verify repository semantics, not MongoDB
+   transaction atomicity.
+6. **Account for old running records and synchronous scrapers.** Recovery
    requires a recorded lease expiration. Legacy `running` records without lease
    metadata are intentionally not assumed expired; after old workers are
    stopped, handle those records through an explicit migration or operator
-   action. Ownership checks prevent a stale worker from finalizing the job.
-   A synchronous scraper call already in progress cannot be forcibly
-   interrupted safely and may run until its request timeout; an operator retry
-   during that interval could overlap the stale call.
-6. **Configure API security and routing.** The host must provide its own
+   action. A stale worker cannot finalize after ownership changes. An expired
+   job is not retryable until `JobManagementConfig.scraper_execution_timeout_seconds`
+   plus one lease duration after recovery finalization. The total execution
+   timeout defaults to 900 seconds and is distinct from each job's per-request
+   HTTP timeout. Mongo finalization first commits a retry-pending gate with the
+   job and execution changes, then uses a generation-fenced post-commit update
+   to set the quarantine deadline. If that post-commit update fails, manual
+   retry remains blocked; the next retry attempt persists a conservative
+   deadline before returning a conflict. Slow history loading and transaction
+   commit time therefore do not consume the intended quarantine.
+   Built-in scrapers use a monotonic total deadline,
+   check it between requests/pages, and bound each new request timeout by the
+   remaining budget; they do not return partial results as successful
+   executions. Playwright launch, navigation, selector waits, text extraction,
+   and attribute reads use explicit timeouts when supported. Synchronous page
+   creation, locator `count`/`all`, browser cleanup, and other in-flight
+   operations without timeout support cannot be forcibly interrupted. Custom
+   two-argument scraper callbacks can only be checked before and after the
+   callback. Lease expiry does not terminate a
+   call: a suspended or nonresponsive process can outlive this finite
+   quarantine, so strict prevention of all overlap requires cooperative
+   cancellation or process supervision outside this subsystem.
+   Recovery finalizes every recorded `running` execution as failed with an
+   interruption error in the same transaction as the job. If history cannot
+   be loaded or any child execution cannot be updated, recovery leaves the job
+   recoverable rather than finalizing it with unresolved running history.
+7. **Reconcile inconsistent terminal history.** The worker also scans terminal
+   jobs that still have `running` executions. It finalizes every such execution
+   only when its recorded owner and generation match the terminal job's
+   retained final owner and generation. Reconciliation is idempotent and uses a
+   transaction in MongoDB. It does not guess ownership for legacy records with
+   missing or conflicting owner/generation metadata; those remain visible as
+   unresolved history and require operator repair or a separately reviewed
+   migration. History-load and persistence failures are logged and retried on
+   later worker iterations. Reconciliation is not reported as successful while
+   any execution remains running.
+8. **Handle legacy retry metadata conservatively.** New jobs record a retry
+   policy version even when no quarantine deadline is intended. A failed
+   legacy job missing that version and lacking `retry_not_before` receives one
+   conservative delay of the configured total scraper timeout plus one lease
+   duration on its first manual retry attempt. The policy version and deadline
+   are persisted before the retry is rejected. This avoids treating an absent
+   legacy field as an intentional immediate retry; operators can inspect the
+   stored metadata, but no bulk migration is required.
+9. **Configure API security and routing.** The host must provide its own
    authentication/authorization and CORS policy. The Member 2 router does not
    add either. The frontend can configure its route prefix and methods through
    its existing scraping API configuration.
-7. **Decide where scraped Products are consumed.** Successful strict
+10. **Decide where scraped Products are consumed.** Successful strict
    frontend-compatible Products are retained in the execution-results
    repository and can be retrieved through the results endpoint. The Member 2
    implementation does not write to the Main Backend catalog, offers, or
    price-history collections. A future host integration must explicitly decide
    whether and how to upsert those records.
-8. **Coordinate progress and in-flight controls.** Execution responses expose
+11. **Coordinate progress and in-flight controls.** Execution responses expose
    stage progress, but the current frontend execution type does not render
    these additional fields. Running Pause and Cancel requests take effect only
    after the current execution finishes scraping, normalization, and result

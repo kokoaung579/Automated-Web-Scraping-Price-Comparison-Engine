@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from threading import Event
+from time import monotonic
 from uuid import uuid4
 
 import requests
@@ -17,6 +18,10 @@ from .job_models import (
 from .job_repository import JobRepository
 from .product_normalizer import normalize_products
 from .scraper_registry import ScraperRegistry
+from .scrapers.deadline import (
+    ScraperExecutionDeadlineExceeded,
+    ensure_before_deadline,
+)
 from .source_identity import validate_source_identity
 from .source_store_mapping import resolve_store_id
 
@@ -82,6 +87,7 @@ class ScrapingJobService:
             next_run=scheduled_at,
             updated_at=current_time,
             created_at=current_time,
+            retry_policy_version=1,
         )
         self.repository.create_job(job)
         return job
@@ -116,12 +122,53 @@ class ScrapingJobService:
         job = self.get_job(job_id)
         if job.status == JobStatus.RUNNING or job.status == JobStatus.PAUSED:
             raise JobConflictError(f"Cannot start a {job.status.value} job.")
+        executions = self.repository.list_executions(job_id)
+        if any(execution.status == JobStatus.RUNNING for execution in executions):
+            raise JobConflictError(
+                "Cannot start while a previous execution is still unresolved."
+            )
+        if job.retry_quarantine_pending:
+            job.retry_not_before = current_time + timedelta(
+                seconds=(
+                    self.config.scraper_execution_timeout_seconds
+                    + self.config.lease_duration_seconds
+                )
+            )
+            job.retry_policy_version = 1
+            job.retry_quarantine_pending = False
+            job.updated_at = current_time
+            self._save_transition(job, expected_status=job.status)
+            raise JobConflictError(
+                "Cannot retry until the prior scraper call's safety window ends."
+            )
+        if job.retry_policy_version is None:
+            if (
+                job.status == JobStatus.FAILED
+                and job.retry_not_before is None
+            ):
+                job.retry_not_before = current_time + timedelta(
+                    seconds=(
+                        self.config.scraper_execution_timeout_seconds
+                        + self.config.lease_duration_seconds
+                    )
+                )
+            job.retry_policy_version = 1
+            job.updated_at = current_time
+            self._save_transition(job, expected_status=job.status)
+        if (
+            job.retry_not_before is not None
+            and current_time < job.retry_not_before
+        ):
+            raise JobConflictError(
+                "Cannot retry until the prior scraper call's safety window ends."
+            )
         expected_status = job.status
         job.status = JobStatus.QUEUED
         job.next_run = current_time
         job.control_requested = None
         job.completed_at = None
         job.updated_at = current_time
+        job.retry_not_before = None
         self._save_transition(job, expected_status=expected_status)
         return self.get_job(job_id)
 
@@ -221,38 +268,43 @@ class ScrapingJobService:
         )
         for job in expired_jobs:
             failure = "Worker lease expired before execution completed."
-            execution = None
             try:
-                execution = next(
-                    (
-                        item
-                        for item in self.repository.list_executions(job.id)
-                        if item.status == JobStatus.RUNNING
-                    ),
-                    None,
-                )
+                executions = [
+                    execution
+                    for execution in self.repository.list_executions(job.id)
+                    if execution.status == JobStatus.RUNNING
+                ]
             except Exception:
                 logger.exception(
-                    "Could not load execution history for expired job %s.",
+                    "Could not load execution history for expired job %s; "
+                    "leaving it running for a later recovery attempt.",
                     job.id,
                 )
-                failure = "Worker lease expired and execution history could not be loaded."
+                continue
 
-            if execution is not None:
+            recovery_time = _utc(None)
+            for execution in executions:
                 execution.errors.append(failure)
-                execution.logs.append(f"[{current_time.isoformat()}] {failure}")
-                execution.finished_at = current_time
+                execution.logs.append(f"[{recovery_time.isoformat()}] {failure}")
+                execution.finished_at = recovery_time
                 execution.progress = 100
                 execution.stage = "interrupted"
 
+            finalized_at = _utc(None)
+            for execution in executions:
+                execution.finished_at = finalized_at
             try:
                 self._finalize_owned_job(
                     job.id,
                     recovery_worker_id,
                     job.lease_generation,
-                    execution,
+                    executions,
                     failure,
-                    current_time,
+                    finalized_at,
+                    retry_quarantine_seconds=(
+                        self.config.scraper_execution_timeout_seconds
+                        + self.config.lease_duration_seconds
+                    ),
                 )
             except JobLeaseLostError:
                 logger.warning(
@@ -266,6 +318,77 @@ class ScrapingJobService:
                     job.id,
                 )
         return len(expired_jobs)
+
+    def reconcile_terminal_jobs(self) -> int:
+        try:
+            candidates = (
+                self.repository.list_terminal_jobs_with_running_executions()
+            )
+        except Exception:
+            logger.exception(
+                "Could not load terminal jobs with running executions."
+            )
+            return 0
+
+        reconciled_count = 0
+        for job in candidates:
+            try:
+                running_executions = [
+                    execution
+                    for execution in self.repository.list_executions(job.id)
+                    if execution.status == JobStatus.RUNNING
+                ]
+            except Exception:
+                logger.exception(
+                    "Could not load execution history for terminal job %s; "
+                    "reconciliation will be retried.",
+                    job.id,
+                )
+                continue
+            if not running_executions:
+                continue
+
+            expected_owner_id = job.last_lease_owner_id
+            expected_generation = job.lease_generation
+            if expected_owner_id is None or any(
+                execution.lease_owner_id != expected_owner_id
+                or execution.lease_generation != expected_generation
+                for execution in running_executions
+            ):
+                logger.error(
+                    "Terminal job %s has running executions whose owner or "
+                    "generation cannot be established; manual repair is required.",
+                    job.id,
+                )
+                continue
+
+            try:
+                reconciled = self.repository.reconcile_terminal_executions(
+                    job.id,
+                    expected_owner_id=expected_owner_id,
+                    expected_generation=expected_generation,
+                    now=_utc(None),
+                    retry_quarantine_seconds=(
+                        self.config.scraper_execution_timeout_seconds
+                        + self.config.lease_duration_seconds
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Could not persist reconciliation for terminal job %s; "
+                    "reconciliation will be retried.",
+                    job.id,
+                )
+                continue
+            if not reconciled:
+                logger.error(
+                    "Terminal job %s still has running executions after "
+                    "reconciliation was attempted.",
+                    job.id,
+                )
+                continue
+            reconciled_count += 1
+        return reconciled_count
 
     def recover_interrupted_jobs(
         self,
@@ -313,6 +436,8 @@ class ScrapingJobService:
                 progress=5,
                 stage="scraping",
                 logs=[f"[{current_time.isoformat()}] Scraping started."],
+                lease_owner_id=worker_id,
+                lease_generation=lease_generation,
             )
             created = self.repository.create_execution(
                 execution,
@@ -406,7 +531,7 @@ class ScrapingJobService:
                 claimed_job.id,
                 worker_id,
                 lease_generation,
-                execution,
+                [execution],
                 None,
                 finished_at,
                 lease_lost_event,
@@ -436,7 +561,7 @@ class ScrapingJobService:
                     claimed_job.id,
                     worker_id,
                     lease_generation,
-                    execution,
+                    [execution] if execution is not None else [],
                     failure,
                     _utc(None),
                 )
@@ -464,13 +589,24 @@ class ScrapingJobService:
         lease_lost_event: Event | None,
     ) -> list[dict]:
         attempts = job.configuration.retry_attempts + 1
+        deadline = (
+            monotonic() + self.config.scraper_execution_timeout_seconds
+        )
         for attempt in range(1, attempts + 1):
+            ensure_before_deadline(deadline)
             try:
-                return self.scraper_registry.scrape(
+                results = self.scraper_registry.scrape(
                     binding,
                     job.configuration.request_timeout_seconds,
+                    _deadline_monotonic=deadline,
                 )
+                ensure_before_deadline(deadline)
+                return results
             except requests.RequestException as exc:
+                try:
+                    ensure_before_deadline(deadline)
+                except ScraperExecutionDeadlineExceeded as deadline_error:
+                    raise deadline_error from exc
                 execution.logs.append(
                     f"Attempt {attempt} failed with {type(exc).__name__}."
                 )
@@ -520,10 +656,11 @@ class ScrapingJobService:
         job_id: str,
         worker_id: str,
         lease_generation: int,
-        execution: ScrapingExecution | None,
+        executions: list[ScrapingExecution],
         failure: str | None,
         finished_at: datetime,
         lease_lost_event: Event | None = None,
+        retry_quarantine_seconds: float | None = None,
     ) -> None:
         for _ in range(5):
             self._require_lease(
@@ -550,20 +687,11 @@ class ScrapingJobService:
                 "lease_owner_id": None,
                 "lease_expires_at": None,
                 "lease_generation": lease_generation,
+                "retry_not_before": None,
+                "retry_policy_version": 1,
             }
-            if execution is not None:
-                updates["products_found"] = execution.products_found
-                updates["success_rate"] = execution.success_rate
-            final_job = current_job.model_copy(update=updates)
-            saved = self.repository.finalize_owned_job(
-                final_job,
-                worker_id,
-                lease_generation,
-                _utc(None),
-                control,
-            )
-            if saved:
-                if execution is not None:
+            if executions:
+                for execution in executions:
                     if control == JobControl.CANCEL:
                         execution.status = JobStatus.CANCELLED
                         execution.stage = "cancelled"
@@ -575,18 +703,20 @@ class ScrapingJobService:
                         execution.stage = "finished"
                     execution.finished_at = finished_at
                     execution.progress = 100
-                    try:
-                        if not self.repository.update_execution(execution, job_id):
-                            raise ValueError(
-                                f"Execution {execution.id!r} could not be updated."
-                            )
-                    except Exception:
-                        logger.exception(
-                            "Job %s was finalized, but execution %s status "
-                            "could not be persisted.",
-                            job_id,
-                            execution.id,
-                        )
+                latest_execution = executions[0]
+                updates["products_found"] = latest_execution.products_found
+                updates["success_rate"] = latest_execution.success_rate
+            final_job = current_job.model_copy(update=updates)
+            saved = self.repository.finalize_owned_job(
+                final_job,
+                worker_id,
+                lease_generation,
+                _utc(None),
+                control,
+                executions,
+                retry_quarantine_seconds=retry_quarantine_seconds,
+            )
+            if saved:
                 return
 
             if not self.repository.is_lease_owner(

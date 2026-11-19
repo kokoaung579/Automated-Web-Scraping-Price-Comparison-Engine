@@ -71,6 +71,8 @@ class ScrapingExecution(BaseModel):
     stage: str = "queued"
     errors: list[str] = Field(default_factory=list)
     logs: list[str] = Field(default_factory=list)
+    lease_owner_id: str | None = Field(default=None, exclude=True)
+    lease_generation: int | None = Field(default=None, ge=0, exclude=True)
 
 
 class ScrapingJob(BaseModel):
@@ -95,4 +97,8 @@ class ScrapingJob(BaseModel):
     lease_owner_id: str | None = Field(default=None, exclude=True)
     lease_expires_at: datetime | None = Field(default=None, exclude=True)
     lease_generation: int = Field(default=0, ge=0, exclude=True)
+    last_lease_owner_id: str | None = Field(default=None, exclude=True)
     last_error: str | None = Field(default=None, exclude=True)
+    retry_not_before: datetime | None = Field(default=None, exclude=True)
+    retry_policy_version: int | None = Field(default=None, ge=1, exclude=True)
+    retry_quarantine_pending: bool = Field(default=False, exclude=True)

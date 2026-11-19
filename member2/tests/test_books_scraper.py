@@ -3,7 +3,8 @@ from unittest.mock import Mock, patch
 import pytest
 import requests
 
-from member2.app.scrapers.books_scraper import scrape_books
+from member2.app.scrapers.books_scraper import BASE_URL, scrape_books
+from member2.app.scrapers.deadline import ScraperExecutionDeadlineExceeded
 
 
 BOOK_HTML = """
@@ -128,6 +129,8 @@ def test_scrape_books_collects_products_from_multiple_pages():
     }
 
     def get_response(url, **kwargs):
+        assert kwargs["timeout"] == 15
+        assert "User-Agent" in kwargs["headers"]
         return responses[url]
 
     with patch("member2.app.scrapers.books_scraper.requests.get", side_effect=get_response):
@@ -200,3 +203,70 @@ def test_scrape_books_does_not_repeat_visited_page():
         scrape_books()
 
     assert mock_get.call_count == 2
+
+
+def test_scrape_books_bounds_request_timeout_by_remaining_deadline(monkeypatch):
+    monkeypatch.setattr(
+        "member2.app.scrapers.deadline.monotonic",
+        lambda: 100.0,
+    )
+
+    with patch(
+        "member2.app.scrapers.books_scraper.requests.get",
+        return_value=Mock(text=BOOK_HTML),
+    ) as mock_get:
+        scrape_books(timeout=15, execution_timeout_seconds=0.25)
+
+    assert mock_get.call_args.kwargs["timeout"] == pytest.approx(0.25)
+
+
+def test_scrape_books_does_not_return_partial_results_after_page_deadline(
+    monkeypatch,
+):
+    clock = [0.0]
+    monkeypatch.setattr(
+        "member2.app.scrapers.deadline.monotonic",
+        lambda: clock[0],
+    )
+    requested_urls = []
+
+    def finish_after_deadline(page_url, *, timeout, _deadline_monotonic):
+        requested_urls.append(page_url)
+        assert timeout == 15
+        assert _deadline_monotonic == 1.0
+        clock[0] = 2.0
+        return ([{"product_name": "partial"}], "https://books.toscrape.com/page-2/")
+
+    with patch(
+        "member2.app.scrapers.books_scraper._scrape_page",
+        side_effect=finish_after_deadline,
+    ):
+        with pytest.raises(ScraperExecutionDeadlineExceeded):
+            scrape_books(execution_timeout_seconds=1.0)
+
+    assert requested_urls == [BASE_URL]
+
+
+def test_scrape_books_converts_request_timeout_after_deadline_to_total_deadline(
+    monkeypatch,
+):
+    clock = [0.0]
+    monkeypatch.setattr(
+        "member2.app.scrapers.deadline.monotonic",
+        lambda: clock[0],
+    )
+
+    def timeout_after_deadline(page_url, **kwargs):
+        assert page_url == BASE_URL
+        assert kwargs["timeout"] > 0
+        clock[0] = 2.0
+        raise requests.Timeout("request timed out")
+
+    with patch(
+        "member2.app.scrapers.books_scraper.requests.get",
+        side_effect=timeout_after_deadline,
+    ) as mock_get:
+        with pytest.raises(ScraperExecutionDeadlineExceeded):
+            scrape_books(execution_timeout_seconds=1.0)
+
+    assert mock_get.call_count == 1

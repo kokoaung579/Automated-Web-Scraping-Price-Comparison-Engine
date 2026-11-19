@@ -1,11 +1,25 @@
 
 import requests
 
+from .deadline import (
+    DEFAULT_SCRAPER_EXECUTION_TIMEOUT_SECONDS,
+    bounded_request_timeout,
+    create_deadline,
+    ensure_before_deadline,
+    raise_deadline_if_expired,
+)
+
 
 BASE_URL = "https://dummyjson.com"
 
 
-def search_products(keyword: str, *, timeout: int = 15) -> list[dict]:
+def search_products(
+    keyword: str,
+    *,
+    timeout: int = 15,
+    execution_timeout_seconds: float = DEFAULT_SCRAPER_EXECUTION_TIMEOUT_SECONDS,
+    _deadline_monotonic: float | None = None,
+) -> list[dict]:
     """
     Search products from DummyJSON API
     and return normalized product data.
@@ -20,15 +34,25 @@ def search_products(keyword: str, *, timeout: int = 15) -> list[dict]:
         "q": keyword.strip()
     }
 
-    response = requests.get(
-        url,
-        params=params,
-        timeout=timeout
+    deadline = create_deadline(
+        execution_timeout_seconds,
+        _deadline_monotonic,
     )
-
-    response.raise_for_status()
+    ensure_before_deadline(deadline)
+    try:
+        response = requests.get(
+            url,
+            params=params,
+            timeout=bounded_request_timeout(timeout, deadline),
+        )
+        ensure_before_deadline(deadline)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise_deadline_if_expired(exc, deadline)
+        raise
 
     data = response.json()
+    ensure_before_deadline(deadline)
     products = data.get("products", [])
 
     results = []
@@ -46,4 +70,5 @@ def search_products(keyword: str, *, timeout: int = 15) -> list[dict]:
             "product_url": None
         })
 
+    ensure_before_deadline(deadline)
     return results

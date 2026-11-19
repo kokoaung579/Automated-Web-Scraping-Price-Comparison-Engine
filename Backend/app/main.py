@@ -13,7 +13,13 @@ from fastapi import FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo.errors import DuplicateKeyError
 
+from app.config import get_member2_integration_test_config
 from app.database import connect_db
+from app.member2_runtime import (
+    Member2JobRuntime,
+    start_member2_runtime,
+    stop_member2_runtime,
+)
 from app.models import (
     AdminProduct,
     DemoNotification,
@@ -31,13 +37,28 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    client, database = await connect_db()
-    application.state.mongo_client = client
-    application.state.database = database
+    client = None
+    member2_runtime: Member2JobRuntime | None = None
     try:
+        mongo_uri, database_name = get_member2_integration_test_config()
+        client, database = await connect_db()
+        application.state.mongo_client = client
+        application.state.database = database
+
+        member2_runtime = await start_member2_runtime(
+            mongo_uri,
+            database_name,
+        )
+        application.state.member2_job_runtime = member2_runtime
+        application.state.member2_job_service = member2_runtime.service
         yield
     finally:
-        await client.close()
+        try:
+            if member2_runtime is not None:
+                await stop_member2_runtime(member2_runtime)
+        finally:
+            if client is not None:
+                await client.close()
 
 
 app = FastAPI(

@@ -4,6 +4,14 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from .deadline import (
+    DEFAULT_SCRAPER_EXECUTION_TIMEOUT_SECONDS,
+    bounded_request_timeout,
+    create_deadline,
+    ensure_before_deadline,
+    raise_deadline_if_expired,
+)
+
 
 BASE_URL = "https://books.toscrape.com/"
 USER_AGENT = "Mozilla/5.0 (compatible; Member2PriceComparisonBot/1.0)"
@@ -13,19 +21,25 @@ def _scrape_page(
     page_url: str,
     *,
     timeout: int = 15,
+    _deadline_monotonic: float | None = None,
 ) -> tuple[list[dict], str | None]:
     """
     Scrape books from Books to Scrape
     and return normalized product data.
     """
 
-    response = requests.get(
-        page_url,
-        headers={"User-Agent": USER_AGENT},
-        timeout=timeout
-    )
-
-    response.raise_for_status()
+    ensure_before_deadline(_deadline_monotonic)
+    try:
+        response = requests.get(
+            page_url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=bounded_request_timeout(timeout, _deadline_monotonic),
+        )
+        ensure_before_deadline(_deadline_monotonic)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise_deadline_if_expired(exc, _deadline_monotonic)
+        raise
 
     soup = BeautifulSoup(response.text, "html.parser")
     results = []
@@ -92,10 +106,16 @@ def _scrape_page(
         if next_href:
             next_url = urljoin(page_url, next_href)
 
+    ensure_before_deadline(_deadline_monotonic)
     return results, next_url
 
 
-def scrape_books(*, timeout: int = 15) -> list[dict]:
+def scrape_books(
+    *,
+    timeout: int = 15,
+    execution_timeout_seconds: float = DEFAULT_SCRAPER_EXECUTION_TIMEOUT_SECONDS,
+    _deadline_monotonic: float | None = None,
+) -> list[dict]:
     """
     Scrape books from all Books to Scrape pages
     and return normalized product data.
@@ -104,10 +124,20 @@ def scrape_books(*, timeout: int = 15) -> list[dict]:
     results = []
     visited_urls = set()
     current_url = BASE_URL
+    deadline = create_deadline(
+        execution_timeout_seconds,
+        _deadline_monotonic,
+    )
 
     while current_url not in visited_urls:
+        ensure_before_deadline(deadline)
         visited_urls.add(current_url)
-        page_results, next_url = _scrape_page(current_url, timeout=timeout)
+        page_results, next_url = _scrape_page(
+            current_url,
+            timeout=timeout,
+            _deadline_monotonic=deadline,
+        )
+        ensure_before_deadline(deadline)
         results.extend(page_results)
 
         if next_url is None or next_url in visited_urls:
@@ -115,4 +145,5 @@ def scrape_books(*, timeout: int = 15) -> list[dict]:
 
         current_url = next_url
 
+    ensure_before_deadline(deadline)
     return results

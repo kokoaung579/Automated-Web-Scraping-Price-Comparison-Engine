@@ -32,6 +32,9 @@ class ScrapingJobWorker:
                     self.service.recover_expired_jobs,
                     worker_id=self.worker_id,
                 )
+                await asyncio.to_thread(
+                    self.service.reconcile_terminal_jobs,
+                )
                 job = await asyncio.to_thread(
                     self.service.claim_next_job,
                     worker_id=self.worker_id,

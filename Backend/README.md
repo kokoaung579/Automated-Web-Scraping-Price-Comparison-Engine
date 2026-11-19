@@ -27,8 +27,29 @@ Run the API from the `Backend` directory:
 
 ```powershell
 cd Backend
+$repositoryRoot = (Resolve-Path ..).Path
+if ($env:PYTHONPATH) {
+  $env:PYTHONPATH = "$repositoryRoot;$env:PYTHONPATH"
+} else {
+  $env:PYTHONPATH = $repositoryRoot
+}
 .\venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
+
+The repository root is added to `PYTHONPATH` so the backend can import the
+sibling `member2` package without changing `sys.path` at runtime.
+
+For Member 2 integration testing only, set
+`MEMBER2_INTEGRATION_TEST_MODE=true`,
+`MEMBER2_TEST_MONGODB_URI`, and `MEMBER2_TEST_DATABASE_NAME` in the process
+environment. The test URI must not include a database path, and the database
+name must end in `_test`. When test mode is selected, both the main backend
+client and any injected Member 2 client use these dedicated settings; invalid
+or incomplete test settings fail startup instead of falling back to the normal
+MongoDB configuration. Startup seeding therefore also targets the selected
+test database. Use a transaction-capable replica set or sharded deployment;
+do not use a standalone MongoDB server for job transaction tests. Never put
+test credentials in tracked files.
 
 The local Vite origin `http://localhost:5173` is allowed by CORS (as is
 `http://127.0.0.1:5173`). Interactive API documentation is available at
