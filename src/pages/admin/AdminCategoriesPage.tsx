@@ -1,12 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Check, Package, Pencil, Plus, Search, Tags, Trash2, X } from 'lucide-react'
-import {
-  loadAdminCategories,
-  saveAdminCategories,
-} from '../../data/adminCategories'
+import { api } from '../../api/client'
 import type { AdminCategory } from '../../data/adminCategories'
-import { loadAdminProducts, saveAdminProducts } from '../../data/adminProducts'
 import type { Product } from '../../types/product'
 
 type CategoryValues = Pick<AdminCategory, 'name' | 'description' | 'status'>
@@ -24,7 +20,7 @@ function CategoryDialog({
   category: AdminCategory | null
   categories: AdminCategory[]
   onClose: () => void
-  onSave: (values: CategoryValues) => boolean
+  onSave: (values: CategoryValues) => Promise<boolean>
 }) {
   const [name, setName] = useState(category?.name ?? '')
   const [description, setDescription] = useState(category?.description ?? '')
@@ -32,9 +28,11 @@ function CategoryDialog({
     category?.status ?? 'Active',
   )
   const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (saving) return
     const normalizedName = name.trim()
 
     if (!normalizedName) {
@@ -52,12 +50,17 @@ function CategoryDialog({
       return
     }
 
-    const saved = onSave({
-      name: normalizedName,
-      description: description.trim(),
-      status,
-    })
-    if (saved) onClose()
+    setSaving(true)
+    try {
+      const saved = await onSave({
+        name: normalizedName,
+        description: description.trim(),
+        status,
+      })
+      if (saved) onClose()
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -158,7 +161,8 @@ function CategoryDialog({
             </button>
             <button
               type="submit"
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-400"
+              disabled={saving}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Check aria-hidden="true" size={14} />
               Save category
@@ -228,24 +232,11 @@ function DeleteCategoryDialog({
 }
 
 export function AdminCategoriesPage() {
-  const [catalog, setCatalog] = useState(() => {
-    try {
-      return {
-        categories: loadAdminCategories(),
-        products: loadAdminProducts(),
-        error: '',
-      }
-    } catch (error) {
-      return {
-        categories: [] as AdminCategory[],
-        products: [] as Product[],
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Could not load saved category data.',
-      }
-    }
-  })
+  const [catalog, setCatalog] = useState<{
+    categories: AdminCategory[]
+    products: Product[]
+    error: string
+  }>({ categories: [], products: [], error: '' })
   const [searchQuery, setSearchQuery] = useState('')
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingCategory, setEditingCategory] = useState<AdminCategory | null>(
@@ -256,6 +247,33 @@ export function AdminCategoriesPage() {
   const [feedback, setFeedback] = useState('')
   const categories = catalog.categories
   const products = catalog.products
+
+  useEffect(() => {
+    let active = true
+    Promise.all([api.adminCategories(), api.adminProducts()])
+      .then(([nextCategories, nextProducts]) => {
+        if (!active) return
+        setCatalog({
+          categories: nextCategories,
+          products: nextProducts,
+          error: '',
+        })
+      })
+      .catch((error: unknown) => {
+        if (!active) return
+        setCatalog({
+          categories: [],
+          products: [],
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Could not load category data.',
+        })
+      })
+    return () => {
+      active = false
+    }
+  }, [])
 
   const productCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -274,33 +292,12 @@ export function AdminCategoriesPage() {
     )
   }, [categories, searchQuery])
 
-  function persistChanges(
-    nextCategories: AdminCategory[],
-    nextProducts: Product[],
-    message: string,
-  ): boolean {
-    try {
-      saveAdminCategories(nextCategories)
-      if (nextProducts !== products) saveAdminProducts(nextProducts)
-      setCatalog({ categories: nextCategories, products: nextProducts, error: '' })
-      setFeedback(message)
-      return true
-    } catch (error) {
-      let rollbackError = ''
-      try {
-        saveAdminCategories(categories)
-        if (nextProducts !== products) saveAdminProducts(products)
-      } catch (restoreError) {
-        rollbackError =
-          restoreError instanceof Error
-            ? ` Restore also failed: ${restoreError.message}`
-            : ' Restore also failed.'
-      }
-      setFeedback(
-        `${error instanceof Error ? error.message : 'Could not save category changes.'}${rollbackError}`,
-      )
-      return false
-    }
+  async function reloadCatalog() {
+    const [nextCategories, nextProducts] = await Promise.all([
+      api.adminCategories(),
+      api.adminProducts(),
+    ])
+    setCatalog({ categories: nextCategories, products: nextProducts, error: '' })
   }
 
   function openCreateForm() {
@@ -315,7 +312,7 @@ export function AdminCategoriesPage() {
     setFeedback('')
   }
 
-  function saveCategory(values: CategoryValues): boolean {
+  async function saveCategory(values: CategoryValues): Promise<boolean> {
     const now = new Date().toISOString()
     const existing = editingCategory
     const category: AdminCategory = {
@@ -323,32 +320,31 @@ export function AdminCategoriesPage() {
       created_at: existing?.created_at ?? now,
       updated_at: now,
     }
-    const nextCategories = existing
-      ? categories.map((item) =>
-          item.name === existing.name ? category : item,
-        )
-      : [...categories, category].sort((a, b) => a.name.localeCompare(b.name))
-    const nextProducts =
-      existing && existing.name !== category.name
-        ? products.map((product) =>
-            product.category === existing.name
-              ? { ...product, category: category.name, updated_at: now }
-              : product,
-          )
-        : products
-
-    const saved = persistChanges(
-      nextCategories,
-      nextProducts,
-      existing
-        ? `${category.name} updated. Product category values were kept in sync.`
-        : `${category.name} added.`,
-    )
-    if (saved) setEditingCategory(null)
-    return saved
+    try {
+      if (existing) {
+        await api.updateAdminCategory(existing.name, category)
+      } else {
+        await api.createAdminCategory(category)
+      }
+      await reloadCatalog()
+      setFeedback(
+        existing
+          ? `${category.name} updated. Product category values were kept in sync.`
+          : `${category.name} added.`,
+      )
+      setEditingCategory(null)
+      return true
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : 'Could not save category changes.',
+      )
+      return false
+    }
   }
 
-  function confirmDelete() {
+  async function confirmDelete() {
     if (!deletingCategory) return
     const productCount = productCounts.get(deletingCategory.name) ?? 0
     if (productCount > 0) {
@@ -359,11 +355,17 @@ export function AdminCategoriesPage() {
       return
     }
 
-    persistChanges(
-      categories.filter((category) => category.name !== deletingCategory.name),
-      products,
-      `${deletingCategory.name} deleted.`,
-    )
+    try {
+      await api.deleteAdminCategory(deletingCategory.name)
+      await reloadCatalog()
+      setFeedback(`${deletingCategory.name} deleted.`)
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : 'Could not delete category.',
+      )
+    }
     setDeletingCategory(null)
   }
 
@@ -561,7 +563,7 @@ export function AdminCategoriesPage() {
           </table>
         </div>
         <div className="border-t border-white/[0.06] px-5 py-3 text-[10px] text-slate-600">
-          Category data is saved in this browser and shared with product
+          Category data is stored in MongoDB and shared with product
           validation.
         </div>
       </section>

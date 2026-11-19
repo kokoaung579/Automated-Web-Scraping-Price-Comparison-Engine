@@ -27,8 +27,44 @@ from pydantic import (
 )
 from pymongo.errors import DuplicateKeyError
 
+from app.services.notifications import create_notification
+
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
+
+
+async def write_audit(
+    database,
+    *,
+    user: dict,
+    action: str,
+    module: str,
+    description: str,
+    request: Request | None = None,
+    target_record_id: str | None = None,
+    event_status: str = "SUCCESS",
+) -> None:
+    """Write one audit event using the authenticated actor's real identity."""
+    if not user.get("_id") or not user.get("email"):
+        return
+    try:
+        from app.routers.audit import record_audit_log, request_ip
+
+        await record_audit_log(
+            database,
+            user_id=str(user["_id"]),
+            user_email=str(user["email"]),
+            action=action,
+            module=module,
+            description=description,
+            ip_address=request_ip(request),
+            status=event_status,
+            target_record_id=target_record_id,
+            actor_role=str(user.get("role") or "User"),
+        )
+    except Exception as exc:
+        logger.warning("Unable to write audit event for %s: %s", action, exc)
+
 
 SESSION_COOKIE = "pricepilot_session"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 14
@@ -537,21 +573,15 @@ async def login(
         )
 
     await _create_session(database, user, response)
-    try:
-        from app.routers.audit import record_audit_log
-
-        await record_audit_log(
-            database,
-            user_id=str(user["_id"]),
-            user_email=user["email"],
-            action="SIGN_IN",
-            module="USER_MANAGEMENT",
-            description="Signed in to the admin workspace.",
-            ip_address=request.client.host if request.client else "",
-            status="SUCCESS",
-        )
-    except Exception:
-        pass
+    await write_audit(
+        database,
+        user=user,
+        action="SIGN_IN",
+        module="USER_MANAGEMENT",
+        description="Signed in to the admin workspace.",
+        request=request,
+        target_record_id=str(user["_id"]),
+    )
     return _public_user(user)
 
 
@@ -571,10 +601,11 @@ async def logout(
     database=Depends(get_database),
 ):
     token = request.cookies.get(SESSION_COOKIE)
+    session = None
     if token:
-        await database.sessions.delete_one({
-            "_id": hashlib.sha256(token.encode("ascii")).hexdigest()
-        })
+        session_id = hashlib.sha256(token.encode("ascii")).hexdigest()
+        session = await database.sessions.find_one({"_id": session_id})
+        await database.sessions.delete_one({"_id": session_id})
     response.delete_cookie(
         key=SESSION_COOKIE,
         httponly=True,
@@ -583,6 +614,19 @@ async def logout(
         path="/api",
     )
     response.status_code = status.HTTP_204_NO_CONTENT
+
+    if session and session.get("userId"):
+        user = await database.users.find_one({"_id": session["userId"]})
+        if user is not None:
+            await write_audit(
+                database,
+                user=user,
+                action="SIGN_OUT",
+                module="USER_MANAGEMENT",
+                description="Signed out of the admin workspace.",
+                request=request,
+                target_record_id=str(user["_id"]),
+            )
     return response
 
 
@@ -626,6 +670,15 @@ async def update_user_status(
     normalized_email = email.strip().casefold()
     user = await database.users.find_one({"email": normalized_email})
     if user is None:
+        await write_audit(
+            database,
+            user=admin,
+            action="STATUS_CHANGE",
+            module="USER_MANAGEMENT",
+            description=f"Failed to change status for {email}: account not found.",
+            request=request,
+            event_status="FAILED",
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User account not found.",
@@ -634,6 +687,16 @@ async def update_user_status(
         user["_id"] == admin["_id"]
         and payload.status == "Inactive"
     ):
+        await write_audit(
+            database,
+            user=admin,
+            action="STATUS_CHANGE",
+            module="USER_MANAGEMENT",
+            description=f"Failed to deactivate {email}: cannot deactivate current account.",
+            request=request,
+            target_record_id=str(user["_id"]),
+            event_status="FAILED",
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="You cannot deactivate the account currently in use.",
@@ -646,33 +709,63 @@ async def update_user_status(
     if payload.status == "Inactive":
         await database.sessions.delete_many({"userId": user["_id"]})
     user["status"] = payload.status
-    try:
-        from app.routers.audit import record_audit_log
-
-        await record_audit_log(
-            database,
-            user_id=str(admin["_id"]),
-            user_email=admin["email"],
-            action="STATUS_CHANGE",
-            module="USER_MANAGEMENT",
-            description=f"Changed {email} to {payload.status}.",
-            ip_address=request.client.host if request.client else "",
-            status="SUCCESS",
-        )
-    except Exception:
-        pass
+    await write_audit(
+        database,
+        user=admin,
+        action="STATUS_CHANGE",
+        module="USER_MANAGEMENT",
+        description=f"Changed {email} to {payload.status}.",
+        request=request,
+        target_record_id=str(user["_id"]),
+    )
+    changed_at = datetime.now(timezone.utc).isoformat()
+    is_disabled = payload.status == "Inactive"
+    await create_notification(
+        database,
+        category="user_management",
+        type=(
+            "user_management.disabled"
+            if is_disabled
+            else "user_management.activated"
+        ),
+        title=(
+            "User account disabled" if is_disabled else "User account activated"
+        ),
+        description=(
+            f"Account {normalized_email} was "
+            f"{'disabled' if is_disabled else 'activated'}."
+        ),
+        metadata={
+            "userId": str(user["_id"]),
+            "email": normalized_email,
+            "status": payload.status,
+            "actorEmail": str(admin.get("email") or ""),
+            "changedAt": changed_at,
+        },
+        dedupe_key=f"user-status:{user['_id']}:{payload.status}:{changed_at}",
+    )
     return _public_user(user)
 
 
 @router.delete("/admin/users/{user_id}")
 async def delete_user(
     user_id: str,
+    request: Request,
     database=Depends(get_database),
     admin: dict = Depends(require_admin),
 ):
     try:
         normalized_user_id = str(UUID(user_id))
     except ValueError as error:
+        await write_audit(
+            database,
+            user=admin,
+            action="DELETE",
+            module="USER_MANAGEMENT",
+            description=f"Failed to delete user: invalid id {user_id}.",
+            request=request,
+            event_status="FAILED",
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="User ID must be a valid UUID.",
@@ -680,11 +773,31 @@ async def delete_user(
 
     user = await database.users.find_one({"_id": normalized_user_id})
     if user is None:
+        await write_audit(
+            database,
+            user=admin,
+            action="DELETE",
+            module="USER_MANAGEMENT",
+            description="Failed to delete user: account not found.",
+            request=request,
+            target_record_id=normalized_user_id,
+            event_status="FAILED",
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User account not found.",
         )
     if user["_id"] == admin["_id"]:
+        await write_audit(
+            database,
+            user=admin,
+            action="DELETE",
+            module="USER_MANAGEMENT",
+            description="Failed to delete user: cannot delete current account.",
+            request=request,
+            target_record_id=normalized_user_id,
+            event_status="FAILED",
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="You cannot delete the account currently in use.",
@@ -697,6 +810,16 @@ async def delete_user(
         protected_admin_email
         and user.get("email", "").casefold() == protected_admin_email
     ):
+        await write_audit(
+            database,
+            user=admin,
+            action="DELETE",
+            module="USER_MANAGEMENT",
+            description="Failed to delete user: main administrator is protected.",
+            request=request,
+            target_record_id=normalized_user_id,
+            event_status="FAILED",
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="The configured main administrator account cannot be deleted.",
@@ -704,10 +827,44 @@ async def delete_user(
 
     result = await database.users.delete_one({"_id": normalized_user_id})
     if result.deleted_count == 0:
+        await write_audit(
+            database,
+            user=admin,
+            action="DELETE",
+            module="USER_MANAGEMENT",
+            description="Failed to delete user: account not found.",
+            request=request,
+            target_record_id=normalized_user_id,
+            event_status="FAILED",
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User account not found.",
         )
+    await write_audit(
+        database,
+        user=admin,
+        action="DELETE",
+        module="USER_MANAGEMENT",
+        description=f"Deleted user {user['email']}.",
+        request=request,
+        target_record_id=normalized_user_id,
+    )
+    deleted_at = datetime.now(timezone.utc).isoformat()
+    await create_notification(
+        database,
+        category="user_management",
+        type="user_management.deleted",
+        title="User account deleted",
+        description=f"Deleted user account {user['email']}.",
+        metadata={
+            "userId": normalized_user_id,
+            "email": str(user["email"]),
+            "actorEmail": str(admin.get("email") or ""),
+            "deletedAt": deleted_at,
+        },
+        dedupe_key=f"user-deleted:{normalized_user_id}:{deleted_at}",
+    )
     return {"message": "User account deleted."}
 
 
@@ -717,6 +874,7 @@ async def delete_user(
 )
 async def import_browser_users(
     payload: LegacyAccountsImportRequest,
+    request: Request,
     database=Depends(get_database),
     admin: dict = Depends(require_admin),
 ):
@@ -776,6 +934,15 @@ async def import_browser_users(
         },
         upsert=True,
     )
+    if imported > 0:
+        await write_audit(
+            database,
+            user=admin,
+            action="IMPORT",
+            module="USER_MANAGEMENT",
+            description=f"Imported {imported} browser user account(s).",
+            request=request,
+        )
     return LegacyImportResult(
         imported=imported,
         skipped=skipped,
@@ -1090,6 +1257,27 @@ async def _verify_pending_registration(
         ) from None
 
     await collection.delete_one({"_id": pending["_id"]})
+    await write_audit(
+        database,
+        user=user,
+        action="CREATE",
+        module="USER_MANAGEMENT",
+        description=f"Created user account {user['email']} after verification.",
+        target_record_id=str(user["_id"]),
+    )
+    await create_notification(
+        database,
+        category="user_management",
+        type="user_management.created",
+        title="New user account created",
+        description=f"User account {user['email']} was created after verification.",
+        metadata={
+            "userId": str(user["_id"]),
+            "email": str(user["email"]),
+            "username": str(user["username"]),
+        },
+        dedupe_key=f"user-created:{user['_id']}",
+    )
     return user
 
 

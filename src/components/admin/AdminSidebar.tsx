@@ -1,10 +1,10 @@
 import {
   Activity,
+  Bell,
   Boxes,
   ChartNoAxesCombined,
   CircleGauge,
   ClipboardList,
-  Database,
   LayoutDashboard,
   Settings2,
   ShieldCheck,
@@ -65,6 +65,12 @@ const adminNavigation: {
     group: 'operations',
   },
   {
+    label: 'Notification Management',
+    to: '/admin/notifications',
+    icon: Bell,
+    group: 'system',
+  },
+  {
     label: 'System Settings',
     to: '/admin/settings',
     icon: Settings2,
@@ -92,21 +98,21 @@ export function AdminSidebar({
 
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-50 flex w-[264px] flex-col border-r border-white/[0.07] bg-[#0b101b] px-4 py-5 transition-transform duration-300 ease-out lg:translate-x-0 ${
+      className={`fixed inset-y-0 left-0 z-50 flex w-[272px] flex-col border-r border-white/[0.08] bg-[#0a101d]/95 px-4 py-5 shadow-[1px_0_0_rgba(255,255,255,0.02)] backdrop-blur-xl transition-transform duration-300 ease-out lg:translate-x-0 ${
         isOpen ? 'translate-x-0' : '-translate-x-full'
       }`}
     >
       <div className="flex items-center justify-between px-2">
         <div className="flex items-center gap-3">
-          <span className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-400 to-blue-700 text-white shadow-lg shadow-blue-950/40">
+          <span className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 via-blue-500 to-blue-700 text-white shadow-lg shadow-blue-950/50 ring-1 ring-white/10">
             <CircleGauge aria-hidden="true" size={21} strokeWidth={2.2} />
           </span>
           <span>
             <span className="block text-[15px] font-semibold tracking-tight text-white">
               PricePilot
             </span>
-            <span className="mt-0.5 block text-[9px] font-semibold uppercase tracking-[0.18em] text-blue-300">
-              Admin console
+            <span className="mt-0.5 block text-[10px] font-medium uppercase tracking-[0.16em] text-cyan-300/90">
+              Admin workspace
             </span>
           </span>
         </div>
@@ -120,7 +126,7 @@ export function AdminSidebar({
         </button>
       </div>
 
-      <div className="mt-8 rounded-xl border border-blue-300/[0.12] bg-gradient-to-r from-blue-500/[0.10] to-cyan-400/[0.04] px-3.5 py-3">
+      <div className="mt-6 rounded-xl border border-cyan-400/15 bg-gradient-to-r from-blue-500/10 via-cyan-500/[0.08] to-transparent px-3.5 py-3">
         <div className="flex items-center gap-2.5">
           <ShieldCheck
             aria-hidden="true"
@@ -128,25 +134,23 @@ export function AdminSidebar({
             className="shrink-0 text-cyan-300"
           />
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold text-slate-200">
-              Admin workspace
-            </p>
-            <p className="mt-0.5 truncate text-[10px] text-slate-500">
-              Signed in as {currentUser.username}
+            <p className="text-[11px] font-semibold text-slate-100">Admin Workspace</p>
+            <p className="mt-0.5 flex items-center gap-1.5 text-[10px] text-slate-400">
+              <span className="size-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
+              Status: Active session
             </p>
           </div>
-          <span className="ml-auto size-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />
         </div>
       </div>
 
-      <nav aria-label="Admin navigation" className="mt-7 flex-1 space-y-6">
+      <nav aria-label="Admin navigation" className="mt-6 flex-1 space-y-5 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {groups.map(({ key, label }) => {
           const items = adminNavigation.filter((item) => item.group === key)
           if (items.length === 0) return null
 
           return (
             <div key={key}>
-              <p className="mb-2 px-3 text-[9px] font-semibold uppercase tracking-[0.17em] text-slate-600">
+              <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-600">
                 {label}
               </p>
               <div className="space-y-1">
@@ -157,9 +161,9 @@ export function AdminSidebar({
                     end={to === '/admin'}
                     onClick={onClose}
                     className={({ isActive }) =>
-                      `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-[12px] font-medium transition duration-200 ${
+                      `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium transition duration-200 ${
                         isActive
-                          ? 'bg-blue-500/12 text-blue-200 ring-1 ring-inset ring-blue-400/15'
+                          ? 'bg-gradient-to-r from-cyan-500/15 to-blue-500/10 text-cyan-100 ring-1 ring-inset ring-cyan-400/20'
                           : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-100'
                       }`
                     }
@@ -172,16 +176,12 @@ export function AdminSidebar({
                           strokeWidth={isActive ? 2.2 : 1.8}
                           className={`shrink-0 transition ${
                             isActive
-                              ? 'text-blue-300'
+                              ? 'text-cyan-300'
                               : 'text-slate-500 group-hover:text-slate-300'
                           }`}
                         />
-                        <span className="min-w-0 flex-1 truncate">
-                          {itemLabel}
-                        </span>
-                        {isActive && (
-                          <span className="size-1.5 rounded-full bg-blue-300" />
-                        )}
+                        <span className="min-w-0 flex-1 truncate">{itemLabel}</span>
+                        {isActive && <span className="size-1.5 rounded-full bg-cyan-300" />}
                       </>
                     )}
                   </NavLink>
@@ -192,29 +192,27 @@ export function AdminSidebar({
         })}
       </nav>
 
-      <div className="rounded-2xl border border-white/[0.07] bg-gradient-to-br from-[#111b2b] to-[#0d1421] p-3.5">
+      <div className="mt-4 rounded-2xl border border-white/[0.08] bg-[#0f1728]/80 p-3.5">
+        <p className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+          Signed-in admin
+        </p>
         <div className="flex items-center gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-blue-300/15 bg-blue-400/[0.09] text-[11px] font-semibold text-blue-100">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-cyan-300/20 bg-cyan-400/10 text-[11px] font-semibold text-cyan-100">
             {initials}
           </span>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium text-slate-200">
+            <p className="truncate text-xs font-medium text-slate-100">
               {currentUser.username}
             </p>
             <p className="mt-0.5 truncate text-[10px] text-slate-500">
               {currentUser.email}
             </p>
           </div>
-          <Database
-            aria-label="Demo data"
-            size={15}
-            className="shrink-0 text-slate-600"
-          />
         </div>
         <div className="mt-3 flex items-center justify-between border-t border-white/[0.06] pt-3">
-          <span className="text-[9px] text-slate-600">Environment</span>
-          <span className="rounded-md border border-cyan-300/10 bg-cyan-300/[0.06] px-1.5 py-0.5 text-[9px] font-medium text-cyan-200">
-            DEMO
+          <span className="text-[10px] text-slate-500">Role</span>
+          <span className="rounded-md border border-blue-300/15 bg-blue-400/10 px-2 py-0.5 text-[10px] font-medium text-blue-200">
+            Administrator
           </span>
         </div>
       </div>

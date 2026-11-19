@@ -34,7 +34,9 @@ class MemoryCollection:
         self.documents = {document["_id"]: dict(document) for document in documents}
 
     async def insert_one(self, document):
-        self.documents[document["_id"]] = dict(document)
+        key = document.get("_id") or document.get("event_id")
+        self.documents[key] = dict(document)
+        return SimpleNamespace(inserted_id=key)
 
     async def update_one(self, query, update, upsert=False):
         key = next(
@@ -120,6 +122,7 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
                 }
             ]),
             price_history=MemoryCollection(),
+            audit_logs=MemoryCollection(),
             watchlist=MemoryCollection([{
                 "_id": "admin-product-1",
                 "productId": "admin-product-1",
@@ -148,8 +151,10 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
             updated_at="2026-11-17T00:00:00Z",
         )
 
+        request = SimpleNamespace(client=None)
+        admin = {"_id": "admin-user-1", "email": "admin@example.test", "role": "Admin"}
         with patch("app.main.get_database", return_value=database):
-            await create_admin_product(product)
+            await create_admin_product(product, request, admin)
             public_products = await list_products()
             admin_products = await list_admin_products()
 
@@ -166,9 +171,9 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         updated_product = product.model_copy(update={"price": 79.99})
         with patch("app.main.get_database", return_value=database):
-            await update_admin_product("admin-product-1", updated_product)
+            await update_admin_product("admin-product-1", updated_product, request, admin)
             updated_public_product = (await list_products())[0]
-            await delete_admin_product("admin-product-1")
+            await delete_admin_product("admin-product-1", request, admin)
             remaining_products = await list_products()
 
         self.assertEqual(updated_public_product["price"], 79.99)
@@ -183,6 +188,18 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(database.offers.documents, {})
         self.assertEqual(database.watchlist.documents, {})
         self.assertEqual(database.alerts.documents, {})
+
+        audit_actions = [
+            event["action"] for event in database.audit_logs.documents.values()
+        ]
+        self.assertEqual(audit_actions, ["CREATE", "UPDATE", "DELETE"])
+        for event in database.audit_logs.documents.values():
+            self.assertEqual(event["user_id"], "admin-user-1")
+            self.assertEqual(event["user_email"], "admin@example.test")
+            self.assertEqual(event["module"], "product-management")
+            self.assertEqual(event["target_record_id"], "admin-product-1")
+            self.assertEqual(event["status"], "success")
+            self.assertEqual(event["ip_address"], "")
 
     async def test_existing_public_products_are_visible_in_admin_product_list(self):
         database = SimpleNamespace(
@@ -294,6 +311,49 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         offer = next(iter(database.offers.documents.values()))
         self.assertEqual(offer["price"], 89.99)
+        history_prices = [
+            point["price"]
+            for history in database.price_history.documents.values()
+            for point in history["points"]
+        ]
+        self.assertEqual(history_prices, [89.99] * 4)
+
+    async def test_sync_accepts_legacy_null_sku_and_shipping_fee_fields(self):
+        product = AdminProduct(
+            product_id="legacy-admin-product",
+            product_name="Legacy Admin Product",
+            category="Audio",
+            store_id="best-buy",
+            price=89.99,
+            currency="USD",
+            availability="in_stock",
+            source_type="manual",
+            created_at="2026-11-17T00:00:00Z",
+            updated_at="2026-11-17T00:00:00Z",
+        )
+        legacy_admin_product = {
+            **product.model_dump(),
+            "sku": None,
+            "shipping_fee": None,
+        }
+        database = SimpleNamespace(
+            products=MemoryCollection([{
+                "_id": product.product_id,
+                **admin_product_to_catalog_document(product),
+                "adminProduct": legacy_admin_product,
+            }]),
+            offers=MemoryCollection(),
+            price_history=MemoryCollection(),
+        )
+
+        await sync_existing_admin_product_prices(database)
+
+        validated = AdminProduct.model_validate(legacy_admin_product)
+        self.assertIsNone(validated.sku)
+        self.assertIsNone(validated.shipping_fee)
+        offer = next(iter(database.offers.documents.values()))
+        self.assertEqual(offer["price"], 89.99)
+        self.assertEqual(offer["store"], "Best Buy")
         history_prices = [
             point["price"]
             for history in database.price_history.documents.values()

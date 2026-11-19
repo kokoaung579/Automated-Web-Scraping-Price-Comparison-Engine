@@ -1,6 +1,6 @@
 import { products as demoProducts } from './products'
 import { getProductCategories } from './adminCategories'
-import { getAdminStoreIds, getStoreIdFromName } from './adminStores'
+import { getStoreIdFromName } from './adminStores'
 import type { Product } from '../types/product'
 
 export const PRODUCT_SCHEMA_FIELDS = [
@@ -244,9 +244,10 @@ function validHttpUrl(value: string | null): boolean {
 export function validateProductImportRows(
   rows: ProductImportRow[],
   existingProducts: Product[],
+  knownStoreIds?: Iterable<string>,
 ): ProductImportResult[] {
   const categories = new Set(getProductCategories())
-  const storeIds = new Set(getAdminStoreIds())
+  const storeIds = knownStoreIds ? new Set(knownStoreIds) : null
   const existingIds = new Set(
     existingProducts.map((product) => product.product_id.toLowerCase()),
   )
@@ -275,9 +276,11 @@ export function validateProductImportRows(
     const productUrl = readText(values.product_url, 'product_url', errors, false)
     const rawStoreId = readText(values.store_id, 'store_id', errors, false)
     const storeId = rawStoreId
-      ? storeIds.has(rawStoreId)
-        ? rawStoreId
-        : getStoreIdFromName(rawStoreId)
+      ? storeIds
+        ? storeIds.has(rawStoreId)
+          ? rawStoreId
+          : getStoreIdFromName(rawStoreId)
+        : rawStoreId
       : null
     const currency = readText(values.currency, 'currency', errors, true)
     const availability = readText(
@@ -329,7 +332,7 @@ export function validateProductImportRows(
     if (productUrl && !validHttpUrl(productUrl)) {
       errors.push('product_url must be a valid HTTP or HTTPS URL.')
     }
-    if (storeId && !storeIds.has(storeId)) {
+    if (storeIds && storeId && !storeIds.has(storeId)) {
       errors.push('store_id must match a store in Store Management.')
     }
 

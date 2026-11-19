@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -17,9 +17,15 @@ import {
   Activity,
 } from 'lucide-react'
 import { api } from '../../api/client'
+import {
+  dateRangeUtcIso,
+  formatAuditTimestamp,
+  formatLongAuditTimestamp,
+} from '../../utils/datetime'
 import type {
   AuditActionType,
   AuditLog,
+  AuditLogsResponse,
   AuditLogStatus,
   AuditModule,
 } from '../../data/adminAuditLogs'
@@ -27,7 +33,16 @@ import type {
 type ModuleFilter = 'all' | AuditModule
 type ActionFilter = 'all' | AuditActionType
 type StatusFilter = 'all' | AuditLogStatus
-type AuditPageState = { logs: AuditLog[]; error: string }
+type AuditPageState = {
+  logs: AuditLog[]
+  error: string
+  loading: boolean
+  totalEvents: number
+  successful: number
+  warnings: number
+  failed: number
+  totalPages: number
+}
 
 const pageSize = 8
 const moduleLabels: Record<AuditModule, string> = {
@@ -49,11 +64,19 @@ const actionLabels: Record<AuditActionType, string> = {
   resume: 'Resume',
   complete: 'Complete',
   cancel: 'Cancel',
-  login: 'Sign-in',
+  'sign-in': 'Sign-in',
+  'sign-out': 'Sign-out',
 }
 const actionTypes = Object.keys(actionLabels) as AuditActionType[]
 const modules = Object.keys(moduleLabels) as AuditModule[]
 const statuses: AuditLogStatus[] = ['success', 'warning', 'failed']
+
+function labelFor<T extends string>(
+  labels: Record<T, string>,
+  value: string,
+): string {
+  return labels[value as T] ?? value.replace(/-/g, ' ')
+}
 
 const inputClassName =
   'h-10 w-full rounded-xl border border-white/[0.07] bg-[#090e18] px-3 text-xs text-slate-200 outline-none transition focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10'
@@ -62,27 +85,6 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Unable to load audit data.'
 }
 
-
-function formatTimestamp(value: string): string {
-  const date = new Date(value)
-  if (!Number.isFinite(date.getTime())) return 'Timestamp unavailable'
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date)
-}
-
-function formatLongTimestamp(value: string): string {
-  const date = new Date(value)
-  if (!Number.isFinite(date.getTime())) return 'Timestamp unavailable'
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'full',
-    timeStyle: 'medium',
-  }).format(date)
-}
 
 function StatusBadge({ status }: { status: AuditLogStatus }) {
   const Icon =
@@ -147,12 +149,6 @@ function selectValue<T extends string>(
   return allowed.find((item) => item === value) ?? 'all'
 }
 
-function dateBound(value: string, endOfDay: boolean): number | null {
-  if (!value) return null
-  const date = new Date(`${value}T${endOfDay ? '23:59:59.999' : '00:00:00'}`)
-  return Number.isFinite(date.getTime()) ? date.getTime() : null
-}
-
 function AuditDetailsDialog({
   log,
   onClose,
@@ -163,12 +159,15 @@ function AuditDetailsDialog({
   const fields: { label: string; value: string }[] = [
     { label: 'Actor', value: `${log.actor_name} (${log.actor_role})` },
     { label: 'Email', value: log.actor_email },
-    { label: 'Action type', value: actionLabels[log.action_type] },
-    { label: 'Module', value: moduleLabels[log.module] },
+    { label: 'Action type', value: labelFor(actionLabels, log.action_type) },
+    { label: 'Module', value: labelFor(moduleLabels, log.module) },
     { label: 'Status', value: log.status[0].toUpperCase() + log.status.slice(1) },
-    { label: 'IP address', value: log.ip_address },
-    { label: 'Record ID', value: log.id },
-    { label: 'Record source', value: log.source === 'demo' ? ' Audit data' : 'Backend' },
+    { label: 'IP address', value: log.ip_address || 'Unavailable' },
+    { label: 'Event ID', value: log.event_id ?? log.id },
+    ...(log.target_record_id
+      ? [{ label: 'Target record', value: log.target_record_id }]
+      : []),
+    { label: 'Record source', value: 'Backend audit log' },
   ]
 
   return (
@@ -212,7 +211,7 @@ function AuditDetailsDialog({
             <p className="mt-2 text-xs leading-5 text-slate-300">{log.description}</p>
             <p className="mt-3 flex items-center gap-2 text-[10px] text-slate-500">
               <Clock3 aria-hidden="true" size={13} />
-              {formatLongTimestamp(log.timestamp)}
+              {formatLongAuditTimestamp(log.timestamp)}
             </p>
           </div>
           <dl className="grid gap-x-6 sm:grid-cols-2">
@@ -261,20 +260,16 @@ function AuditDetailsDialog({
 }
 
 export function AdminAuditLogsPage() {
-  const [pageState, setPageState] = useState<AuditPageState>({ logs: [], error: '' })
-  useEffect(() => {
-    let active = true
-    api.auditLogs()
-      .then((result: any) => {
-        if (active) setPageState({ logs: (result.logs ?? []) as AuditLog[], error: '' })
-      })
-      .catch((error: unknown) => {
-        if (active) setPageState({ logs: [], error: getErrorMessage(error) })
-      })
-    return () => {
-      active = false
-    }
-  }, [])
+  const [pageState, setPageState] = useState<AuditPageState>({
+    logs: [],
+    error: '',
+    loading: true,
+    totalEvents: 0,
+    successful: 0,
+    warnings: 0,
+    failed: 0,
+    totalPages: 1,
+  })
   const [searchQuery, setSearchQuery] = useState('')
   const [moduleFilter, setModuleFilter] = useState<ModuleFilter>('all')
   const [actionFilter, setActionFilter] = useState<ActionFilter>('all')
@@ -282,48 +277,90 @@ export function AdminAuditLogsPage() {
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [page, setPage] = useState(1)
+  const [retryToken, setRetryToken] = useState(0)
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null)
-  const logs = pageState.logs
 
-  const sortedLogs = useMemo(
-    () => [...logs].sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp)),
-    [logs],
-  )
-  const filteredLogs = useMemo(() => {
-    const query = searchQuery.trim().toLocaleLowerCase()
-    const start = dateBound(startDate, false)
-    const end = dateBound(endDate, true)
+  const invalidDateRange =
+    Boolean(startDate && endDate) && startDate > endDate
 
-    return sortedLogs.filter((log) => {
-      const timestamp = Date.parse(log.timestamp)
-      const matchesSearch =
-        !query ||
-        log.actor_name.toLocaleLowerCase().includes(query) ||
-        log.actor_email.toLocaleLowerCase().includes(query) ||
-        log.action.toLocaleLowerCase().includes(query)
-      return (
-        matchesSearch &&
-        (moduleFilter === 'all' || log.module === moduleFilter) &&
-        (actionFilter === 'all' || log.action_type === actionFilter) &&
-        (statusFilter === 'all' || log.status === statusFilter) &&
-        (start === null || timestamp >= start) &&
-        (end === null || timestamp <= end)
-      )
-    })
-  }, [actionFilter, endDate, moduleFilter, searchQuery, sortedLogs, startDate, statusFilter])
+  useEffect(() => {
+    if (invalidDateRange) {
+      setPageState({
+        logs: [],
+        error: '',
+        loading: false,
+        totalEvents: 0,
+        successful: 0,
+        warnings: 0,
+        failed: 0,
+        totalPages: 1,
+      })
+      return
+    }
+    let active = true
+    setPageState((previous) => ({ ...previous, loading: true, error: '' }))
+    api
+      .auditLogs({
+        search: searchQuery,
+        module: moduleFilter === 'all' ? undefined : moduleFilter,
+        action: actionFilter === 'all' ? undefined : actionFilter,
+        status: statusFilter === 'all' ? undefined : statusFilter,
+        startDate: dateRangeUtcIso(startDate, false),
+        endDate: dateRangeUtcIso(endDate, true),
+        page,
+        limit: pageSize,
+      })
+      .then((result: AuditLogsResponse) => {
+        if (!active) return
+        setPageState({
+          logs: result.logs ?? [],
+          error: '',
+          loading: false,
+          totalEvents: result.total_events ?? 0,
+          successful: result.successful ?? 0,
+          warnings: result.warnings ?? 0,
+          failed: result.failed ?? 0,
+          totalPages: result.total_pages ?? 1,
+        })
+      })
+      .catch((error: unknown) => {
+        if (!active) return
+        setPageState({
+          logs: [],
+          error: getErrorMessage(error),
+          loading: false,
+          totalEvents: 0,
+          successful: 0,
+          warnings: 0,
+          failed: 0,
+          totalPages: 1,
+        })
+      })
+    return () => {
+      active = false
+    }
+  }, [
+    actionFilter,
+    endDate,
+    invalidDateRange,
+    moduleFilter,
+    page,
+    retryToken,
+    searchQuery,
+    startDate,
+    statusFilter,
+  ])
 
-  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / pageSize))
+  const visibleLogs = pageState.logs
+  const totalPages = Math.max(1, pageState.totalPages)
   const currentPage = Math.min(page, totalPages)
   const startIndex = (currentPage - 1) * pageSize
-  const visibleLogs = filteredLogs.slice(startIndex, startIndex + pageSize)
   const summary = {
-    total: logs.length,
-    successful: logs.filter((log) => log.status === 'success').length,
-    warnings: logs.filter((log) => log.status === 'warning').length,
-    failed: logs.filter((log) => log.status === 'failed').length,
+    total: pageState.totalEvents,
+    successful: pageState.successful,
+    warnings: pageState.warnings,
+    failed: pageState.failed,
   }
-  const invalidDateRange =
-    Boolean(startDate && endDate) && dateBound(startDate, false)! > dateBound(endDate, true)!
 
   function resetPage() {
     setPage(1)
@@ -340,10 +377,8 @@ export function AdminAuditLogsPage() {
   }
 
   function reloadLogs() {
-    api.auditLogs()
-      .then((result: any) => setPageState({ logs: (result.logs ?? []) as AuditLog[], error: '' }))
-      .catch((error: unknown) => setPageState({ logs: [], error: getErrorMessage(error) }))
     setPage(1)
+    setRetryToken((token) => token + 1)
   }
 
   return (
@@ -372,9 +407,15 @@ export function AdminAuditLogsPage() {
       <div className="flex items-start gap-3 rounded-xl border border-blue-300/10 bg-blue-400/[0.04] px-4 py-3">
         <Activity aria-hidden="true" size={15} className="mt-0.5 shrink-0 text-blue-300" />
         <p className="text-[10px] leading-5 text-slate-400">
-          All records shown are sample audit data stored in this browser. IP addresses use documentation-only ranges; no live user activity is recorded.
+          Live, read-only audit events recorded by the backend whenever an admin action occurs.
         </p>
       </div>
+
+      {pageState.loading && (
+        <p role="status" className="rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3 text-xs text-slate-400">
+          Loading audit records…
+        </p>
+      )}
 
       {pageState.error && (
         <div role="alert" className="flex flex-col items-start gap-3 rounded-xl border border-rose-300/10 bg-rose-400/[0.05] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -402,7 +443,7 @@ export function AdminAuditLogsPage() {
             <div>
               <h3 className="text-sm font-semibold text-white">Activity history</h3>
               <p className="mt-1 text-[10px] text-slate-500">
-                Showing {filteredLogs.length ? startIndex + 1 : 0}–{Math.min(startIndex + pageSize, filteredLogs.length)} of {filteredLogs.length} matching audit records
+                Showing {visibleLogs.length ? startIndex + 1 : 0}–{startIndex + visibleLogs.length} of {summary.total} matching audit records
               </p>
             </div>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-white/[0.07] bg-white/[0.025] px-2.5 py-1 text-[9px] font-medium text-slate-500">
@@ -535,7 +576,7 @@ export function AdminAuditLogsPage() {
 
         {pageState.error ? (
           <div className="px-5 py-10 text-center text-xs text-slate-500">
-            Audit records are unavailable until the saved audit data can be loaded.
+            Audit records are unavailable until the backend audit service can be reached.
           </div>
         ) : (
           <>
@@ -557,7 +598,7 @@ export function AdminAuditLogsPage() {
                   {visibleLogs.map((log) => (
                     <tr key={log.id} className="align-middle transition-colors hover:bg-white/[0.02]">
                       <td className="whitespace-nowrap px-5 py-4 text-[10px] text-slate-400">
-                        {formatTimestamp(log.timestamp)}
+                        {formatAuditTimestamp(log.timestamp)}
                       </td>
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-2.5">
@@ -578,11 +619,11 @@ export function AdminAuditLogsPage() {
                       </td>
                       <td className="px-4 py-4">
                         <p className="whitespace-nowrap text-[11px] font-medium text-slate-200">{log.action}</p>
-                        <p className="mt-1 text-[9px] text-slate-600">{actionLabels[log.action_type]}</p>
+                        <p className="mt-1 text-[9px] text-slate-600">{labelFor(actionLabels, log.action_type)}</p>
                       </td>
                       <td className="px-4 py-4">
                         <span className="whitespace-nowrap rounded-lg border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-[9px] text-slate-400">
-                          {moduleLabels[log.module]}
+                          {labelFor(moduleLabels, log.module)}
                         </span>
                       </td>
                       <td className="max-w-[260px] px-4 py-4 text-[10px] leading-4 text-slate-400">{log.description}</td>
@@ -615,7 +656,7 @@ export function AdminAuditLogsPage() {
 
             <div className="flex flex-col gap-3 border-t border-white/[0.06] px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5">
               <p className="text-[10px] text-slate-500">
-                {filteredLogs.length} matching records · Page {currentPage} of {totalPages}
+                {summary.total} matching records · Page {currentPage} of {totalPages}
               </p>
               <nav aria-label="Audit log pagination" className="flex items-center gap-1.5">
                 <button
@@ -646,7 +687,7 @@ export function AdminAuditLogsPage() {
       </section>
 
       <p className="text-center text-[9px] leading-4 text-slate-600">
-        Audit data is stored in this browser. Records are read-only and can’t be edited or deleted.
+        Audit records are stored in MongoDB. They are read-only and can’t be edited or deleted.
       </p>
 
       {selectedLog && (

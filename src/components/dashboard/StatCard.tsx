@@ -5,8 +5,8 @@ import { DashboardSkeleton } from './DashboardDataState'
 type StatCardProps = {
   label: string
   value: number
-  change: string
-  detail: string
+  change?: string | null
+  detail?: string
   icon: LucideIcon
   tone: 'blue' | 'emerald'
   loading?: boolean
@@ -104,10 +104,16 @@ export function StatCard({
           <span className="text-slate-500">No data available yet</span>
         ) : (
           <>
-            <span className="rounded-md bg-emerald-400/10 px-1.5 py-1 font-semibold text-emerald-300">
-              {change}
+            <span
+              className={
+                change
+                  ? 'rounded-md bg-emerald-400/10 px-1.5 py-1 font-semibold text-emerald-300'
+                  : 'text-slate-500'
+              }
+            >
+              {change ?? 'N/A'}
             </span>
-            <span className="text-slate-500">{detail}</span>
+            {detail && <span className="text-slate-500">{detail}</span>}
           </>
         )}
       </div>
