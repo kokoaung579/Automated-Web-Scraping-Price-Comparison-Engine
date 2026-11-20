@@ -383,6 +383,14 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
             }
           }
 
+          if (preferences.emailPriceAlerts) {
+            try {
+              await api.sendPriceAlertEmail(alert.id)
+            } catch (error) {
+              console.error('Unable to send price alert email', error)
+            }
+          }
+
           const triggeredAlert: PriceAlert = {
             ...alert,
             status: 'triggered',
@@ -477,7 +485,7 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
     })
   }
 
-  function savePreferences(nextPreferences: UserPreferences) {
+  async function savePreferences(nextPreferences: UserPreferences) {
     try {
       window.localStorage.setItem(
         preferencesStorageKey,
@@ -486,12 +494,16 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
       window.localStorage.setItem(themeStorageKey, nextPreferences.theme)
     } catch (error) {
       console.error('Unable to save the PricePilot theme', error)
-      dispatch({
-        type: 'notify',
-        message: 'Could not save your theme preference in this browser.',
-        toastId: ++toastSequence.current,
+    }
+
+    try {
+      await api.updateUserSettings({
+        emailPriceAlerts: nextPreferences.emailPriceAlerts,
+        inAppPriceAlerts: nextPreferences.inAppPriceAlerts,
+        theme: nextPreferences.theme,
       })
-      return
+    } catch (error) {
+      console.error('Unable to save user settings to the backend', error)
     }
 
     setPreferences(nextPreferences)
