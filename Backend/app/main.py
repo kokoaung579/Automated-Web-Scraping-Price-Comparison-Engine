@@ -77,11 +77,14 @@ async def lifespan(application: FastAPI):
             partialFilterExpression={"identityKey": {"$type": "string"}},
             name="unique_shared_product_identity",
         )
-        await database.product_match_reviews.create_index(
-            "listingKey",
-            unique=True,
-            name="unique_product_match_listing",
-        )
+        try:
+            await database.product_match_reviews.create_index(
+                "listingKey",
+                unique=True,
+                name="unique_product_match_listing",
+            )
+        except Exception as exc:
+            logger.warning("Unable to prepare product match index: %s", exc)
         await initialize_auth_database(database)
         await initialize_audit_database(database)
         await initialize_notification_database(database)

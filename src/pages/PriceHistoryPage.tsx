@@ -29,10 +29,6 @@ import type {
   PriceHistoryPeriod,
   PriceHistoryPoint,
 } from '../data/priceHistory'
-import {
-  getStoreOffers,
-  isValidStoreOffer,
-} from '../data/storeOffers'
 import type { StoreOffer } from '../data/storeOffers'
 
 type Period = PriceHistoryPeriod
@@ -504,20 +500,6 @@ export function PriceHistoryPage() {
   )
   const histories = useMemo(
     () => {
-      if (dataSource === 'demo') {
-        return product
-          ? visibleOffers.filter(isValidStoreOffer).map((offer, index) => ({
-              store: offer.store,
-              points: createStorePriceHistory(
-                product,
-                offer.price,
-                period,
-                index,
-              ),
-            }))
-          : []
-      }
-
       if (
         remoteData &&
         remoteData.productId === product?.id &&

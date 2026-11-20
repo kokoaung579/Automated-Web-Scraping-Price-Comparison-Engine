@@ -1,29 +1,39 @@
 import hashlib
+import json
 import re
-import unicodedata
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from typing import Any
 
 from pymongo.errors import DuplicateKeyError
 
 from app.models import AdminProduct, admin_product_to_catalog_document
-
+from app.services.product_normalization import (
+    normalize_attributes,
+    normalize_barcode,
+    normalize_brand,
+    normalize_category,
+    normalize_model,
+    normalize_name,
+    normalize_sku,
+    normalize_text as _normalize_text,
+)
 HISTORY_PERIODS = ("7D", "30D", "90D", "1Y")
 MATCH_LIMIT = 5
-
-
-def _normalize_text(value: str | None, *, compact: bool = False) -> str:
-    if not isinstance(value, str):
-        return ""
-    value = unicodedata.normalize("NFKD", value.casefold())
-    value = "".join(
-        character
-        for character in value
-        if not unicodedata.combining(character)
-    )
-    if compact:
-        return "".join(character for character in value if character.isalnum())
-    return " ".join(re.sub(r"[^\w]+", " ", value).split())
+MATCH_CONFIDENCE_THRESHOLDS = {
+    "high": 0.9,
+    "medium": 0.7,
+    "low": 0.0,
+}
+MATCH_CONFLICT_WARNINGS = frozenset(
+    {
+        "SKU mismatch between incoming and candidate listings.",
+        "Barcode mismatch between incoming and candidate listings.",
+        "Category labels differ.",
+        "Model numbers are incompatible.",
+        "Variant attributes differ between incoming and candidate listings.",
+    }
+)
 
 
 def normalize_store_id(value: str | None) -> str:
@@ -105,6 +115,175 @@ def _similarity(first: str, second: str) -> float:
     if not first or not second:
         return 0.0
     return SequenceMatcher(None, first, second).ratio()
+
+
+def get_match_confidence_thresholds() -> dict[str, float]:
+    """Return the configurable confidence thresholds for matching."""
+
+    return dict(MATCH_CONFIDENCE_THRESHOLDS)
+
+
+def _attribute_similarity(first: str, second: str) -> float:
+    if not first or not second:
+        return 0.0
+    if first == second:
+        return 1.0
+    return SequenceMatcher(None, first, second).ratio()
+
+
+def _attributes_signature(product: AdminProduct | dict) -> str:
+    attributes = normalize_attributes(product)
+    return "\0".join(
+        (
+            attributes["product_name"],
+            attributes["brand"],
+            attributes["model"],
+            attributes["sku"],
+            attributes["barcode"],
+            attributes["category"],
+            json.dumps(attributes["specifications"], sort_keys=True),
+            json.dumps(attributes["variants"], sort_keys=True),
+        )
+    )
+
+
+def _variant_signature(product: AdminProduct | dict) -> str:
+    attributes = normalize_attributes(product)
+    return json.dumps(attributes["variants"], sort_keys=True)
+
+
+def compute_match_confidence(
+    incoming: AdminProduct | dict,
+    candidate: dict,
+) -> dict[str, Any]:
+    """Score how likely ``candidate`` is the same product as ``incoming``.
+
+    The score is derived only from product identity evidence (name, brand,
+    model, sku, barcode, category, specifications). Price similarity is never
+    used as proof of identity.
+    """
+
+    attributes = normalize_attributes(incoming)
+    incoming_name = attributes["product_name"]
+    incoming_brand = attributes["brand"]
+    incoming_model = attributes["model"]
+    incoming_sku = attributes["sku"]
+    incoming_barcode = attributes["barcode"]
+    incoming_category = attributes["category"]
+    incoming_variants = attributes["variants"]
+
+    candidate_name = normalize_name(candidate.get("product_name"))
+    candidate_brand = normalize_brand(candidate.get("brand"))
+    candidate_model = normalize_model(candidate.get("model"))
+    candidate_sku = normalize_sku(candidate.get("sku"))
+    candidate_barcode = normalize_barcode(candidate.get("barcode"))
+    candidate_category = normalize_category(candidate.get("category"))
+    candidate_variants = candidate.get("variants") or []
+
+    name_score = _attribute_similarity(incoming_name, candidate_name)
+    brand_score = _attribute_similarity(incoming_brand, candidate_brand)
+    model_score = _attribute_similarity(incoming_model, candidate_model)
+    sku_score = (
+        _attribute_similarity(incoming_sku, candidate_sku)
+        if incoming_sku and candidate_sku
+        else None
+    )
+    barcode_score = (
+        _attribute_similarity(incoming_barcode, candidate_barcode)
+        if incoming_barcode and candidate_barcode
+        else None
+    )
+    category_score = _attribute_similarity(incoming_category, candidate_category)
+
+    components: list[tuple[float, float]] = []
+    if sku_score is not None:
+        components.append((sku_score, 0.30))
+    if incoming_brand and candidate_brand:
+        components.append((brand_score, 0.20))
+    if incoming_model and candidate_model:
+        components.append((model_score, 0.20))
+    components.append((name_score, 0.15))
+    if incoming_category and candidate_category:
+        components.append((category_score, 0.10))
+    total_weight = sum(weight for _, weight in components)
+    score = (
+        sum(value * weight for value, weight in components) / total_weight
+        if total_weight
+        else 0.0
+    )
+
+    thresholds = get_match_confidence_thresholds()
+    if score >= thresholds["high"]:
+        level = "high"
+    elif score >= thresholds["medium"]:
+        level = "medium"
+    else:
+        level = "low"
+
+    reasons: list[str] = []
+    warnings: list[str] = []
+    if sku_score is not None and sku_score < 1.0:
+        warnings.append("SKU mismatch between incoming and candidate listings.")
+    if barcode_score is not None and barcode_score < 1.0:
+        warnings.append("Barcode mismatch between incoming and candidate listings.")
+    if incoming_category and candidate_category and category_score < 1.0:
+        warnings.append("Category labels differ.")
+    if (
+        incoming_model
+        and candidate_model
+        and model_score
+        and model_score < 0.78
+    ):
+        warnings.append("Model numbers are incompatible.")
+    missing_attributes = [
+        label
+        for label, value in (
+            ("product name", incoming_name),
+            ("brand", incoming_brand),
+            ("model", incoming_model),
+        )
+        if not value
+    ]
+    if missing_attributes:
+        warnings.append(
+            "Missing critical attributes: " + ", ".join(missing_attributes) + "."
+        )
+
+    if any(warning in MATCH_CONFLICT_WARNINGS for warning in warnings) and level == "high":
+        level = "medium"
+
+    variant_conflict = False
+    if incoming_variants or candidate_variants:
+        variant_conflict = (
+            json.dumps(incoming_variants, sort_keys=True)
+            != json.dumps(candidate_variants, sort_keys=True)
+        )
+        if variant_conflict:
+            warnings.append(
+                "Variant attributes differ between incoming and candidate listings."
+            )
+
+    auto_resolvable = (
+        level == "high"
+        and not warnings
+        and (sku_score is None or sku_score >= 1.0)
+        and (barcode_score is None or barcode_score >= 1.0)
+        and not variant_conflict
+    )
+
+    return {
+        "score": round(score, 4),
+        "level": level,
+        "reasons": reasons or ["Attributes align within expected similarity."],
+        "warnings": warnings,
+        "auto_resolvable": bool(auto_resolvable),
+        "sku_score": sku_score,
+        "barcode_score": barcode_score,
+        "name_score": name_score,
+        "brand_score": brand_score,
+        "model_score": model_score,
+        "category_score": category_score,
+    }
 
 
 def _score_candidate(
@@ -222,7 +401,12 @@ async def find_product_match(database, product: AdminProduct) -> dict:
     incoming = _product_identity(product)
     if all(incoming.values()):
         for document in documents:
-            if incoming == _product_identity(_catalog_identity(document)):
+            if (
+                incoming
+                == _product_identity(_catalog_identity(document))
+                and _variant_signature(_catalog_identity(document))
+                == _variant_signature(product)
+            ):
                 return {
                     "classification": "exact",
                     "product": document,
@@ -259,24 +443,56 @@ async def find_product_match(database, product: AdminProduct) -> dict:
             "candidates": scored[:MATCH_LIMIT],
         }
 
-    potential = [
-        candidate
-        for candidate in scored
-        if (
-            candidate["similarity"] >= 0.76
-            and candidate["name_score"] >= 0.78
-        )
-        or (
-            candidate["brand_score"] >= 0.95
-            and candidate["model_score"] >= 0.95
-            and candidate["name_score"] >= 0.45
-        )
-    ]
-    if potential:
+    for candidate in scored:
+        confidence = compute_match_confidence(product, candidate)
+        if confidence["level"] == "high" and confidence["auto_resolvable"]:
+            matched_document = next(
+                (
+                    document
+                    for document in documents
+                    if str(document.get("_id", "")) == candidate["product_id"]
+                ),
+                None,
+            )
+            if matched_document is not None:
+                matched_product = product.model_copy(
+                    update={"product_id": str(matched_document["_id"])}
+                )
+                await upsert_store_offer(
+                    database,
+                    str(matched_document["_id"]),
+                    matched_product,
+                    source_product_id=product.product_id,
+                )
+                return {
+                    "classification": "exact",
+                    "product": matched_document,
+                    "candidates": [],
+                }
+
+    suggested: list[tuple[dict, dict[str, Any]]] = []
+    for candidate in scored:
+        confidence = compute_match_confidence(product, candidate)
+        if confidence["level"] not in {"high", "medium"}:
+            continue
+        blocking_warnings = [
+            warning
+            for warning in confidence["warnings"]
+            if warning
+            in (
+                "Model numbers are incompatible.",
+                "Missing critical attributes: product name, brand, model.",
+            )
+        ]
+        if blocking_warnings:
+            continue
+        suggested.append((candidate, confidence))
+
+    if suggested:
         return {
             "classification": "potential",
             "product": None,
-            "candidates": potential[:MATCH_LIMIT],
+            "candidates": [candidate for candidate, _ in suggested[:MATCH_LIMIT]],
         }
     return {
         "classification": "none",
@@ -293,6 +509,23 @@ def _listing_key(product: AdminProduct) -> str:
         )
     )
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _review_materially_changed(
+    previous_review: dict,
+    product: AdminProduct,
+) -> bool:
+    """Return whether listing attributes changed since a rejected review."""
+
+    stored_incoming = previous_review.get("incoming")
+    if not isinstance(stored_incoming, dict):
+        return True
+    try:
+        return _attributes_signature(product) != _attributes_signature(
+            stored_incoming
+        )
+    except Exception:
+        return True
 
 
 async def upsert_store_offer(
@@ -502,12 +735,44 @@ async def ingest_product_listing(database, product: AdminProduct) -> dict:
                 "review_id": previous_review["_id"],
             }
         if status_value == "rejected":
-            return {
-                "status": "rejected",
-                "product": product,
-                "shared_product_id": None,
-                "review_id": previous_review["_id"],
-            }
+            if _review_materially_changed(previous_review, product):
+                now = datetime.now(timezone.utc).isoformat()
+                await database.product_match_reviews.update_one(
+                    {"_id": previous_review["_id"]},
+                    {
+                        "$set": {
+                            "status": "pending",
+                            "classification": "pending",
+                            "incoming": product.model_dump(),
+                            "incomingStoreName": previous_review.get(
+                                "incomingStoreName"
+                            ),
+                            "candidates": [],
+                            "decisionHistory": [
+                                *(previous_review.get("decisionHistory") or []),
+                                {
+                                    "action": "reopen",
+                                    "productId": None,
+                                    "adminId": "system",
+                                    "adminEmail": "system@pricepilot.local",
+                                    "createdAt": now,
+                                    "reason": (
+                                        "Material product attributes changed; "
+                                        "the rejected match was reopened for review."
+                                    ),
+                                },
+                            ],
+                            "updatedAt": now,
+                        }
+                    },
+                )
+            else:
+                return {
+                    "status": "rejected",
+                    "product": product,
+                    "shared_product_id": None,
+                    "review_id": previous_review["_id"],
+                }
 
     result = await find_product_match(database, product)
     if result["classification"] == "exact":

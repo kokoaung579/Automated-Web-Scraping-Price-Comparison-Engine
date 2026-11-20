@@ -9,14 +9,8 @@ import {
 import { Link, useOutletContext } from 'react-router-dom'
 import type { AppOutletContext } from '../context/AppOutletContext'
 import { api } from '../api/client'
-import {
-  getStoreOffers,
-  isValidStoreOffer,
-} from '../data/storeOffers'
-import type {
-  PricedStoreOffer,
-  StoreOffer,
-} from '../data/storeOffers'
+import { isValidStoreOffer } from '../data/storeOffers'
+import type { PricedStoreOffer, StoreOffer } from '../data/storeOffers'
 import type { DemoProduct } from '../data/products'
 
 type SortOrder = 'price-low' | 'price-high' | 'store'

@@ -33,10 +33,7 @@ import type {
   PriceHistoryPoint,
 } from '../data/priceHistory'
 import type { DemoProduct } from '../data/products'
-import {
-  getStoreOffers,
-  isValidStoreOffer,
-} from '../data/storeOffers'
+import { isValidStoreOffer } from '../data/storeOffers'
 import type { StoreOffer } from '../data/storeOffers'
 
 type StoreHistory = { store: string; points: PriceHistoryPoint[] }
@@ -425,19 +422,6 @@ export function ProductDetailPage() {
       return remoteData.histories
     }
 
-    if (dataSource === 'demo') {
-      return product
-        ? storeOffers.filter(isValidStoreOffer).map((offer, index) => ({
-            store: offer.store,
-            points: createStorePriceHistory(
-              product,
-              offer.price,
-              period,
-              index,
-            ),
-          }))
-        : []
-    }
     return []
   }, [product, remoteData, period])
 

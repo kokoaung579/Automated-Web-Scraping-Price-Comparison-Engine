@@ -2,19 +2,15 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from httpx import HTTPStatusError, RequestError
 from pymongo.errors import DuplicateKeyError
 
-from fastapi import APIRouter, Depends, HTTPException, Request
 from app.models import AdminProduct, admin_product_to_catalog_document
 from app.routers.auth import require_admin
 from app.routers.audit import record_audit_log, request_ip
 from app.services.notifications import create_notification
-from app.services.product_catalog import (
-    ingest_product_listing,
-    upsert_admin_product_offer,
-)
+from app.services.product_catalog import upsert_admin_product_offer
 
 logger = logging.getLogger(__name__)
 from app.services.apify_services import (
@@ -379,16 +375,16 @@ async def import_amazon_products(
                     updated_at=now,
                 )
 
-                # Manual and scraped listings share one matching path.
-                result = await ingest_product_listing(db, product)
-                if result["status"] == "created":
-                    created += 1
-                elif result["status"] == "matched":
-                    matched += 1
-                elif result["status"] == "review":
-                    pending_review += 1
-                elif result["status"] == "rejected":
-                    rejected += 1
+                # Store scraped listings in the shared catalog, then link the
+                # price to the store offer.
+                await db.products.insert_one(
+                    {
+                        "_id": product.product_id,
+                        **admin_product_to_catalog_document(product),
+                    }
+                )
+                created += 1
+                await upsert_admin_product_offer(db, product)
 
             except DuplicateKeyError:
                 skipped += 1
@@ -398,26 +394,6 @@ async def import_amazon_products(
 
                 if len(errors) < 10:
                     errors.append(str(exc))
-
-        # 6. Automatically register Amazon Store
-        if created > 0:
-            now = datetime.now(timezone.utc).isoformat()
-
-            await db.stores.update_one(
-                {"_id": "amazon"},
-                {
-                    "$setOnInsert": {
-                        "store_name": "Amazon",
-                        "website_url": "https://www.amazon.com",
-                        "logo_url": None,
-                        "status": "Active",
-                        "created_at": now,
-                        "updated_at": now,
-                    }
-                },
-                upsert=True,
-            )
-
 
         await _audit(
             db,
