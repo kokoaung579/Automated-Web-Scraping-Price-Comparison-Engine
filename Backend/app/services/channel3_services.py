@@ -67,40 +67,62 @@ def search_channel3_products(query: str, limit: int = 10):
     return products
 
 
+import re
+
+
+def _norm(value) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).strip().lower().split())
+
+
+def _variant_tokens(value) -> set[str]:
+    text = _norm(value)
+    tokens = set()
+    for match in re.finditer(r"\b\d+\s*(?:gb|tb|mb|inch|inches|gen|generation)\b", text):
+        tokens.add(match.group(0))
+    for color in ("black", "white", "blue", "red", "green", "silver", "gold", "gray", "grey"):
+        if color in text.split():
+            tokens.add(color)
+    return tokens
+
+
 def find_matching_channel3_product(
     products: list[dict],
     product_name: str,
     brand: str,
+    category: str | None = None,
+    model: str | None = None,
 ) -> dict | None:
-    expected_name = "".join(
-        character.lower() for character in product_name if character.isalnum()
-    )
-    expected_brand = "".join(
-        character.lower() for character in brand if character.isalnum()
-    )
+    expected_name = _norm(product_name)
+    expected_brand = _norm(brand)
+    expected_category = _norm(category)
+    expected_model = _norm(model)
     if not expected_name or not expected_brand:
         return None
 
+    expected_variants = _variant_tokens(product_name)
+
     for product in products:
-        candidate_name = "".join(
-            character.lower()
-            for character in product["name"]
-            if character.isalnum()
-        )
-        brand_matches = any(
-            expected_brand in "".join(
-                character.lower()
-                for character in candidate_brand
-                if character.isalnum()
-            )
-            for candidate_brand in product["brands"]
-        ) or expected_brand in candidate_name
-        name_matches = (
-            expected_name in candidate_name
-            or candidate_name in expected_name
-        )
+        candidate_name = _norm(product.get("name", ""))
+        candidate_brands = [_norm(b) for b in (product.get("brands") or [])]
+        candidate_category = _norm(product.get("category"))
+        candidate_model = _norm(product.get("key_features", []) and "")
 
-        if brand_matches and name_matches:
-            return product
-
+        brand_matches = any(expected_brand in cb or cb in expected_brand for cb in candidate_brands) or expected_brand in candidate_name
+        if not brand_matches:
+            continue
+        if expected_category and candidate_category and expected_category != candidate_category:
+            continue
+        if expected_model and expected_model not in candidate_name:
+            continue
+        # variant protection
+        candidate_variants = _variant_tokens(candidate_name)
+        if expected_variants and candidate_variants and expected_variants != candidate_variants:
+            continue
+        # name similarity supporting only
+        name_matches = expected_name in candidate_name or candidate_name in expected_name
+        if not name_matches:
+            continue
+        return product
     return None

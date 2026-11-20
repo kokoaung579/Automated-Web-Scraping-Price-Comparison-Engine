@@ -7,6 +7,12 @@ class APIModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class UserSettings(APIModel):
+    emailPriceAlerts: bool = True
+    inAppPriceAlerts: bool = True
+    theme: str = "dark"
+
+
 class Specification(APIModel):
     label: str = Field(min_length=1)
     value: str = Field(min_length=1)
@@ -184,6 +190,8 @@ class PriceAlert(APIModel):
     targetPrice: float = Field(gt=0)
     status: Literal["active", "triggered"]
     createdAt: str = Field(min_length=1)
+    user_id: str | None = None
+    emailNotifiedPrice: float | None = None
 
 
 class WatchlistEntry(APIModel):
@@ -251,6 +259,8 @@ class PriceAlert(APIModel):
     targetPrice: float = Field(gt=0)
     status: Literal["active", "triggered"]
     createdAt: str = Field(min_length=1)
+    user_id: str | None = None
+    emailNotifiedPrice: float | None = None
 
 
 class WatchlistEntry(APIModel):
