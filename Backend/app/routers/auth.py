@@ -27,6 +27,7 @@ from pydantic import (
 )
 from pymongo.errors import DuplicateKeyError
 
+from app.models import UserSettings
 from app.services.notifications import create_notification
 
 router = APIRouter(prefix="/api")
@@ -961,7 +962,7 @@ def _parse_datetime(value) -> datetime | None:
     return None
 
 
-def _send_otp_email(recipient: str, otp: str) -> None:
+def _send_email(recipient: str, subject: str, body: str) -> None:
     sender = get_gmail_smtp_email()
     password = get_gmail_app_password()
     if not sender or not password:
@@ -973,13 +974,10 @@ def _send_otp_email(recipient: str, otp: str) -> None:
     host = get_gmail_smtp_host()
     port = get_gmail_smtp_port()
     message = EmailMessage()
-    message["Subject"] = "Your PricePilot verification code"
+    message["Subject"] = subject
     message["From"] = sender
     message["To"] = recipient
-    message.set_content(
-        f"Your PricePilot verification code is {otp}. "
-        "It expires in 5 minutes."
-    )
+    message.set_content(body)
 
     try:
         if port == 465:
@@ -994,8 +992,16 @@ def _send_otp_email(recipient: str, otp: str) -> None:
     except Exception as error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Could not send the verification email.",
+            detail="Could not send the email.",
         ) from error
+
+
+def _send_otp_email(recipient: str, otp: str) -> None:
+    _send_email(
+        recipient,
+        "Your PricePilot verification code",
+        f"Your PricePilot verification code is {otp}. It expires in 5 minutes.",
+    )
 
 
 def _generate_otp() -> str:
@@ -1008,6 +1014,33 @@ def _hash_otp(otp: str) -> str:
 
 def _hash_reset_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+@router.get("/auth/settings", response_model=UserSettings)
+async def get_user_settings(request: Request, database=Depends(get_database)):
+    user = await get_request_user(request, database)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    preferences = user.get("preferences") or {}
+    return UserSettings(
+        emailPriceAlerts=bool(preferences.get("emailPriceAlerts", True)),
+        inAppPriceAlerts=bool(preferences.get("inAppPriceAlerts", True)),
+        theme=str(preferences.get("theme", "dark")),
+    )
+
+
+@router.put("/auth/settings", response_model=UserSettings)
+async def update_user_settings(
+    payload: UserSettings,
+    request: Request,
+    database=Depends(get_database),
+):
+    user = await get_request_user(request, database)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    preferences = payload.model_dump()
+    await database.users.update_one({"_id": user["_id"]}, {"$set": {"preferences": preferences}})
+    return UserSettings(**preferences)
 
 
 async def _issue_password_reset_otp(database, user: dict) -> None:

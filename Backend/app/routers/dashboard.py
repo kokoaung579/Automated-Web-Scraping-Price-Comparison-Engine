@@ -74,21 +74,97 @@ def _normalize_text(value):
     return re.sub(r"[^a-z0-9]+", " ", str(value).casefold()).strip()
 
 
+def _normalize_match_text(value) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip().lower()
+    text = " ".join(text.split())
+    for char in ".,;:!?()[]{}-/":
+        text = text.replace(char, " ")
+    return " ".join(text.split())
+
+
+def _extract_variant_specs(*values) -> tuple[str, ...]:
+    text = " ".join(_normalize_match_text(value) for value in values if value)
+    specs = []
+    for label in ("ram", "storage", "size", "capacity", "generation", "color"):
+        pass
+    # Extract common variant tokens
+    import re
+
+    tokens = set()
+    for match in re.finditer(r"\b(\d+)\s*(gb|tb|mb|inch|inches|gen|generation)\b", text):
+        tokens.add(match.group(0))
+    # color words
+    for color in ("black", "white", "blue", "red", "green", "silver", "gold", "gray", "grey"):
+        if color in text.split():
+            tokens.add(color)
+    return tuple(sorted(tokens))
+
+
 def _canonical_product_key(document, admin_product):
     product_id = str(
         admin_product.product_id or document.get("_id") or document.get("id") or ""
     )
     match = ASIN_ID_PATTERN.match(product_id)
     if match:
-        return match.group(1).upper()
+        asin = match.group(1).upper()
+        specs = _extract_variant_specs(
+            getattr(admin_product, "product_name", None),
+            document.get("product_name"),
+            document.get("name"),
+            getattr(admin_product, "model", None),
+            document.get("model"),
+        )
+        if specs:
+            return f"{asin}|{','.join(specs)}"
+        return asin
 
     product_url = admin_product.product_url or document.get("product_url")
     if product_url:
         match = AMAZON_URL_PATTERN.search(str(product_url))
         if match:
-            return match.group(1).upper()
+            asin = match.group(1).upper()
+            specs = _extract_variant_specs(
+                getattr(admin_product, "product_name", None),
+                document.get("product_name"),
+                document.get("name"),
+                getattr(admin_product, "model", None),
+                document.get("model"),
+            )
+            if specs:
+                return f"{asin}|{','.join(specs)}"
+            return asin
 
-    return None
+    category = _normalize_match_text(
+        getattr(admin_product, "category", None) or document.get("category")
+    )
+    brand = _normalize_match_text(
+        getattr(admin_product, "brand", None) or document.get("brand")
+    )
+    model = _normalize_match_text(
+        getattr(admin_product, "model", None) or document.get("model")
+    )
+    name = _normalize_match_text(
+        getattr(admin_product, "product_name", None)
+        or document.get("product_name")
+        or document.get("name")
+    )
+
+    if not category or not brand or not model:
+        return None
+
+    specs = _extract_variant_specs(
+        getattr(admin_product, "product_name", None),
+        document.get("product_name"),
+        document.get("name"),
+        getattr(admin_product, "model", None),
+        document.get("model"),
+        getattr(admin_product, "description", None),
+        document.get("description"),
+    )
+
+    return "|".join([category, brand, model, name, ",".join(specs)])
 
 
 def _store_identity(document, admin_product, stores_by_id, store_name_lookup):

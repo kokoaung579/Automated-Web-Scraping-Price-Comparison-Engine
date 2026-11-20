@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from app.routers.channel3 import router as channel3_router
 from app.routers.apify import router as apify_router
 from app.routers.auth import (
+    _send_email,
     ensure_bootstrap_admin,
     initialize_auth_database,
     require_admin,
@@ -21,6 +22,7 @@ from app.routers.dashboard import router as dashboard_router
 from app.routers.categories import router as categories_router
 from app.routers.product_bulk import router as product_bulk_router
 from app.routers.admin_notifications import router as admin_notifications_router
+from app.routers.system_settings import router as system_settings_router
 from app.services.channel3_services import (
     find_matching_channel3_product,
     search_channel3_products,
@@ -101,6 +103,7 @@ app.include_router(categories_router)
 app.include_router(audit_router)
 app.include_router(product_bulk_router)
 app.include_router(admin_notifications_router)
+app.include_router(system_settings_router)
 app.include_router(dashboard_router)
 
 
@@ -767,6 +770,43 @@ async def delete_alert(alert_id: str):
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
+@app.post("/api/alerts/{alert_id}/email")
+async def send_alert_email(alert_id: str, request: Request):
+    database = get_database()
+    from app.routers.auth import get_request_user
+
+    user = await get_request_user(request, database)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    preferences = user.get("preferences") or {}
+    if not bool(preferences.get("emailPriceAlerts", True)):
+        return {"sent": False, "reason": "disabled"}
+
+    alert = await database.alerts.find_one({"_id": alert_id})
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    product = await database.products.find_one({"_id": alert.get("productId")})
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    notified_price = alert.get("emailNotifiedPrice")
+    current_price = product.get("price")
+    if notified_price == current_price:
+        return {"sent": False, "reason": "duplicate"}
+
+    subject = "PricePilot price alert"
+    body = f"{product.get('name', product.get('_id'))} is now {current_price}."
+    try:
+        _send_email(user["email"], subject, body)
+    except Exception:
+        return {"sent": False, "reason": "error"}
+
+    await database.alerts.update_one(
+        {"_id": alert_id},
+        {"$set": {"emailNotifiedPrice": current_price}},
+    )
+    return {"sent": True}
 
 # ==========================================
 # WATCHLIST API
