@@ -40,6 +40,7 @@ type AppLayoutProps = {
 }
 
 type AppAction =
+  | { type: 'reset-private' }
   | {
       type: 'hydrate'
       watchlistEntries: WatchlistEntry[]
@@ -128,6 +129,15 @@ function formatPrice(price: number) {
 }
 
 function appReducer(state: AppState, action: AppAction): AppState {
+  if (action.type === 'reset-private') {
+    return {
+      watchlistEntries: [],
+      alerts: [],
+      notifications: [],
+      toast: null,
+    }
+  }
+
   if (action.type === 'hydrate') {
     return {
       ...state,
@@ -308,6 +318,17 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
   const alertSequence = useRef(0)
   const notificationSequence = useRef(0)
 
+  // Private records are never shared across accounts. Clear everything as soon
+  // as the signed-in identity changes so a switch or sign-out cannot flash the
+  // previous user's watchlist, alerts, or notifications.
+  useEffect(() => {
+    dispatch({ type: 'reset-private' })
+    setProducts([])
+    setDataError(null)
+    setDataSource('loading')
+    setConnectionStatus('checking')
+  }, [currentUser.id])
+
   useEffect(() => {
     let active = true
 
@@ -436,7 +457,7 @@ export function AppLayout({ currentUser }: AppLayoutProps) {
     return () => {
       active = false
     }
-  }, [preferences.inAppPriceAlerts, loadVersion])
+  }, [preferences.inAppPriceAlerts, loadVersion, currentUser.id])
 
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme

@@ -10,6 +10,7 @@ from app.routers.auth import (
     ensure_bootstrap_admin,
     initialize_auth_database,
     require_admin,
+    require_user,
     router as auth_router,
 )
 from app.routers.stores import router as stores_router
@@ -20,6 +21,7 @@ from app.routers.audit import (
 )
 from app.routers.dashboard import router as dashboard_router
 from app.routers.categories import router as categories_router
+from app.routers.comparison import router as comparison_router
 from app.routers.product_bulk import router as product_bulk_router
 from app.routers.admin_notifications import router as admin_notifications_router
 from app.routers.system_settings import router as system_settings_router
@@ -29,8 +31,10 @@ from app.services.channel3_services import (
 )
 from app.services.notifications import (
     create_notification as emit_notification,
+    create_user_notification,
     initialize_notification_database,
     user_notification_query,
+    user_price_alert_dedupe_key,
 )
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
@@ -39,11 +43,16 @@ from pymongo.errors import DuplicateKeyError
 
 from app.database import connect_db
 from app.services.product_catalog import upsert_admin_product_offer
+from app.services.category_catalog import (
+    canonical_category_name,
+    ensure_product_categories,
+    stored_category_names,
+)
 from app.models import (
     AdminProduct,
     DemoNotification,
     PriceAlert,
-    Product,
+    PublicProduct,
     ScrapingLog,
     StoreHistory,
     StoreOffer,
@@ -57,6 +66,7 @@ from app.models import (
 logger = logging.getLogger(__name__)
 
 ADMIN_PRODUCTS_MIGRATION_ID = "admin-products-to-products-v1"
+PRODUCT_CATEGORY_MIGRATION_ID = "product-categories-shared-source-v1"
 
 
 @asynccontextmanager
@@ -71,6 +81,7 @@ async def lifespan(application: FastAPI):
         await ensure_bootstrap_admin(database)
         await migrate_legacy_admin_products(database)
         await sync_existing_admin_product_prices(database)
+        await migrate_product_categories(database)
         yield
     finally:
         await client.close()
@@ -100,6 +111,7 @@ app.include_router(apify_router)
 app.include_router(auth_router)
 app.include_router(stores_router)
 app.include_router(categories_router)
+app.include_router(comparison_router)
 app.include_router(audit_router)
 app.include_router(product_bulk_router)
 app.include_router(admin_notifications_router)
@@ -203,6 +215,60 @@ async def sync_existing_admin_product_prices(database) -> None:
             await upsert_admin_product_offer(database, product)
 
 
+async def migrate_product_categories(database) -> None:
+    """One-time repair of legacy product category references.
+
+    Creates missing category records and normalizes plural/case variants to
+    the stored spelling. Existing products, categories and every unrelated
+    product field are left intact.
+    """
+    migrations = getattr(database, "app_migrations", None)
+    if migrations is not None:
+        completed = (
+            await migrations.find_one({"_id": PRODUCT_CATEGORY_MIGRATION_ID})
+            is not None
+        )
+        if completed:
+            return
+    summary = await ensure_product_categories(database)
+    logger.info("Product category migration completed: %s", summary)
+    if migrations is not None:
+        await migrations.update_one(
+            {"_id": PRODUCT_CATEGORY_MIGRATION_ID},
+            {"$setOnInsert": {"completedAt": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+
+
+async def require_shared_category(product: AdminProduct, admin, request, action: str):
+    """Reject product writes with a category absent from the shared catalog."""
+    database = get_database()
+    names = await stored_category_names(database)
+    canonical = await canonical_category_name(database, product.category)
+    if names and canonical is None:
+        await audit_event(
+            admin,
+            request,
+            action=action,
+            module="PRODUCT_MANAGEMENT",
+            description=(
+                f"Failed to {action.lower()} product {product.product_name}: "
+                f'category "{product.category}" is not in Category Management.'
+            ),
+            target_record_id=product.product_id,
+            status="FAILED",
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f'Category "{product.category}" does not exist in Category Management.'
+            ),
+        )
+    if canonical and canonical != product.category:
+        return product.model_copy(update={"category": canonical})
+    return product
+
+
 def serialize_document(document: dict) -> dict:
     result = dict(document)
     document_id = result.pop("_id", None)
@@ -213,8 +279,52 @@ def serialize_document(document: dict) -> dict:
     return result
 
 
+def serialize_owned_document(document: dict, fields: tuple[str, ...]) -> dict:
+    """Expose only public fields; ``user_id`` and dedupe keys stay internal."""
+    result = serialize_document(document)
+    return {
+        field: result[field]
+        for field in fields
+        if field in result
+    }
+
+
 def mongo_payload(model) -> dict:
     return model.model_dump(exclude={"id"}, exclude_none=True)
+
+
+PRIVATE_ALERT_FIELDS = (
+    "id",
+    "productId",
+    "type",
+    "threshold",
+    "targetPrice",
+    "status",
+    "createdAt",
+)
+PRIVATE_NOTIFICATION_FIELDS = (
+    "id",
+    "type",
+    "alertId",
+    "productId",
+    "message",
+    "price",
+    "createdAt",
+    "isRead",
+)
+
+
+def current_user_id(user: dict) -> str:
+    """Return the stable id from the authenticated session, never from a body."""
+    return str(user["_id"])
+
+
+def alert_document_id(user_id: str, alert_id: str) -> str:
+    return f"user-alert:{user_id}:{alert_id}"
+
+
+def watchlist_document_id(user_id: str, product_id: str) -> str:
+    return f"user-watchlist:{user_id}:{product_id}"
 
 
 # ==========================================
@@ -243,6 +353,7 @@ async def create_admin_product(
     request: Request,
     admin: dict = Depends(require_admin),
 ):
+    product = await require_shared_category(product, admin, request, "CREATE")
     try:
         await get_database().products.insert_one(
             {
@@ -346,6 +457,7 @@ async def update_admin_product(
             detail="Product not found",
         )
 
+    product = await require_shared_category(product, admin, request, "UPDATE")
     previous_price = existing.get("previousPrice", existing["price"])
     if existing["price"] != product.price:
         previous_price = existing["price"]
@@ -433,7 +545,7 @@ async def delete_admin_product(
 
     database = get_database()
     await database.offers.delete_many({"productId": product_id})
-    await database.watchlist.delete_one({"_id": product_id})
+    await database.watchlist.delete_many({"productId": product_id})
     await database.alerts.delete_many({"productId": product_id})
     await audit_event(
         admin,
@@ -555,7 +667,7 @@ async def health(request: Request):
     }
 
 
-@app.get("/api/products", response_model=list[Product])
+@app.get("/api/products", response_model=list[PublicProduct])
 async def list_products():
     documents = await get_database().products.find().to_list(
         length=None
@@ -680,9 +792,12 @@ async def product_history(
 # ==========================================
 
 @app.get("/api/alerts", response_model=list[PriceAlert])
-async def list_alerts():
+async def list_alerts(user: dict = Depends(require_user)):
+    user_id = current_user_id(user)
     database = get_database()
-    documents = await database.alerts.find().to_list(length=None)
+    documents = await database.alerts.find(
+        {"user_id": user_id}
+    ).to_list(length=None)
     product_documents = await database.products.find(
         {},
         {"_id": 1},
@@ -690,7 +805,7 @@ async def list_alerts():
     product_ids = {document["_id"] for document in product_documents}
 
     return [
-        serialize_document(document)
+        serialize_owned_document(document, PRIVATE_ALERT_FIELDS)
         for document in documents
         if document.get("productId") in product_ids
     ]
@@ -701,13 +816,28 @@ async def list_alerts():
     response_model=PriceAlert,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_alert(alert: PriceAlert):
+async def create_alert(
+    alert: PriceAlert,
+    user: dict = Depends(require_user),
+):
     await require_product(alert.productId)
+    user_id = current_user_id(user)
+    document_id = alert_document_id(user_id, alert.id)
+    database = get_database()
+
+    existing = await database.alerts.find_one({"_id": document_id})
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Alert id already exists",
+        )
 
     try:
-        await get_database().alerts.insert_one(
+        await database.alerts.insert_one(
             {
-                "_id": alert.id,
+                "_id": document_id,
+                "id": alert.id,
+                "user_id": user_id,
                 **mongo_payload(alert),
             }
         )
@@ -720,6 +850,10 @@ async def create_alert(alert: PriceAlert):
     return alert
 
 
+@app.patch(
+    "/api/alerts/{alert_id}",
+    response_model=PriceAlert,
+)
 @app.put(
     "/api/alerts/{alert_id}",
     response_model=PriceAlert,
@@ -727,6 +861,7 @@ async def create_alert(alert: PriceAlert):
 async def update_alert(
     alert_id: str,
     alert: PriceAlert,
+    user: dict = Depends(require_user),
 ):
     if alert.id != alert_id:
         raise HTTPException(
@@ -735,13 +870,14 @@ async def update_alert(
         )
 
     await require_product(alert.productId)
-
-    result = await get_database().alerts.replace_one(
-        {"_id": alert_id},
+    user_id = current_user_id(user)
+    result = await get_database().alerts.update_one(
         {
-            "_id": alert_id,
-            **mongo_payload(alert),
+            "_id": alert_document_id(user_id, alert_id),
+            "user_id": user_id,
+            "id": alert_id,
         },
+        {"$set": mongo_payload(alert)},
     )
 
     if result.matched_count == 0:
@@ -757,9 +893,17 @@ async def update_alert(
     "/api/alerts/{alert_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_alert(alert_id: str):
+async def delete_alert(
+    alert_id: str,
+    user: dict = Depends(require_user),
+):
+    user_id = current_user_id(user)
     result = await get_database().alerts.delete_one(
-        {"_id": alert_id}
+        {
+            "_id": alert_document_id(user_id, alert_id),
+            "user_id": user_id,
+            "id": alert_id,
+        }
     )
 
     if result.deleted_count == 0:
@@ -816,9 +960,12 @@ async def send_alert_email(alert_id: str, request: Request):
     "/api/watchlist",
     response_model=list[WatchlistEntry],
 )
-async def list_watchlist():
+async def list_watchlist(user: dict = Depends(require_user)):
+    user_id = current_user_id(user)
     database = get_database()
-    documents = await database.watchlist.find().to_list(length=None)
+    documents = await database.watchlist.find(
+        {"user_id": user_id}
+    ).to_list(length=None)
     product_documents = await database.products.find(
         {},
         {"_id": 1},
@@ -827,16 +974,11 @@ async def list_watchlist():
 
     return [
         {
-            "productId": str(
-                document.get("productId", document["_id"])
-            ),
+            "productId": str(document["productId"]),
             "addedAt": document["addedAt"],
         }
         for document in documents
-        if document.get(
-            "productId",
-            document["_id"],
-        ) in product_ids
+        if document.get("productId") in product_ids
     ]
 
 
@@ -847,11 +989,17 @@ async def list_watchlist():
 async def upsert_watchlist(
     product_id: str,
     entry: WatchlistInput,
+    user: dict = Depends(require_user),
 ):
     await require_product(product_id)
+    user_id = current_user_id(user)
 
     await get_database().watchlist.update_one(
-        {"_id": product_id},
+        {
+            "_id": watchlist_document_id(user_id, product_id),
+            "user_id": user_id,
+            "productId": product_id,
+        },
         {
             "$set": {
                 "productId": product_id,
@@ -871,9 +1019,17 @@ async def upsert_watchlist(
     "/api/watchlist/{product_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_watchlist_entry(product_id: str):
+async def delete_watchlist_entry(
+    product_id: str,
+    user: dict = Depends(require_user),
+):
+    user_id = current_user_id(user)
     result = await get_database().watchlist.delete_one(
-        {"_id": product_id}
+        {
+            "_id": watchlist_document_id(user_id, product_id),
+            "user_id": user_id,
+            "productId": product_id,
+        }
     )
 
     if result.deleted_count == 0:
@@ -894,13 +1050,13 @@ async def delete_watchlist_entry(product_id: str):
     response_model=list[DemoNotification],
     response_model_exclude_none=True,
 )
-async def list_notifications():
+async def list_notifications(user: dict = Depends(require_user)):
     documents = await get_database().notifications.find(
-        user_notification_query()
+        user_notification_query(current_user_id(user))
     ).to_list(length=None)
 
     return [
-        serialize_document(document)
+        serialize_owned_document(document, PRIVATE_NOTIFICATION_FIELDS)
         for document in documents
     ]
 
@@ -911,15 +1067,52 @@ async def list_notifications():
     status_code=status.HTTP_201_CREATED,
     response_model_exclude_none=True,
 )
-async def create_notification(notification: DemoNotification):
-    try:
-        await get_database().notifications.insert_one(
-            {
-                "_id": notification.id,
-                **mongo_payload(notification),
-            }
+async def create_notification(
+    notification: DemoNotification,
+    user: dict = Depends(require_user),
+):
+    user_id = current_user_id(user)
+    database = get_database()
+
+    if notification.alertId:
+        owned_alert = await database.alerts.find_one(
+            {"user_id": user_id, "id": notification.alertId}
         )
-    except DuplicateKeyError:
+        if owned_alert is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Alert not found",
+            )
+
+    if notification.price is not None and notification.alertId:
+        dedupe_key = user_price_alert_dedupe_key(
+            user_id,
+            notification.alertId,
+            notification.productId or "",
+            notification.price,
+        )
+    else:
+        dedupe_key = f"user-notification:{user_id}:{notification.id}"
+
+    existing = await database.notifications.find_one(
+        {"dedupe_key": dedupe_key}
+    )
+    if existing is not None:
+        return serialize_owned_document(existing, PRIVATE_NOTIFICATION_FIELDS)
+
+    saved_id = await create_user_notification(
+        database,
+        user_id=user_id,
+        notification_id=notification.id,
+        type=notification.type,
+        message=notification.message,
+        created_at=notification.createdAt,
+        alert_id=notification.alertId,
+        product_id=notification.productId,
+        price=notification.price,
+        dedupe_key=dedupe_key,
+    )
+    if saved_id is None:
         raise HTTPException(
             status_code=409,
             detail="Notification id already exists",
@@ -932,9 +1125,15 @@ async def create_notification(notification: DemoNotification):
     "/api/notifications/{notification_id}/read",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def mark_notification_read(notification_id: str):
+async def mark_notification_read(
+    notification_id: str,
+    user: dict = Depends(require_user),
+):
     result = await get_database().notifications.update_one(
-        {**user_notification_query(), "_id": notification_id},
+        {
+            **user_notification_query(current_user_id(user)),
+            "id": notification_id,
+        },
         {"$set": {"isRead": True}},
     )
 
@@ -951,9 +1150,9 @@ async def mark_notification_read(notification_id: str):
     "/api/notifications/read-all",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def mark_all_notifications_read():
+async def mark_all_notifications_read(user: dict = Depends(require_user)):
     await get_database().notifications.update_many(
-        user_notification_query(),
+        user_notification_query(current_user_id(user)),
         {"$set": {"isRead": True}},
     )
 
@@ -964,9 +1163,15 @@ async def mark_all_notifications_read():
     "/api/notifications/{notification_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_notification(notification_id: str):
+async def delete_notification(
+    notification_id: str,
+    user: dict = Depends(require_user),
+):
     result = await get_database().notifications.delete_one(
-        {**user_notification_query(), "_id": notification_id}
+        {
+            **user_notification_query(current_user_id(user)),
+            "id": notification_id,
+        }
     )
 
     if result.deleted_count == 0:
@@ -982,8 +1187,10 @@ async def delete_notification(notification_id: str):
     "/api/notifications",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def clear_notifications():
-    await get_database().notifications.delete_many(user_notification_query())
+async def clear_notifications(user: dict = Depends(require_user)):
+    await get_database().notifications.delete_many(
+        user_notification_query(current_user_id(user))
+    )
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

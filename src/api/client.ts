@@ -1,6 +1,7 @@
 
 import { Camera, Ear, Gamepad2, Headphones, Smartphone } from 'lucide-react'
 import type { DemoProduct } from '../data/products'
+import { validHttpUrl } from '../data/adminProducts'
 import type { Product } from '../types/product'
 import type {
   DemoNotification,
@@ -14,6 +15,7 @@ import type { AuditLogsQuery, AuditLogsResponse } from '../data/adminAuditLogs'
 import type { AdminCategory } from '../data/adminCategories'
 import type { AdminStore } from '../data/adminStores'
 import type { DashboardResponse } from '../types/dashboard'
+import type { ComparisonQuery, ComparisonResponse } from '../types/comparison'
 
 export type HealthResponse = {
   status: string
@@ -65,7 +67,9 @@ export type AdminConnectionEpisodePayload = {
   restoredAt: string
 }
 
-type ProductRecord = Omit<DemoProduct, 'icon'>
+type ProductRecord = Omit<DemoProduct, 'icon'> & {
+  image_url?: string | null
+}
 
 export type StoreWithProductCount = AdminStore & {
   product_count: number
@@ -229,7 +233,16 @@ function getProductIcon(product: ProductRecord): DemoProduct['icon'] {
 }
 
 export function hydrateProduct(product: ProductRecord): DemoProduct {
-  return { ...product, icon: getProductIcon(product) }
+  const imageUrl =
+    typeof product.image_url === 'string' && validHttpUrl(product.image_url)
+      ? product.image_url
+      : null
+
+  return {
+    ...product,
+    icon: getProductIcon(product),
+    imageUrl,
+  }
 }
 
 export function toChannel3CatalogProduct(
@@ -555,6 +568,35 @@ export const api = {
         confirm: payload.confirm,
       }),
     }),
+
+  comparisonProducts: (query: ComparisonQuery = {}) => {
+    const params = new URLSearchParams()
+    const values: Record<string, string | number | boolean | undefined> = {
+      q: query.q?.trim() || undefined,
+      asin: query.asin,
+      brand: query.brand,
+      model: query.model,
+      availability: query.availability,
+      include_illustrative: query.include_illustrative,
+      verified_only: query.verified_only,
+      include_history: query.include_history,
+      period: query.period,
+      max_offer_age_days: query.max_offer_age_days,
+      sort: query.sort,
+      page: query.page,
+      page_size: query.page_size,
+    }
+    Object.entries(values).forEach(([key, value]) => {
+      if (value !== undefined) params.set(key, String(value))
+    })
+    query.store_id?.forEach((storeId) => {
+      if (storeId) params.append('store_id', storeId)
+    })
+    const suffix = params.toString()
+    return request<ComparisonResponse>(
+      `/comparison/products${suffix ? `?${suffix}` : ''}`,
+    )
+  },
 
   // Existing APIs
   products: async () =>
