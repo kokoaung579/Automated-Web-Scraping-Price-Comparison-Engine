@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Check, Package, Pencil, Plus, Search, Tags, Trash2, X } from 'lucide-react'
 import { api } from '../../api/client'
@@ -245,6 +245,7 @@ export function AdminCategoriesPage() {
   const [deletingCategory, setDeletingCategory] =
     useState<AdminCategory | null>(null)
   const [feedback, setFeedback] = useState('')
+  const deleteInFlight = useRef(false)
   const categories = catalog.categories
   const products = catalog.products
 
@@ -345,13 +346,15 @@ export function AdminCategoriesPage() {
   }
 
   async function confirmDelete() {
-    if (!deletingCategory) return
+    if (!deletingCategory || deleteInFlight.current) return
+    deleteInFlight.current = true
     const productCount = productCounts.get(deletingCategory.name) ?? 0
     if (productCount > 0) {
       setFeedback(
         `Cannot delete “${deletingCategory.name}” because it is assigned to ${productCount} ${productCount === 1 ? 'product' : 'products'}.`,
       )
       setDeletingCategory(null)
+      deleteInFlight.current = false
       return
     }
 
@@ -366,6 +369,7 @@ export function AdminCategoriesPage() {
           : 'Could not delete category.',
       )
     }
+    deleteInFlight.current = false
     setDeletingCategory(null)
   }
 

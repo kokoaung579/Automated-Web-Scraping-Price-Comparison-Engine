@@ -43,17 +43,92 @@ ADMIN_CATEGORIES = tuple(CATEGORY_SETTING_KEY)
 USER_NOTIFICATION_TYPES = ("price-alert", "system")
 
 
-def user_notification_query() -> dict:
-    """Match only legacy user notifications in the shared collection.
+def user_notification_query(user_id: str) -> dict:
+    """Match only one signed-in user's notifications in the shared collection.
 
-    Admin event notifications are identified by an admin ``category``. Excluding
-    them here keeps the user API from trying to serialize fields it does not
-    own, and keeps admin records out of normal user requests.
+    Admin event notifications are identified by an admin ``category``. Ownership
+    is keyed by the stable session user id so two accounts can never read or
+    mutate each other's records, even if a client guesses a notification id.
+    Legacy documents without ``user_id`` are deliberately not returned: their
+    original owner cannot be proven, so they remain untouched and hidden.
     """
     return {
+        "user_id": str(user_id),
         "category": {"$nin": list(ADMIN_CATEGORIES)},
         "type": {"$in": list(USER_NOTIFICATION_TYPES)},
     }
+
+
+def user_price_alert_dedupe_key(
+    user_id: str,
+    alert_id: str,
+    product_id: str,
+    price: object,
+) -> str:
+    """Identify one price event for one user's alert."""
+    return (
+        f"price-alert:{user_id}:{alert_id}:{product_id}:"
+        f"{float(price):.2f}"
+    )
+
+
+async def create_user_notification(
+    database,
+    *,
+    user_id: str,
+    notification_id: str,
+    type: str,
+    message: str,
+    created_at: object,
+    alert_id: str | None = None,
+    product_id: str | None = None,
+    price: float | None = None,
+    dedupe_key: str | None = None,
+) -> str | None:
+    """Insert one owner-scoped user notification.
+
+    Returns the public notification id, or ``None`` when the same event was
+    already recorded. The document id is namespaced by user so two accounts may
+    safely use the same client-generated notification id.
+    """
+    try:
+        collection = getattr(database, "notifications", None)
+        if collection is None:
+            return None
+
+        clean_user_id = str(user_id)
+        clean_notification_id = str(notification_id)
+        normalized_dedupe_key = (
+            str(dedupe_key).strip() if dedupe_key else None
+        )
+        if normalized_dedupe_key:
+            existing = await collection.find_one(
+                {"dedupe_key": normalized_dedupe_key}
+            )
+            if existing is not None:
+                return None
+
+        stored = {
+            "_id": f"user-notification:{clean_user_id}:{clean_notification_id}",
+            "id": clean_notification_id,
+            "user_id": clean_user_id,
+            "type": str(type),
+            "message": str(message),
+            "createdAt": created_at,
+            "isRead": False,
+            "dedupe_key": normalized_dedupe_key,
+        }
+        if alert_id is not None:
+            stored["alertId"] = str(alert_id)
+        if product_id is not None:
+            stored["productId"] = str(product_id)
+        if price is not None:
+            stored["price"] = float(price)
+        await collection.insert_one(stored)
+        return clean_notification_id
+    except Exception as exc:
+        logger.warning("Unable to create user notification: %s", exc)
+        return None
 
 
 def default_settings() -> dict[str, bool]:

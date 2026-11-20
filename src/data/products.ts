@@ -21,6 +21,7 @@ export type DemoProduct = {
   icon: LucideIcon
   tone: string
   externalOfferUrl?: string
+  imageUrl?: string | null
 }
 
 export const products: DemoProduct[] = [

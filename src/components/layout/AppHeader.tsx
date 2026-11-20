@@ -8,7 +8,7 @@ import {
   Settings2,
   X,
 } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../auth/useAuth'
 import type { AuthUser } from '../../types/auth'
 import type { DemoNotification } from '../../context/AppOutletContext'
@@ -32,6 +32,8 @@ export function AppHeader({
   unreadNotificationCount,
 }: AppHeaderProps) {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const isDashboard = pathname === '/'
   const { signOut } = useAuth()
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
@@ -78,23 +80,25 @@ export function AppHeader({
           <Menu size={19} />
         </button>
 
-        <label className="relative block min-w-0 w-full max-w-[430px]">
-          <Search
-            aria-hidden="true"
-            size={17}
-            className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500"
-          />
-          <input
-            type="search"
-            placeholder="Search products, stores..."
-            aria-label="Search products and stores"
-            onChange={(event) => onSearchChange(event.currentTarget.value)}
-            className="h-10 w-full rounded-xl border border-white/[0.08] bg-white/[0.025] pl-10 pr-16 text-[13px] text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:bg-white/[0.04] focus:ring-2 focus:ring-blue-400/10"
-          />
-          <kbd className="absolute right-3 top-1/2 hidden -translate-y-1/2 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[10px] text-slate-500 sm:block">
-            /
-          </kbd>
-        </label>
+        {isDashboard && (
+          <label className="relative block min-w-0 w-full max-w-[430px]">
+            <Search
+              aria-hidden="true"
+              size={17}
+              className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500"
+            />
+            <input
+              type="search"
+              placeholder="Search products, stores..."
+              aria-label="Search products and stores"
+              onChange={(event) => onSearchChange(event.currentTarget.value)}
+              className="h-10 w-full rounded-xl border border-white/[0.08] bg-white/[0.025] pl-10 pr-16 text-[13px] text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:bg-white/[0.04] focus:ring-2 focus:ring-blue-400/10"
+            />
+            <kbd className="absolute right-3 top-1/2 hidden -translate-y-1/2 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[10px] text-slate-500 sm:block">
+              /
+            </kbd>
+          </label>
+        )}
 
         <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
           <Link

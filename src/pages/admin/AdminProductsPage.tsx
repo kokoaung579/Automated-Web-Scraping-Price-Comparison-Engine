@@ -2,6 +2,8 @@ import { createElement, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   ArrowDown,
+  ArrowLeft,
+  ArrowRight,
   ArrowUp,
   Boxes,
   Check,
@@ -25,9 +27,6 @@ import {
   PRODUCT_SCHEMA_FIELDS,
   validateProductImportRows,
 } from '../../data/adminProducts'
-import {
-  getProductCategories,
-} from '../../data/adminCategories'
 import type { AdminStore } from '../../data/adminStores'
 import { getStores } from '../../services/storesApi'
 import type {
@@ -62,6 +61,7 @@ type ProductFormValues = Pick<
 const fieldClassName =
   'h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10'
 const labelClassName = 'mb-1.5 block text-[11px] font-medium text-slate-300'
+const PRODUCTS_PER_PAGE = 15
 
 function ProductThumbnail({ product }: { product: Product }) {
   const [imageFailed, setImageFailed] = useState(false)
@@ -125,7 +125,10 @@ function SourceBadge({ source }: { source: Product['source_type'] }) {
   )
 }
 
-function defaultFormValues(product: Product | null): ProductFormValues {
+function defaultFormValues(
+  product: Product | null,
+  availableCategories: string[],
+): ProductFormValues {
   if (product) {
     return {
       product_id: product.product_id,
@@ -146,7 +149,7 @@ function defaultFormValues(product: Product | null): ProductFormValues {
   return {
     product_id: `manual-${Date.now()}`,
     product_name: '',
-    category: getProductCategories()[0] ?? '',
+    category: availableCategories[0] ?? '',
     brand: null,
     model: null,
     description: null,
@@ -163,20 +166,37 @@ function ProductFormDialog({
   product,
   products,
   managedStores,
+  availableCategories,
   onClose,
   onSave,
 }: {
   product: Product | null
   products: Product[]
   managedStores: AdminStore[]
+  availableCategories: string[]
   onClose: () => void
   onSave: (product: Product) => Promise<void>
 }) {
   const [values, setValues] = useState<ProductFormValues>(() =>
-    defaultFormValues(product),
+    defaultFormValues(product, availableCategories),
   )
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+
+  // Categories load asynchronously; seed the add form with the first real
+  // shared category once it arrives instead of a frontend-only demo value.
+  useEffect(() => {
+    if (
+      !product &&
+      availableCategories.length > 0 &&
+      !availableCategories.includes(values.category)
+    ) {
+      setValues((current) => ({
+        ...current,
+        category: availableCategories[0],
+      }))
+    }
+  }, [availableCategories, product, values.category])
 
   function updateField(
     field: keyof ProductFormValues,
@@ -215,6 +235,7 @@ function ProductFormDialog({
         (existing) => existing.product_id !== product?.product_id,
       ),
       knownStoreIds,
+      availableCategories,
     )[0]
 
     if (!result.product) {
@@ -302,11 +323,17 @@ function ProductFormDialog({
                 className={`${fieldClassName} cursor-pointer`}
                 required
               >
-                {getProductCategories().map((category) => (
+                {availableCategories.map((category) => (
                   <option key={category} value={category}>
                     {category}
                   </option>
                 ))}
+                {values.category &&
+                  !availableCategories.includes(values.category) && (
+                    <option value={values.category}>
+                      {values.category} (not in shared categories)
+                    </option>
+                  )}
               </select>
             </label>
             <label>
@@ -945,6 +972,8 @@ export function AdminProductsPage() {
     error: string
   }>({ products: [], error: '' })
   const [managedStores, setManagedStores] = useState<AdminStore[]>([])
+  const [sharedCategories, setSharedCategories] = useState<string[]>([])
+  const [categoryError, setCategoryError] = useState('')
   const [loading, setLoading] = useState(true)
   const products = catalog.products
   const [searchQuery, setSearchQuery] = useState('')
@@ -952,6 +981,7 @@ export function AdminProductsPage() {
   const [storeFilter, setStoreFilter] = useState('all')
   const [availabilityFilter, setAvailabilityFilter] = useState('all')
   const [sourceFilter, setSourceFilter] = useState('all')
+  const [page, setPage] = useState(1)
   const [formOpen, setFormOpen] = useState(false)
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
   const [viewingProduct, setViewingProduct] = useState<Product | null>(
@@ -1011,8 +1041,27 @@ export function AdminProductsPage() {
       }
     }
 
+    async function loadSharedCategories() {
+      try {
+        const categories = await api.adminCategories()
+        if (!cancelled) {
+          setSharedCategories(categories.map((category) => category.name))
+          setCategoryError('')
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setCategoryError(
+            error instanceof Error
+              ? `Could not load categories from Category Management: ${error.message}`
+              : 'Could not load categories from Category Management.',
+          )
+        }
+      }
+    }
+
     void loadProducts()
     void loadManagedStores()
+    void loadSharedCategories()
 
     return () => {
       cancelled = true
@@ -1065,7 +1114,33 @@ export function AdminProductsPage() {
     storeFilter,
   ])
 
-  // A selection only ever contains rows that are currently visible. Filtering
+  // Pagination is derived from the filtered catalog, so adding, editing,
+  // importing or deleting a product changes the page count automatically.
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE),
+  )
+  const currentPage = Math.min(page, totalPages)
+  const pageStartIndex = (currentPage - 1) * PRODUCTS_PER_PAGE
+  const pageEndIndex = Math.min(
+    pageStartIndex + PRODUCTS_PER_PAGE,
+    filteredProducts.length,
+  )
+  const pageProducts = filteredProducts.slice(
+    pageStartIndex,
+    pageStartIndex + PRODUCTS_PER_PAGE,
+  )
+  const pageNumbers = Array.from({ length: totalPages }, (_, index) => index + 1)
+
+  // If a refresh leaves fewer pages than before (for example after a delete),
+  // move back to the last page that still has products.
+  useEffect(() => {
+    setPage((previous) => Math.min(previous, totalPages))
+  }, [totalPages])
+
+  // A selection only ever contains products from the current filter result.
+  // Filtering the catalog therefore cannot leave an invisible product selected,
+  // while selections made on other pages of the same result remain intact.
   // the catalog therefore cannot leave an invisible product selected.
   const selectedProducts = useMemo(
     () =>
@@ -1075,9 +1150,14 @@ export function AdminProductsPage() {
     [filteredProducts, selectedProductIds],
   )
   const selectedCount = selectedProducts.length
-  const allVisibleSelected =
+  const allFilteredSelected =
     filteredProducts.length > 0 && selectedCount === filteredProducts.length
-  const someVisibleSelected = selectedCount > 0 && !allVisibleSelected
+  const allPageSelected =
+    pageProducts.length > 0 &&
+    pageProducts.every((product) => selectedProductIds.has(product.product_id))
+  const somePageSelected =
+    pageProducts.some((product) => selectedProductIds.has(product.product_id)) &&
+    !allPageSelected
 
   useEffect(() => {
     const visibleIds = new Set(
@@ -1094,9 +1174,9 @@ export function AdminProductsPage() {
 
   useEffect(() => {
     if (selectAllRef.current) {
-      selectAllRef.current.indeterminate = someVisibleSelected
+      selectAllRef.current.indeterminate = somePageSelected
     }
-  }, [someVisibleSelected])
+  }, [somePageSelected, currentPage])
 
   function toggleProductSelection(productId: string) {
     setSelectedProductIds((previous) => {
@@ -1107,9 +1187,20 @@ export function AdminProductsPage() {
     })
   }
 
-  function toggleAllVisibleSelection() {
+  function toggleAllPageSelection() {
+    setSelectedProductIds((previous) => {
+      const next = new Set(previous)
+      pageProducts.forEach((product) => {
+        if (allPageSelected) next.delete(product.product_id)
+        else next.add(product.product_id)
+      })
+      return next
+    })
+  }
+
+  function toggleAllFilteredSelection() {
     setSelectedProductIds(
-      allVisibleSelected
+      allFilteredSelected
         ? new Set()
         : new Set(filteredProducts.map((product) => product.product_id)),
     )
@@ -1409,7 +1500,12 @@ export function AdminProductsPage() {
       if (!rows.length) {
         throw new Error('The worksheet does not contain any product rows.')
       }
-      const results = validateProductImportRows(rows, products, stores)
+      const results = validateProductImportRows(
+        rows,
+        products,
+        stores,
+        sharedCategories,
+      )
       setImportPreview({ fileName: file.name, operationId, results })
     } catch (error) {
       const auditRecorded = await recordImportAudit({
@@ -1588,14 +1684,14 @@ export function AdminProductsPage() {
             Export Products
           </button>
           <label
-            className={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-blue-300/10 bg-blue-400/[0.06] px-3.5 py-2.5 text-[11px] font-medium text-blue-200 transition hover:bg-blue-400/[0.12] ${catalog.error || loading || busy ? 'pointer-events-none opacity-40' : ''}`}
+            className={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-blue-300/10 bg-blue-400/[0.06] px-3.5 py-2.5 text-[11px] font-medium text-blue-200 transition hover:bg-blue-400/[0.12] ${catalog.error || categoryError || loading || busy ? 'pointer-events-none opacity-40' : ''}`}
           >
             <Upload aria-hidden="true" size={14} />
             {busy ? 'Reading workbook…' : 'Import Products'}
             <input
               type="file"
               accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              disabled={Boolean(catalog.error) || loading || busy}
+              disabled={Boolean(catalog.error || categoryError) || loading || busy}
               onChange={(event) => {
                 void handleImportFile(event.currentTarget.files?.[0])
                 event.currentTarget.value = ''
@@ -1606,7 +1702,7 @@ export function AdminProductsPage() {
           <button
             type="button"
             onClick={openCreateForm}
-            disabled={Boolean(catalog.error) || loading || busy}
+            disabled={Boolean(catalog.error || categoryError) || loading || busy}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-950/20 transition hover:bg-blue-400 disabled:opacity-40"
           >
             <Plus aria-hidden="true" size={15} />
@@ -1621,6 +1717,14 @@ export function AdminProductsPage() {
           className="rounded-xl border border-rose-300/10 bg-rose-400/[0.06] px-4 py-3 text-xs leading-5 text-rose-200"
         >
           {catalog.error}
+        </p>
+      )}
+      {categoryError && (
+        <p
+          role="alert"
+          className="rounded-xl border border-amber-300/10 bg-amber-400/[0.05] px-4 py-3 text-xs leading-5 text-amber-200"
+        >
+          {categoryError} Product changes are paused until categories can be loaded.
         </p>
       )}
       {feedback && (
@@ -1691,7 +1795,10 @@ export function AdminProductsPage() {
               <input
                 type="search"
                 value={searchQuery}
-                onChange={(event) => setSearchQuery(event.currentTarget.value)}
+                onChange={(event) => {
+                  setSearchQuery(event.currentTarget.value)
+                  setPage(1)
+                }}
                 placeholder="Search ID, name, brand, store"
                 className="h-10 w-full rounded-xl border border-white/[0.07] bg-[#090e18] pl-9 pr-3 text-xs text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10"
               />
@@ -1700,9 +1807,10 @@ export function AdminProductsPage() {
               <span className="sr-only">Filter by category</span>
               <select
                 value={categoryFilter}
-                onChange={(event) =>
+                onChange={(event) => {
                   setCategoryFilter(event.currentTarget.value)
-                }
+                  setPage(1)
+                }}
                 className={`${fieldClassName} cursor-pointer`}
               >
                 <option value="all">All categories</option>
@@ -1717,7 +1825,10 @@ export function AdminProductsPage() {
               <span className="sr-only">Filter by store</span>
               <select
                 value={storeFilter}
-                onChange={(event) => setStoreFilter(event.currentTarget.value)}
+                onChange={(event) => {
+                  setStoreFilter(event.currentTarget.value)
+                  setPage(1)
+                }}
                 className={`${fieldClassName} cursor-pointer`}
               >
                 <option value="all">All stores</option>
@@ -1733,9 +1844,10 @@ export function AdminProductsPage() {
               <span className="sr-only">Filter by availability</span>
               <select
                 value={availabilityFilter}
-                onChange={(event) =>
+                onChange={(event) => {
                   setAvailabilityFilter(event.currentTarget.value)
-                }
+                  setPage(1)
+                }}
                 className={`${fieldClassName} cursor-pointer`}
               >
                 <option value="all">All availability</option>
@@ -1750,7 +1862,10 @@ export function AdminProductsPage() {
               <span className="sr-only">Filter by source type</span>
               <select
                 value={sourceFilter}
-                onChange={(event) => setSourceFilter(event.currentTarget.value)}
+                onChange={(event) => {
+                  setSourceFilter(event.currentTarget.value)
+                  setPage(1)
+                }}
                 className={`${fieldClassName} cursor-pointer`}
               >
                 <option value="all">All sources</option>
@@ -1761,7 +1876,7 @@ export function AdminProductsPage() {
           </div>
 
           <div className="flex flex-col gap-2 border-t border-white/[0.06] px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-            <div className="flex items-center gap-2 text-[11px] text-slate-400">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400">
               <span aria-live="polite">
                 {selectedCount} {selectedCount === 1 ? 'product' : 'products'} selected
               </span>
@@ -1773,6 +1888,18 @@ export function AdminProductsPage() {
               >
                 Clear Selection
               </button>
+              {filteredProducts.length > PRODUCTS_PER_PAGE && (
+                <button
+                  type="button"
+                  onClick={toggleAllFilteredSelection}
+                  disabled={busy}
+                  className="rounded-lg border border-blue-300/10 bg-blue-400/[0.06] px-2.5 py-1 text-[10px] font-medium text-blue-200 transition hover:bg-blue-400/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {allFilteredSelected
+                    ? `Deselect all ${filteredProducts.length} filtered products`
+                    : `Select all ${filteredProducts.length} filtered products`}
+                </button>
+              )}
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -1807,9 +1934,10 @@ export function AdminProductsPage() {
                       ref={selectAllRef}
                       type="checkbox"
                       aria-label="Select all visible products"
-                      checked={allVisibleSelected}
-                      onChange={toggleAllVisibleSelection}
-                      disabled={filteredProducts.length === 0}
+                      title="Select all products on this page"
+                      checked={allPageSelected}
+                      onChange={toggleAllPageSelection}
+                      disabled={pageProducts.length === 0}
                       className="size-3.5 cursor-pointer accent-blue-500"
                     />
                   </th>
@@ -1840,7 +1968,7 @@ export function AdminProductsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.045]">
-                {filteredProducts.map((product) => (
+                {pageProducts.map((product) => (
                   <tr
                     key={product.product_id}
                     className="group transition-colors hover:bg-white/[0.02]"
@@ -1951,6 +2079,7 @@ export function AdminProductsPage() {
                 setStoreFilter('all')
                 setAvailabilityFilter('all')
                 setSourceFilter('all')
+                setPage(1)
               }}
               className="mt-4 rounded-lg border border-white/[0.08] px-3 py-2 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.04]"
             >
@@ -1958,6 +2087,53 @@ export function AdminProductsPage() {
             </button>
           </div>
         )}
+
+        <nav
+          aria-label="Product catalog pagination"
+          className="flex flex-col gap-3 border-t border-white/[0.06] px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5"
+        >
+          <p className="text-[10px] text-slate-500">
+            {`Showing ${filteredProducts.length === 0 ? 0 : pageStartIndex + 1}–${pageEndIndex} of ${filteredProducts.length} products`}
+          </p>
+          <div className="flex items-center gap-1.5 self-end sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setPage(currentPage - 1)}
+              disabled={currentPage === 1}
+              aria-label="Previous page"
+              className="rounded-lg border border-white/[0.08] p-2 text-slate-400 transition hover:bg-white/[0.04] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              <ArrowLeft aria-hidden="true" size={14} />
+            </button>
+            <div className="flex max-w-[15rem] items-center gap-1 overflow-x-auto sm:max-w-none">
+              {pageNumbers.map((pageNumber) => (
+                <button
+                  key={pageNumber}
+                  type="button"
+                  onClick={() => setPage(pageNumber)}
+                  aria-label={`Page ${pageNumber}`}
+                  aria-current={pageNumber === currentPage ? 'page' : undefined}
+                  className={`min-w-7 rounded-lg border px-2 py-1.5 text-[10px] font-medium transition ${
+                    pageNumber === currentPage
+                      ? 'border-blue-400/40 bg-blue-500 text-white'
+                      : 'border-white/[0.08] text-slate-400 hover:bg-white/[0.04] hover:text-white'
+                  }`}
+                >
+                  {pageNumber}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setPage(currentPage + 1)}
+              disabled={currentPage >= totalPages}
+              aria-label="Next page"
+              className="rounded-lg border border-white/[0.08] p-2 text-slate-400 transition hover:bg-white/[0.04] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
+            >
+              <ArrowRight aria-hidden="true" size={14} />
+            </button>
+          </div>
+        </nav>
       </section>
 
       <p className="flex items-center justify-center gap-1.5 pb-1 text-[9px] text-slate-600">
@@ -1971,6 +2147,7 @@ export function AdminProductsPage() {
           product={editingProduct}
           products={products}
           managedStores={managedStores}
+          availableCategories={sharedCategories}
           onClose={() => {
             setFormOpen(false)
             setEditingProduct(null)
