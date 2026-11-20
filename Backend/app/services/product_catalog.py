@@ -80,6 +80,83 @@ def product_identity_key(product: AdminProduct | dict) -> str | None:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def product_group_key(product: AdminProduct | dict) -> str | None:
+    """Return the canonical grouping key for comparable product listings.
+
+    The stored canonical identity key (``identityKey``) wins when present.
+    Otherwise a key is derived from normalized category, brand, and model —
+    with the normalized product name as a fallback for listings that are
+    missing models or category information (for example manual entries that
+    were created without a model number).
+    """
+
+    source: dict = (
+        product.model_dump()
+        if isinstance(product, AdminProduct)
+        else {key: value for key, value in product.items()}
+    )
+    stored_key = source.get("identityKey")
+    if isinstance(stored_key, str) and stored_key:
+        return stored_key
+
+    attributes = normalize_attributes(product)
+    category = attributes["category"]
+    brand = attributes["brand"]
+    model = attributes["model"]
+    if brand or model or category:
+        material = "\0".join(
+            value for value in (category, brand, model) if value
+        ).strip("\0")
+        if material:
+            return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    name = attributes["product_name"]
+    if name:
+        return hashlib.sha256(name.encode("utf-8")).hexdigest()
+    return None
+
+
+async def find_comparable_product_ids(
+    database,
+    product_id: str,
+    limit: int = 50,
+) -> list[str]:
+    """Return the ids of products that are comparable to ``product_id``.
+
+    Products sharing a normalized identity (or canonical group key) are
+    grouped together so cross-store price comparisons can aggregate offers
+    from every matching listing, including scraped and manually entered items
+    that describe the same product.
+    """
+
+    documents = await database.products.find().to_list(length=None)
+    target = next(
+        (
+            document
+            for document in documents
+            if str(document.get("_id", "")) == product_id
+        ),
+        None,
+    )
+    if target is None:
+        return [product_id]
+
+    group_key = product_group_key(target)
+    if not group_key:
+        # Incomplete listings cannot be grouped safely; compare the product
+        # on its own.
+        return [product_id]
+
+    comparable_ids = [
+        str(document.get("_id", ""))
+        for document in documents
+        if product_group_key(document) == group_key
+    ]
+    if product_id not in comparable_ids:
+        comparable_ids.append(product_id)
+    return comparable_ids[:limit]
+
+
 def has_same_complete_identity(
     first: AdminProduct | dict,
     second: AdminProduct | dict,

@@ -23,7 +23,7 @@ Set `CHANNEL3_API_KEY` in the same file to enable live Channel3 product
 searches. Keep the key in the backend environment only; do not add it to
 frontend environment variables or commit it.
 
-Account verification emails require `GMAIL_SMTP_EMAIL` and
+Account verification emails require `GMAIL_SMTpP_EMAIL` and
 `GMAIL_APP_PASSWORD` in `Backend\.env`. For Gmail, use an app password (with
 2-Step Verification enabled), not your normal account password.
 `GMAIL_SMTP_HOST` and `GMAIL_SMTP_PORT` default to `smtp.gmail.com` and `587`.

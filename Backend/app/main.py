@@ -39,6 +39,7 @@ from pymongo.errors import DuplicateKeyError
 
 from app.database import connect_db
 from app.services.product_catalog import (
+    find_comparable_product_ids,
     ingest_product_listing,
     normalize_store_id,
     product_identity_key,
@@ -235,6 +236,77 @@ def serialize_document(document: dict) -> dict:
 
 def mongo_payload(model) -> dict:
     return model.model_dump(exclude={"id"}, exclude_none=True)
+
+
+OFFER_QUERY_PROJECTION = {
+    "_id": 1,
+    "store": 1,
+    "storeId": 1,
+    "offerId": 1,
+    "sourceProductId": 1,
+    "storeProductName": 1,
+    "storeBrand": 1,
+    "storeModel": 1,
+    "storeCategory": 1,
+    "sku": 1,
+    "price": 1,
+    "currency": 1,
+    "availability": 1,
+    "shippingFee": 1,
+    "productUrl": 1,
+    "updatedAt": 1,
+    "sourceType": 1,
+}
+
+
+def serialize_offer(offer: dict, price: float | None = None) -> dict:
+    raw_price = offer.get("price") if price is None else price
+    valid_price = (
+        float(raw_price)
+        if isinstance(raw_price, (int, float))
+        and math.isfinite(raw_price)
+        and raw_price >= 0
+        else None
+    )
+    raw_shipping_fee = offer.get("shippingFee")
+    shipping_fee = (
+        float(raw_shipping_fee)
+        if isinstance(raw_shipping_fee, (int, float))
+        and math.isfinite(raw_shipping_fee)
+        and raw_shipping_fee >= 0
+        else None
+    )
+    return {
+        "store": offer.get("store", "Unknown store"),
+        "store_id": offer.get("storeId")
+        or normalize_store_id(offer.get("store")),
+        "offer_id": offer.get("offerId") or str(offer.get("_id", "")),
+        "source_product_id": offer.get("sourceProductId"),
+        "store_product_name": offer.get("storeProductName"),
+        "store_brand": offer.get("storeBrand"),
+        "store_model": offer.get("storeModel"),
+        "store_category": offer.get("storeCategory"),
+        "sku": offer.get("sku"),
+        "price": valid_price,
+        "currency": offer.get("currency", "USD"),
+        "availability": offer.get("availability", "unknown"),
+        "shipping_fee": shipping_fee,
+        "product_url": offer.get("productUrl"),
+        "updated_at": offer.get("updatedAt"),
+        "source_type": offer.get("sourceType"),
+    }
+
+
+def deduplicate_offers(offers: list[dict]) -> list[dict]:
+    unique_offers = {}
+    for offer in offers:
+        key = normalize_store_id(offer.get("store_id") or offer.get("store"))
+        existing = unique_offers.get(key)
+        if existing is None or (
+            offer.get("updated_at") or ""
+        ) >= (existing.get("updated_at") or ""):
+            unique_offers[key] = offer
+    return list(unique_offers.values())
 
 
 # ==========================================
@@ -506,6 +578,7 @@ async def root():
 
 
 @app.get("/api/health")
+@app.get("/health")
 async def health(request: Request):
     """Check MongoDB with a real ping and notify on connection transitions."""
     database = request.app.state.database
@@ -606,74 +679,8 @@ async def product_offers(product_id: str):
 
     documents = await get_database().offers.find(
         {"productId": product_id},
-        {
-            "_id": 1,
-            "store": 1,
-            "storeId": 1,
-            "offerId": 1,
-            "sourceProductId": 1,
-            "storeProductName": 1,
-            "storeBrand": 1,
-            "storeModel": 1,
-            "storeCategory": 1,
-            "sku": 1,
-            "price": 1,
-            "currency": 1,
-            "availability": 1,
-            "shippingFee": 1,
-            "productUrl": 1,
-            "updatedAt": 1,
-            "sourceType": 1,
-        },
+        OFFER_QUERY_PROJECTION,
     ).to_list(length=None)
-
-    def serialize_offer(offer: dict, price: float | None = None) -> dict:
-        raw_price = offer.get("price") if price is None else price
-        valid_price = (
-            float(raw_price)
-            if isinstance(raw_price, (int, float))
-            and math.isfinite(raw_price)
-            and raw_price >= 0
-            else None
-        )
-        raw_shipping_fee = offer.get("shippingFee")
-        shipping_fee = (
-            float(raw_shipping_fee)
-            if isinstance(raw_shipping_fee, (int, float))
-            and math.isfinite(raw_shipping_fee)
-            and raw_shipping_fee >= 0
-            else None
-        )
-        return {
-            "store": offer.get("store", "Unknown store"),
-            "store_id": offer.get("storeId")
-            or normalize_store_id(offer.get("store")),
-            "offer_id": offer.get("offerId") or str(offer.get("_id", "")),
-            "source_product_id": offer.get("sourceProductId"),
-            "store_product_name": offer.get("storeProductName"),
-            "store_brand": offer.get("storeBrand"),
-            "store_model": offer.get("storeModel"),
-            "store_category": offer.get("storeCategory"),
-            "sku": offer.get("sku"),
-            "price": valid_price,
-            "currency": offer.get("currency", "USD"),
-            "availability": offer.get("availability", "unknown"),
-            "shipping_fee": shipping_fee,
-            "product_url": offer.get("productUrl"),
-            "updated_at": offer.get("updatedAt"),
-            "source_type": offer.get("sourceType"),
-        }
-
-    def deduplicate_offers(offers: list[dict]) -> list[dict]:
-        unique_offers = {}
-        for offer in offers:
-            key = normalize_store_id(offer.get("store_id") or offer.get("store"))
-            existing = unique_offers.get(key)
-            if existing is None or (
-                offer.get("updated_at") or ""
-            ) >= (existing.get("updated_at") or ""):
-                unique_offers[key] = offer
-        return list(unique_offers.values())
 
     if not isinstance(product.get("adminProduct"), dict):
         return deduplicate_offers(
@@ -734,6 +741,45 @@ async def product_offers(product_id: str):
 
 
 @app.get(
+    "/api/products/{product_id}/comparisons",
+    response_model=list[StoreOffer],
+)
+async def product_comparisons(product_id: str) -> list[StoreOffer]:
+    """Return store offers comparable to a product across its group.
+
+    The endpoint aggregates offers for the product and every other catalog
+    listing that shares the same normalized identity (category, brand, model)
+    or canonical group key. Offers are returned per distinct store so the
+    frontend can compare prices across stores; prices may differ per store.
+    """
+
+    product = await get_database().products.find_one({"_id": product_id})
+    if product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    group_ids = await find_comparable_product_ids(get_database(), product_id)
+    offers: list[dict] = []
+    seen_store_keys: set[str] = set()
+    for group_id in group_ids:
+        documents = await get_database().offers.find(
+            {"productId": group_id},
+            OFFER_QUERY_PROJECTION,
+        ).to_list(length=None)
+
+        for offer in documents:
+            serialized = serialize_offer(offer)
+            store_key = normalize_store_id(
+                serialized.get("store_id") or serialized.get("store"),
+            )
+            if not store_key or store_key in seen_store_keys:
+                continue
+            seen_store_keys.add(store_key)
+            offers.append(serialized)
+
+    return offers
+
+
+@app.get(
     "/api/products/{product_id}/history",
     response_model=list[StoreHistory],
 )
@@ -772,11 +818,19 @@ async def list_alerts():
     ).to_list(length=None)
     product_ids = {document["_id"] for document in product_documents}
 
-    return [
-        serialize_document(document)
-        for document in documents
-        if document.get("productId") in product_ids
-    ]
+    alerts: list[PriceAlert] = []
+    for document in documents:
+        if document.get("productId") not in product_ids:
+            continue
+        try:
+            alerts.append(PriceAlert.model_validate(serialize_document(document)))
+        except Exception as exc:
+            logger.warning(
+                "Skipping malformed price alert document %s: %s",
+                document.get("_id"),
+                exc,
+            )
+    return [alert.model_dump() for alert in alerts]
 
 
 @app.post(
