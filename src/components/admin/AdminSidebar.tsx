@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
+import { useSystemSettings } from '../../context/SystemSettingsContext'
 import type { AuthUser } from '../../types/auth'
 
 const adminNavigation: {
@@ -90,6 +91,7 @@ export function AdminSidebar({
   onClose,
 }: AdminSidebarProps) {
   const initials = currentUser.username.slice(0, 2).toUpperCase()
+  const { applicationName } = useSystemSettings()
   const groups = [
     { key: 'workspace', label: 'Workspace' },
     { key: 'operations', label: 'Operations' },
@@ -109,7 +111,7 @@ export function AdminSidebar({
           </span>
           <span>
             <span className="block text-[15px] font-semibold tracking-tight text-white">
-              PricePilot
+              {applicationName}
             </span>
             <span className="mt-0.5 block text-[10px] font-medium uppercase tracking-[0.16em] text-cyan-300/90">
               Admin workspace

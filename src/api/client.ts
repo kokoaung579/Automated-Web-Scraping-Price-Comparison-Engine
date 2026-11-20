@@ -327,6 +327,29 @@ export const api = {
 
   currentSession: () => request<AuthUser | null>('/auth/session'),
 
+  getUserSettings: () =>
+    request<{ emailPriceAlerts: boolean; inAppPriceAlerts: boolean; theme: string }>(
+      '/auth/settings',
+    ),
+
+  updateUserSettings: (settings: {
+    emailPriceAlerts: boolean
+    inAppPriceAlerts: boolean
+    theme: string
+  }) =>
+    request<{ emailPriceAlerts: boolean; inAppPriceAlerts: boolean; theme: string }>(
+      '/auth/settings',
+      {
+        method: 'PUT',
+        body: JSON.stringify(settings),
+      },
+    ),
+
+  sendPriceAlertEmail: (alertId: string) =>
+    request<{ sent: boolean; reason?: string }>(
+      `/alerts/${alertId}/email`,
+      { method: 'POST' },
+    ),
   logout: () =>
     request<void>('/auth/logout', {
       method: 'POST',
@@ -612,4 +635,16 @@ export const api = {
     request<StoreHistory[]>(
       `/products/${encodeURIComponent(productId)}/history?period=${period}`,
     ),
+
+  systemSettings: () =>
+    request<{ applicationName: string; timeZone: string }>('/system/settings'),
+
+  updateSystemSettings: (settings: {
+    applicationName?: string
+    timeZone?: string
+  }) =>
+    request<{ applicationName: string; timeZone: string }>('/system/settings', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
 }

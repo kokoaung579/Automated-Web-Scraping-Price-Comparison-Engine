@@ -2,6 +2,7 @@ import { Bell, LogOut, Menu, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../auth/useAuth'
+import { useSystemSettings } from '../../context/SystemSettingsContext'
 import { useAdminNotifications } from '../../context/AdminNotificationsContext'
 import type { AuthUser } from '../../types/auth'
 import { formatDateTime } from '../../utils/datetime'
@@ -26,6 +27,7 @@ type AdminHeaderProps = {
 export function AdminHeader({ currentUser, onMenuClick }: AdminHeaderProps) {
   const navigate = useNavigate()
   const { signOut } = useAuth()
+  const { applicationName } = useSystemSettings()
   const location = useLocation()
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
@@ -64,7 +66,7 @@ export function AdminHeader({ currentUser, onMenuClick }: AdminHeaderProps) {
 
         <div className="min-w-0">
           <p className="hidden text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 sm:block">
-            PricePilot / Administration
+            {applicationName} / Administration
           </p>
           <h1 className="truncate text-sm font-semibold text-slate-100 sm:text-[15px]">
             {sectionLabels[location.pathname] ?? 'Admin workspace'}

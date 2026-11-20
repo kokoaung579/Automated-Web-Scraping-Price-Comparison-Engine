@@ -74,7 +74,9 @@ export const ADMIN_TIME_ZONES = [
   'America/New_York',
   'Europe/London',
   'Asia/Yangon',
+  'Asia/Bangkok',
   'Asia/Tokyo',
+  'Asia/Singapore',
 ] as const
 
 export const ADMIN_CURRENCIES = ['USD', 'EUR', 'GBP', 'MMK', 'JPY'] as const
