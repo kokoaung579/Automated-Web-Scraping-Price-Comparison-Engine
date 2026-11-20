@@ -8,11 +8,16 @@ changing its public interface.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Any, Iterable
 
 import requests
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional dependency
+    load_dotenv = None
 
 API_SH_BASE_URL = "https://api.api.sh"
 DEFAULT_TIMEOUT_SECONDS = 120
@@ -30,8 +35,18 @@ class ApiShConfig:
     timeout: int = DEFAULT_TIMEOUT_SECONDS
 
 
+def _load_backend_env() -> None:
+    if load_dotenv is None:
+        return
+    env_path = Path(__file__).resolve().parents[3] / "Backend" / ".env"
+    if env_path.is_file():
+        # Existing process environment takes precedence.
+        load_dotenv(env_path, override=False)
+
+
 def load_config() -> ApiShConfig:
     """Load API.SH configuration from environment variables."""
+    _load_backend_env()
     api_key = os.environ.get("API_SH_KEY", "").strip()
     if not api_key:
         raise ApiShError("API_SH_KEY environment variable is not set")

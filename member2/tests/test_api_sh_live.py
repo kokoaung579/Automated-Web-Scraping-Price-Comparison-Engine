@@ -8,10 +8,13 @@ import os
 
 import pytest
 
-from app.api_clients.api_sh import ApiShClient, load_config
+from app.api_clients.api_sh import ApiShClient, load_config, _load_backend_env
+
+_load_backend_env()
+_HAS_API_KEY = bool(os.environ.get("API_SH_KEY", "").strip())
 
 
-@pytest.mark.skipif(not os.environ.get("API_SH_KEY"), reason="API_SH_KEY not set")
+@pytest.mark.skipif(not _HAS_API_KEY, reason="API_SH_KEY not set")
 def test_live_api_sh_search():
     client = ApiShClient(load_config())
     products = client.search_products("coffee maker")
