@@ -50,13 +50,11 @@ module_names = (
     "member2.app.scraper_registry",
     "member2.app.product_normalizer",
     "member2.app.scrapers.adorama_scraper",
-    "member2.app.scrapers.amazon_scraper",
     "member2.app.scrapers.books_scraper",
     "member2.app.scrapers.dummyjson_scraper",
     "member2.app.scrapers.ecommerce_common",
     "member2.app.scrapers.fakestore_scraper",
     "member2.app.scrapers.quotes_playwright_scraper",
-    "member2.app.scrapers.walmart_scraper",
 )
 for module_name in module_names:
     imported = importlib.import_module(module_name)

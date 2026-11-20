@@ -4,9 +4,7 @@ import pytest
 import requests
 
 from member2.app.scrapers.adorama_scraper import search_products as search_adorama
-from member2.app.scrapers.amazon_scraper import search_products as search_amazon
 from member2.app.scrapers.ecommerce_common import ScraperAccessBlockedError
-from member2.app.scrapers.walmart_scraper import search_products as search_walmart
 
 
 pytestmark = pytest.mark.skipif(

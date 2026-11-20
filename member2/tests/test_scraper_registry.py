@@ -35,8 +35,6 @@ def test_books_registry_passes_per_request_timeout_separately_from_deadline(
     ("source", "scraper_function"),
     [
         ("Adorama", "search_adorama_products"),
-        ("Amazon", "search_amazon_products"),
-        ("Walmart", "search_walmart_products"),
     ],
 )
 def test_retailer_scrapers_are_registered_and_receive_job_keyword(
@@ -78,7 +76,7 @@ def test_retailer_scrapers_are_registered_and_receive_job_keyword(
     assert received["deadline"] is not None
 
 
-@pytest.mark.parametrize("source", ["Adorama", "Amazon", "Walmart"])
+@pytest.mark.parametrize("source", ["Adorama"])
 def test_retailer_registry_requires_keyword(source):
     binding = StoreScraperBinding(
         store_id=f"{source.casefold()}-store",

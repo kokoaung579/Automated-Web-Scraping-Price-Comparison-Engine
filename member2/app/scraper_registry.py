@@ -6,7 +6,6 @@ from .job_config import StoreScraperBinding
 from .scrapers.adorama_scraper import (
     search_products as search_adorama_products,
 )
-from .scrapers.amazon_scraper import search_products as search_amazon_products
 from .scrapers.books_scraper import scrape_books
 from .scrapers.deadline import (
     DEFAULT_SCRAPER_EXECUTION_TIMEOUT_SECONDS,
@@ -17,7 +16,6 @@ from .scrapers.deadline import (
 )
 from .scrapers.dummyjson_scraper import search_products
 from .scrapers.fakestore_scraper import fetch_products
-from .scrapers.walmart_scraper import search_products as search_walmart_products
 from .source_identity import validate_source_identity
 
 
@@ -84,38 +82,6 @@ def _scrape_adorama(
     )
 
 
-def _scrape_amazon(
-    binding: StoreScraperBinding,
-    timeout_seconds: int,
-    deadline_monotonic: float,
-) -> list[dict]:
-    if binding.source_identity != "Amazon":
-        raise ValueError("Amazon binding has an invalid source identity.")
-    if binding.keyword is None or not binding.keyword.strip():
-        raise ValueError("A non-empty Amazon search keyword is required.")
-    return search_amazon_products(
-        binding.keyword,
-        timeout=timeout_seconds,
-        _deadline_monotonic=deadline_monotonic,
-    )
-
-
-def _scrape_walmart(
-    binding: StoreScraperBinding,
-    timeout_seconds: int,
-    deadline_monotonic: float,
-) -> list[dict]:
-    if binding.source_identity != "Walmart":
-        raise ValueError("Walmart binding has an invalid source identity.")
-    if binding.keyword is None or not binding.keyword.strip():
-        raise ValueError("A non-empty Walmart search keyword is required.")
-    return search_walmart_products(
-        binding.keyword,
-        timeout=timeout_seconds,
-        _deadline_monotonic=deadline_monotonic,
-    )
-
-
 class ScraperRegistry:
     def __init__(
         self,
@@ -130,8 +96,6 @@ class ScraperRegistry:
                 "FakeStoreAPI": _scrape_fakestore,
                 "BooksToScrape": _scrape_books,
                 "Adorama": _scrape_adorama,
-                "Amazon": _scrape_amazon,
-                "Walmart": _scrape_walmart,
             }
         )
 
@@ -139,7 +103,7 @@ class ScraperRegistry:
         source = validate_source_identity(binding.source_identity)
         if source not in self._scrapers and source not in self._deadline_scrapers:
             raise ValueError(f"No product scraper is registered for {source!r}.")
-        if source in {"DummyJSON", "Adorama", "Amazon", "Walmart"} and (
+        if source in {"DummyJSON", "Adorama"} and (
             binding.keyword is None or not binding.keyword.strip()
         ):
             raise ValueError(
