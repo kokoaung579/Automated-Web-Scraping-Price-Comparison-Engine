@@ -30,6 +30,7 @@ import { AdminProductMatchesPage } from '../pages/admin/AdminProductMatchesPage'
 import { AdminStoresPage } from '../pages/admin/AdminStoresPage'
 import { AdminScrapingPage } from '../pages/admin/AdminScrapingPage'
 import { AdminAuditLogsPage } from '../pages/admin/AdminAuditLogsPage'
+import { AdminNotificationsPage } from '../pages/admin/AdminNotificationsPage'
 import { AdminSettingsPage } from '../pages/admin/AdminSettingsPage'
 import { AdminUsersPage } from '../pages/admin/AdminUsersPage'
 
@@ -279,6 +280,10 @@ export function AppRoutes() {
         <Route
           path="audit-logs"
           element={<AdminAuditLogsPage />}
+        />
+        <Route
+          path="notifications"
+          element={<AdminNotificationsPage />}
         />
         <Route
           path="settings"

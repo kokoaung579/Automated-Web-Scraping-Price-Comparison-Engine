@@ -49,6 +49,8 @@ class AdminProduct(APIModel):
     source_type: Literal["scraped", "manual"]
     created_at: str = Field(min_length=1)
     updated_at: str = Field(min_length=1)
+    sku: str | None = None
+    shipping_fee: float | None = None
 
 
 def admin_product_to_catalog_document(

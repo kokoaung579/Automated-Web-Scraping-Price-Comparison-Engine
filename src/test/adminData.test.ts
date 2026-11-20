@@ -1,13 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import * as adminStores from '../data/adminStores'
 import {
   getSeedAdminProducts,
   validateProductImportRows,
 } from '../data/adminProducts'
 import { getProductCategories } from '../data/adminCategories'
-import {
-  getSeedAdminStores,
-  loadAdminStores,
-} from '../data/adminStores'
+import type { AdminStore } from '../data/adminStores'
 import {
   createDemoScrapingJob,
   applyDemoJobAction,
@@ -23,6 +21,16 @@ import {
   resetAdminSettings,
   saveAdminSettings,
 } from '../data/adminSettings'
+
+const amazonStore: AdminStore = {
+  store_id: 'amazon',
+  store_name: 'Amazon',
+  website_url: 'https://www.amazon.com',
+  logo_url: null,
+  status: 'Active',
+  created_at: '2026-11-13T00:00:00.000Z',
+  updated_at: '2026-11-13T00:00:00.000Z',
+}
 
 describe('admin demo data rules', () => {
   beforeEach(() => {
@@ -41,7 +49,7 @@ describe('admin demo data rules', () => {
       description: null,
       image_url: '',
       product_url: null,
-      store_id: getSeedAdminStores()[0].store_id,
+      store_id: amazonStore.store_id,
       price: 12.5,
       currency: 'usd',
       availability: 'in_stock',
@@ -85,20 +93,55 @@ describe('admin demo data rules', () => {
     expect(results[2].product).toBeNull()
   })
 
-  it('loads the canonical seed store IDs and rejects duplicate store websites', () => {
-    const stores = getSeedAdminStores()
-    expect(loadAdminStores().map((store) => store.store_id)).toEqual(
-      stores.map((store) => store.store_id),
+  it('validates import store IDs against MongoDB-backed store IDs', () => {
+    const row = {
+      product_id: 'store-validation-test',
+      product_name: 'Store Validation Test',
+      category: getProductCategories()[0],
+      brand: null,
+      model: null,
+      description: null,
+      image_url: null,
+      product_url: null,
+      price: 19.95,
+      currency: 'USD',
+      availability: 'in_stock',
+      source_type: 'manual',
+    }
+
+    const [valid] = validateProductImportRows(
+      [{ rowNumber: 1, values: { ...row, store_id: 'amazon' } }],
+      [],
+      [amazonStore.store_id],
     )
-    window.localStorage.setItem(
-      'pricepilot-admin-stores',
-      JSON.stringify([...stores, { ...stores[0], store_id: 'another-id' }]),
+    expect(valid.product?.store_id).toBe('amazon')
+
+    const [legacy] = validateProductImportRows(
+      [{ rowNumber: 1, values: { ...row, store_id: 'apple-store' } }],
+      [],
+      ['apple-store'],
     )
-    expect(() => loadAdminStores()).toThrow('duplicate store IDs, names, or website URLs')
+    expect(legacy.product?.store_id).toBe('apple-store')
+
+    const [unknown] = validateProductImportRows(
+      [{ rowNumber: 1, values: { ...row, store_id: 'unknown-store' } }],
+      [],
+      [amazonStore.store_id],
+    )
+    expect(unknown.errors.join(' ')).toContain(
+      'store_id must match a store in Store Management',
+    )
+  })
+
+  it('keeps store helpers pure and ignores legacy browser store data', () => {
+    expect('getSeedAdminStores' in adminStores).toBe(false)
+    expect('loadAdminStores' in adminStores).toBe(false)
+    expect('getAdminStoreIds' in adminStores).toBe(false)
+    expect(adminStores.getStoreIdFromName('Apple Store')).toBe('apple-store')
   })
 
   it('applies simulated scraping transitions and persists the resulting state', () => {
-    const [seedJob] = getSeedScrapingJobs()
+    const [seedJob] = getSeedScrapingJobs([amazonStore])
     const time = '2026-03-01T10:00:00.000Z'
     const started = applyDemoJobAction(seedJob, 'start', time)
     const paused = applyDemoJobAction(started, 'pause', time)
@@ -118,7 +161,7 @@ describe('admin demo data rules', () => {
   })
 
   it('validates and creates a scheduled job using an active managed store', () => {
-    const stores = getSeedAdminStores()
+    const stores = [amazonStore]
     const input = {
       store_id: stores[0].store_id,
       interval_minutes: 45,

@@ -28,7 +28,7 @@ type SidebarProps = {
   isOpen: boolean
   isCollapsed: boolean
   onNavigate: () => void
-  dataSource: 'loading' | 'backend' | 'demo'
+  dataSource: 'loading' | 'backend' | 'error'
   watchlistCount: number
   alertsCount: number
   unreadNotificationCount: number
@@ -173,16 +173,16 @@ export function Sidebar({
             className={`size-2 rounded-full ${
               dataSource === 'backend'
                 ? 'bg-emerald-400 shadow-[0_0_10px_#34d399]'
-                : dataSource === 'demo'
-                  ? 'bg-amber-400'
+                : dataSource === 'error'
+                  ? 'bg-rose-400'
                   : 'animate-pulse bg-slate-500'
             }`}
           />
           <span className={isCollapsed ? 'lg:hidden' : ''}>
             {dataSource === 'backend'
               ? 'Catalog connected'
-              : dataSource === 'demo'
-                ? 'Demo mode'
+              : dataSource === 'error'
+                ? 'Catalog unavailable'
                 : 'Connecting'}
           </span>
         </div>
@@ -193,8 +193,8 @@ export function Sidebar({
         >
           {dataSource === 'backend'
             ? 'Prices, offers, and history use the shared catalog.'
-            : dataSource === 'demo'
-              ? 'Backend unavailable; showing demo prices.'
+            : dataSource === 'error'
+              ? 'Backend unavailable; no demo data is shown.'
               : 'Loading catalog data.'}
         </p>
         <div
@@ -204,11 +204,7 @@ export function Sidebar({
         >
           <span>Price source</span>
           <span className="font-medium text-slate-300">
-            {dataSource === 'backend'
-              ? 'MongoDB'
-              : dataSource === 'demo'
-                ? 'Demo'
-                : '—'}
+            {dataSource === 'backend' ? 'MongoDB' : '—'}
           </span>
         </div>
       </div>

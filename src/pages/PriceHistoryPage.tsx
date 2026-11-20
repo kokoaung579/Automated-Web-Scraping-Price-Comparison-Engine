@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { KeyboardEvent } from 'react'
 import {
   ArrowDownRight,
   ArrowUpRight,
   CalendarDays,
   Clock3,
   History,
+  Search,
   Store,
+  X,
 } from 'lucide-react'
 import {
   CartesianGrid,
@@ -20,10 +23,7 @@ import {
 import { useOutletContext } from 'react-router-dom'
 import type { AppOutletContext } from '../context/AppOutletContext'
 import { api } from '../api/client'
-import {
-  createStorePriceHistory,
-  priceHistoryPeriods,
-} from '../data/priceHistory'
+import { priceHistoryPeriods } from '../data/priceHistory'
 import type { DemoProduct } from '../data/products'
 import type {
   PriceHistoryPeriod,
@@ -103,6 +103,230 @@ function ProductThumbnail({ product }: { product: DemoProduct }) {
     >
       <Icon aria-hidden="true" size={18} strokeWidth={1.7} />
     </span>
+  )
+}
+
+function getProductModel(product: DemoProduct) {
+  return (
+    product.specifications?.find(
+      (specification) =>
+        specification.label.trim().toLowerCase() === 'model',
+    )?.value ?? ''
+  )
+}
+
+function productMatchesSearch(product: DemoProduct, search: string) {
+  const query = search.trim().toLowerCase()
+  if (!query) return true
+
+  return [product.name, product.brand, getProductModel(product)].some(
+    (value) => value.toLowerCase().includes(query),
+  )
+}
+
+function ProductSelector({
+  products,
+  selectedProductId,
+  onSelect,
+  onClear,
+}: {
+  products: DemoProduct[]
+  selectedProductId: string
+  onSelect: (product: DemoProduct) => void
+  onClear: () => void
+}) {
+  const selectedProduct = products.find(
+    (product) => product.id === selectedProductId,
+  )
+  const [query, setQuery] = useState<string | null>(null)
+  const [isOpen, setIsOpen] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const visibleQuery = query ?? selectedProduct?.name ?? ''
+
+  const filteredProducts = useMemo(
+    () =>
+      products.filter((product) =>
+        productMatchesSearch(product, visibleQuery),
+      ),
+    [products, visibleQuery],
+  )
+  const activeOption = filteredProducts[activeIndex] ?? filteredProducts[0]
+  const secondaryDetails = (product: DemoProduct) =>
+    [product.brand, getProductModel(product)].filter(Boolean).join(' · ')
+
+  useEffect(() => {
+    if (!isOpen) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [isOpen])
+
+  function openSelector() {
+    const selectedIndex = filteredProducts.findIndex(
+      (product) => product.id === selectedProductId,
+    )
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0)
+    setIsOpen(true)
+  }
+
+  function selectProduct(product: DemoProduct) {
+    setQuery(null)
+    setIsOpen(false)
+    setActiveIndex(0)
+    onSelect(product)
+  }
+
+  function clearSelection() {
+    setQuery('')
+    setIsOpen(false)
+    setActiveIndex(0)
+    onClear()
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      if (!isOpen) {
+        openSelector()
+      } else if (filteredProducts.length > 0) {
+        setActiveIndex((index) => (index + 1) % filteredProducts.length)
+      }
+      return
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (!isOpen) {
+        openSelector()
+      } else if (filteredProducts.length > 0) {
+        setActiveIndex(
+          (index) =>
+            (index - 1 + filteredProducts.length) % filteredProducts.length,
+        )
+      }
+      return
+    }
+
+    if (event.key === 'Enter' && isOpen) {
+      event.preventDefault()
+      if (activeOption) selectProduct(activeOption)
+      return
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setIsOpen(false)
+      setQuery(null)
+    }
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      <label
+        htmlFor="price-history-product-search"
+        className="text-[10px] font-medium text-slate-500"
+      >
+        Product
+      </label>
+      <div className="relative mt-1.5">
+        <Search
+          aria-hidden="true"
+          size={14}
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+        />
+        <input
+          id="price-history-product-search"
+          role="combobox"
+          aria-label="Product"
+          aria-autocomplete="list"
+          aria-controls="price-history-product-options"
+          aria-expanded={isOpen}
+          aria-activedescendant={
+            isOpen && activeOption
+              ? `price-history-product-option-${activeOption.id}`
+              : undefined
+          }
+          autoComplete="off"
+          value={visibleQuery}
+          placeholder="Search products by name, brand, or model..."
+          onFocus={openSelector}
+          onChange={(event) => {
+            setQuery(event.currentTarget.value)
+            setActiveIndex(0)
+            setIsOpen(true)
+          }}
+          onKeyDown={handleKeyDown}
+          className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] pl-9 pr-9 text-xs text-slate-300 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40"
+        />
+        {(visibleQuery || selectedProductId) && (
+          <button
+            type="button"
+            aria-label="Clear selected product"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={clearSelection}
+            className="absolute right-2 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition hover:bg-white/[0.06] hover:text-slate-300"
+          >
+            <X aria-hidden="true" size={13} />
+          </button>
+        )}
+      </div>
+
+      {isOpen && (
+        <div className="absolute z-30 mt-1.5 max-h-64 w-full overflow-y-auto rounded-xl border border-white/[0.08] bg-[#0d1320] p-1 shadow-2xl shadow-black/40">
+          <div
+            id="price-history-product-options"
+            role="listbox"
+            aria-label="Products"
+          >
+            {filteredProducts.length > 0 ? (
+              filteredProducts.map((product, index) => (
+                <button
+                  key={product.id}
+                  id={`price-history-product-option-${product.id}`}
+                  type="button"
+                  role="option"
+                  aria-selected={product.id === selectedProductId}
+                  tabIndex={-1}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onClick={() => selectProduct(product)}
+                  className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left transition ${
+                    index === activeIndex
+                      ? 'bg-blue-400/10'
+                      : 'hover:bg-white/[0.03]'
+                  }`}
+                >
+                  <ProductThumbnail product={product} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium text-slate-200">
+                      {product.name}
+                    </span>
+                    {secondaryDetails(product) && (
+                      <span className="mt-0.5 block truncate text-[10px] text-slate-500">
+                        {secondaryDetails(product)}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              ))
+            ) : (
+              <p className="px-3 py-3 text-xs text-slate-500">
+                {visibleQuery.trim()
+                  ? 'No products found'
+                  : 'No products available'}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -202,17 +426,16 @@ function HistoryTableRow({ row }: { row: HistoryRow }) {
 
 export function PriceHistoryPage() {
   const { products, dataSource } = useOutletContext<AppOutletContext>()
-  const [selectedProductIdState, setSelectedProductId] = useState(
-    products[0]?.id ?? '',
-  )
+  const [selectedProductId, setSelectedProductId] = useState('')
+  const [hasClearedSelection, setHasClearedSelection] = useState(false)
   const [period, setPeriod] = useState<Period>('30D')
   const [storeFilter, setStoreFilter] = useState('all')
-  const selectedProductId = products.some(
-    (item) => item.id === selectedProductIdState,
+  const effectiveSelectedProductId = hasClearedSelection
+    ? ''
+    : selectedProductId || products[0]?.id || ''
+  const product = products.find(
+    (item) => item.id === effectiveSelectedProductId,
   )
-    ? selectedProductIdState
-    : products[0]?.id ?? ''
-  const product = products.find((item) => item.id === selectedProductId)
   const [remoteData, setRemoteData] = useState<{
     productId: string
     period: Period
@@ -267,15 +490,10 @@ export function PriceHistoryPage() {
 
   const storeOffers = useMemo(
     () =>
-      dataSource === 'demo'
-        ? product
-          ? getStoreOffers(product)
-          : []
-        : remoteData &&
-            remoteData.productId === product?.id
-          ? remoteData.offers
-          : [],
-    [dataSource, product, remoteData],
+      remoteData && remoteData.productId === product?.id
+        ? remoteData.offers
+        : [],
+    [product, remoteData],
   )
   const visibleOffers = useMemo(
     () =>
@@ -312,7 +530,7 @@ export function PriceHistoryPage() {
 
       return []
     },
-    [dataSource, period, product, remoteData, visibleOffers],
+    [period, product, remoteData, visibleOffers],
   )
   const chartRows = new Map<string, ChartPoint>()
   histories.forEach((history) => {
@@ -359,8 +577,26 @@ export function PriceHistoryPage() {
   const isLoadingHistory =
     dataSource === 'loading' ||
     (dataSource === 'backend' &&
+      Boolean(product) &&
       !hasCurrentHistory &&
       currentHistoryError === null)
+  const emptyTitle =
+    dataSource === 'backend' && products.length === 0
+      ? 'No products in catalog'
+      : dataSource === 'backend' && !product
+        ? 'No product selected'
+        : 'No price history available'
+  const emptyMessage = isLoadingHistory
+    ? 'Loading the selected product’s recorded price changes.'
+    : currentHistoryError
+      ? `Could not load stored price history: ${currentHistoryError}`
+      : dataSource === 'error'
+        ? 'Catalog data is unavailable; no demo history is shown.'
+        : dataSource === 'backend' && products.length === 0
+          ? 'Products will appear here after they are added to the catalog.'
+          : !product
+            ? 'Choose a product above to view its recorded price history.'
+            : 'Price observations will appear after prices are recorded for this product.'
 
   return (
     <div className="space-y-6">
@@ -380,8 +616,8 @@ export function PriceHistoryPage() {
         <span className="rounded-xl border border-white/[0.07] bg-[#0d1320] px-3 py-2 text-[11px] text-slate-400">
           {dataSource === 'backend'
             ? 'MongoDB records'
-            : dataSource === 'demo'
-              ? 'Demo data'
+            : dataSource === 'error'
+              ? 'Data unavailable'
               : 'Loading'}
         </span>
       </section>
@@ -390,23 +626,20 @@ export function PriceHistoryPage() {
         aria-label="Select price history"
         className="grid gap-3 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 sm:grid-cols-2"
       >
-        <label className="text-[10px] font-medium text-slate-500">
-          Product
-          <select
-            value={selectedProductId}
-            onChange={(event) => {
-              setSelectedProductId(event.currentTarget.value)
-              setStoreFilter('all')
-            }}
-            className="mt-1.5 h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-300 outline-none transition focus:border-blue-400/40"
-          >
-            {products.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <ProductSelector
+          products={products}
+          selectedProductId={effectiveSelectedProductId}
+          onSelect={(nextProduct) => {
+            setSelectedProductId(nextProduct.id)
+            setHasClearedSelection(false)
+            setStoreFilter('all')
+          }}
+          onClear={() => {
+            setSelectedProductId('')
+            setHasClearedSelection(true)
+            setStoreFilter('all')
+          }}
+        />
         <label className="text-[10px] font-medium text-slate-500">
           Store
           <select
@@ -475,7 +708,7 @@ export function PriceHistoryPage() {
                 </div>
               </div>
               <span className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-1 text-[9px] font-medium uppercase tracking-wide text-slate-500">
-                {dataSource === 'backend' ? 'Stored history' : 'Demo history'}
+                Stored history
               </span>
             </div>
 
@@ -627,14 +860,10 @@ export function PriceHistoryPage() {
             <History aria-hidden="true" size={20} />
           </span>
           <h2 className="mt-3 text-sm font-semibold text-white">
-            No price history available
+            {emptyTitle}
           </h2>
           <p className="mt-1 max-w-xs text-[11px] leading-5 text-slate-500">
-            {isLoadingHistory
-              ? 'Loading the selected product’s recorded price changes.'
-              : currentHistoryError
-                ? `Could not load stored price history: ${currentHistoryError}`
-                : 'Price observations will appear after prices are recorded for this product.'}
+            {emptyMessage}
           </p>
         </section>
       )}

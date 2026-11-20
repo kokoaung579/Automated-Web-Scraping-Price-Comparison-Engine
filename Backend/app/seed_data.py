@@ -26,7 +26,7 @@ PRODUCTS = [
         "name": "Bose QuietComfort Ultra",
         "brand": "Bose",
         "category": "Audio",
-        "store": "Best Buy",
+        "store": "Amazon",
         "price": 349,
         "previousPrice": 329,
         "updated": "18 min ago",
@@ -44,7 +44,7 @@ PRODUCTS = [
         "name": "Apple AirPods Pro 2",
         "brand": "Apple",
         "category": "Audio",
-        "store": "Walmart",
+        "store": "Amazon",
         "price": 189.99,
         "previousPrice": 199,
         "updated": "28 min ago",
@@ -62,7 +62,7 @@ PRODUCTS = [
         "name": "Nintendo Switch OLED",
         "brand": "Nintendo",
         "category": "Gaming",
-        "store": "Target",
+        "store": "Amazon",
         "price": 319.99,
         "previousPrice": 349.99,
         "updated": "42 min ago",
@@ -80,7 +80,7 @@ PRODUCTS = [
         "name": "Canon EOS R50",
         "brand": "Canon",
         "category": "Cameras",
-        "store": "B&H Photo",
+        "store": "Amazon",
         "price": 679,
         "previousPrice": 699,
         "updated": "1 hr ago",
@@ -113,26 +113,8 @@ PRODUCTS = [
     },
 ]
 
-ADDITIONAL_OFFERS = {
-    "sony-wh-1000xm5": [
-        ("Best Buy", 349.99), ("Walmart", 339.99), ("B&H Photo", 329.99), ("Target", 349.99),
-    ],
-    "bose-quietcomfort-ultra": [
-        ("Amazon", 329.99), ("Walmart", 359.99), ("Target", 349.99), ("B&H Photo", 339.99),
-    ],
-    "apple-airpods-pro-2": [
-        ("Amazon", 199.99), ("Best Buy", 194.99), ("Target", 199), ("B&H Photo", 204.99),
-    ],
-    "nintendo-switch-oled": [
-        ("Amazon", 329.99), ("Walmart", 329.99), ("Best Buy", 349.99), ("GameStop", 329.99),
-    ],
-    "canon-eos-r50": [
-        ("Amazon", 699.99), ("Best Buy", 699), ("Adorama", 689.95), ("Walmart", 699.99),
-    ],
-    "samsung-galaxy-s24": [
-        ("Best Buy", 749.99), ("Walmart", 719.99), ("Samsung", 699.99), ("Target", 729.99),
-    ],
-}
+# Amazon is the only store. No cross-store demo offers are seeded.
+ADDITIONAL_OFFERS: dict[str, list[tuple[str, float]]] = {}
 
 SCRAPING_LOGS = [
     {
@@ -142,30 +124,6 @@ SCRAPING_LOGS = [
         "timestamp": "Nov 12, 2026 · 9:42 AM",
         "status": "success",
         "error": "—",
-    },
-    {
-        "id": "log-bestbuy-bose",
-        "website": "bestbuy.com",
-        "product": "Bose QuietComfort Ultra",
-        "timestamp": "Nov 12, 2026 · 9:38 AM",
-        "status": "failure",
-        "error": "Request timed out after 30 seconds.",
-    },
-    {
-        "id": "log-walmart-airpods",
-        "website": "walmart.com",
-        "product": "Apple AirPods Pro 2",
-        "timestamp": "Nov 12, 2026 · 9:31 AM",
-        "status": "success",
-        "error": "—",
-    },
-    {
-        "id": "log-target-switch",
-        "website": "target.com",
-        "product": "Nintendo Switch OLED",
-        "timestamp": "Nov 12, 2026 · 9:24 AM",
-        "status": "failure",
-        "error": "Product page returned a 404 response.",
     },
 ]
 
@@ -252,7 +210,7 @@ def build_offers():
         offers = [(product["store"], product["price"])]
         offers.extend(
             offer
-            for offer in ADDITIONAL_OFFERS[product["id"]]
+            for offer in ADDITIONAL_OFFERS.get(product["id"], [])
             if offer[0] != product["store"]
         )
         for store, price in offers:
@@ -272,7 +230,7 @@ def build_history():
         offers = [(product["store"], product["price"])]
         offers.extend(
             offer
-            for offer in ADDITIONAL_OFFERS[product["id"]]
+            for offer in ADDITIONAL_OFFERS.get(product["id"], [])
             if offer[0] != product["store"]
         )
         for period, (days, count) in PERIODS.items():
@@ -313,7 +271,57 @@ def build_history():
     return documents
 
 
+# Legacy demo stores are purged on startup so they cannot reappear in Store
+# Management. Only demo store documents are removed; products/offers/history/
+# logs are preserved and never rewritten here.
+DEMO_STORE_NAMES = frozenset(
+    {
+        "Apple Store",
+        "Best Buy",
+        "Walmart",
+        "Target",
+        "B&H Photo",
+        "GameStop",
+        "Adorama",
+        "Samsung",
+        "Dlska",
+    }
+)
+DEMO_STORE_IDS = frozenset(
+    {
+        "apple-store",
+        "dlska",
+        "best-buy",
+        "walmart",
+        "target",
+        "b-h-photo",
+        "gamestop",
+        "adorama",
+        "samsung",
+    }
+)
+DEMO_STORE_DOMAIN_PATTERN = (
+    "localhost:5173/admin/stores"
+    "|bestbuy|walmart|target|bhphoto|gamestop|adorama|samsung"
+)
+
+
+async def remove_legacy_demo_stores(database) -> None:
+    demo_names = list(DEMO_STORE_NAMES)
+    await database.stores.delete_many(
+        {
+            "$or": [
+                {"_id": {"$in": list(DEMO_STORE_IDS)}},
+                {"store_name": {"$in": demo_names}},
+                {"website_url": {"$regex": DEMO_STORE_DOMAIN_PATTERN, "$options": "i"}},
+            ]
+        }
+    )
+
+
 async def seed_database(database):
+    await remove_legacy_demo_stores(database)
+
     if await database.products.find_one({}, {"_id": 1}) is None:
         await database.products.insert_many([
             {"_id": product["id"], **{key: value for key, value in product.items() if key != "id"}}

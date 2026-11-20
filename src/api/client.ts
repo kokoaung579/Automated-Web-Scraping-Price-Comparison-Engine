@@ -10,6 +10,60 @@ import type {
 import type { PriceHistoryPeriod, PriceHistoryPoint } from '../data/priceHistory'
 import type { StoreOffer } from '../data/storeOffers'
 import type { AuthUser, BrowserAccountImport, UserStatus } from '../types/auth'
+import type { AuditLogsQuery, AuditLogsResponse } from '../data/adminAuditLogs'
+import type { AdminCategory } from '../data/adminCategories'
+import type { AdminStore } from '../data/adminStores'
+import type { DashboardResponse } from '../types/dashboard'
+
+export type HealthResponse = {
+  status: string
+  database: 'connected' | 'disconnected'
+}
+
+export type AdminNotificationStatus = 'all' | 'unread' | 'read'
+
+export type AdminNotification = {
+  id: string
+  category: string
+  type: string
+  title: string
+  description: string
+  isRead: boolean
+  createdAt: string
+  metadata?: Record<string, unknown>
+}
+
+export type AdminNotificationsResponse = {
+  items: AdminNotification[]
+  total: number
+  unread: number
+  page: number
+  page_size: number
+}
+
+export type AdminNotificationSettings = {
+  scraping: boolean
+  product_import: boolean
+  product_export: boolean
+  product_crud: boolean
+  user_management: boolean
+  system_errors: boolean
+  connections: boolean
+}
+
+export type AdminNotificationsQuery = {
+  status?: AdminNotificationStatus
+  category?: string
+  search?: string
+  page?: number
+  pageSize?: number
+}
+
+export type AdminConnectionEpisodePayload = {
+  episodeId: string
+  lostAt: string
+  restoredAt: string
+}
 
 type ProductRecord = Omit<DemoProduct, 'icon'>
 
@@ -67,6 +121,62 @@ export type AdminCatalogProduct = Product & {
   sku: string | null
 }
 
+export type StoreWithProductCount = AdminStore & {
+  product_count: number
+}
+
+export type StoreMutationResponse = {
+  message: string
+  store: AdminStore
+}
+
+export type ProductImportAuditPayload = {
+  operationId: string
+  fileName?: string | null
+  totalRows: number
+  importedCount: number
+  failedCount: number
+  failed?: boolean
+  reason?: string
+}
+
+export type ProductExportAuditPayload = {
+  operationId: string
+  fileName?: string | null
+  exportedCount: number
+  filters?: Record<string, string>
+  failed?: boolean
+  reason?: string
+  scope?: 'filtered' | 'selected'
+  selectedCount?: number
+}
+
+export type ProductAuditResponse = {
+  recorded: boolean
+  id: string
+}
+
+export type BulkDeleteRequestPayload = {
+  operationId: string
+  productIds: string[]
+  confirm: boolean
+}
+
+export type BulkDeleteFailure = {
+  product_id: string
+  reason: string
+}
+
+export type BulkDeleteResponse = {
+  requested_count: number
+  deleted_count: number
+  failed_count: number
+  status: 'success' | 'warning' | 'failed'
+  deleted_ids: string[]
+  failed: BulkDeleteFailure[]
+  audit_recorded: boolean
+}
+
 export type ScrapingLog = {
   id: string
   website: string
@@ -102,15 +212,32 @@ export type Channel3Product = {
   offers: Channel3Offer[]
 }
 
+/** Raised only when the underlying fetch call itself fails (network/connection loss). */
+export class ApiConnectionError extends Error {
+  constructor(message = 'Unable to reach the backend.') {
+    super(message)
+    this.name = 'ApiConnectionError'
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    ...init,
-    credentials: init?.credentials ?? 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...init?.headers,
-    },
-  })
+  let response: Response
+  try {
+    response = await fetch(`/api${path}`, {
+      ...init,
+      credentials: init?.credentials ?? 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...init?.headers,
+      },
+    })
+  } catch (error) {
+    // Normal HTTP error responses are handled below; only a failed fetch is a
+    // real connection loss.
+    throw new ApiConnectionError(
+      error instanceof Error ? error.message : 'Unable to reach the backend.',
+    )
+  }
 
   if (!response.ok) {
     const body = await response.json().catch(() => null) as
@@ -200,7 +327,7 @@ export function toChannel3CatalogProduct(
 }
 
 export const api = {
-  health: () => request<{ status: string }>('/health'),
+  health: () => request<HealthResponse>('/health'),
 
   registerAccount: (email: string, username: string, password: string) =>
     request<{ message: string }>('/auth/register', {
@@ -261,7 +388,150 @@ export const api = {
 
   adminUsers: () => request<AuthUser[]>('/admin/users'),
 
-  auditLogs: () => request<any[]>('/admin/audit-logs'),
+  dashboard: () => request<DashboardResponse>('/admin/dashboard'),
+
+  auditLogs: (query: AuditLogsQuery = {}) => {
+    const params = new URLSearchParams()
+    const values: Record<string, string | number | undefined> = {
+      search: query.search?.trim() || undefined,
+      module: query.module,
+      action: query.action,
+      status: query.status,
+      start_date: query.startDate,
+      end_date: query.endDate,
+      page: query.page,
+      limit: query.limit,
+    }
+    Object.entries(values).forEach(([key, value]) => {
+      if (value !== undefined) params.set(key, String(value))
+    })
+    const suffix = params.toString()
+    return request<AuditLogsResponse>(
+      `/admin/audit-logs${suffix ? `?${suffix}` : ''}`,
+    )
+  },
+
+  // Admin notification center and notification settings
+  adminNotifications: (query: AdminNotificationsQuery = {}) => {
+    const params = new URLSearchParams()
+    if (query.status) params.set('status', query.status)
+    if (query.category) params.set('category', query.category)
+    if (query.search?.trim()) params.set('search', query.search.trim())
+    if (query.page !== undefined) params.set('page', String(query.page))
+    if (query.pageSize !== undefined) {
+      params.set('page_size', String(query.pageSize))
+    }
+    const suffix = params.toString()
+    return request<AdminNotificationsResponse>(
+      `/admin/notifications${suffix ? `?${suffix}` : ''}`,
+    )
+  },
+
+  adminNotificationUnreadCount: () =>
+    request<{ count: number }>('/admin/notifications/unread-count'),
+
+  markAdminNotificationRead: (notificationId: string) =>
+    request<void>(
+      `/admin/notifications/${encodeURIComponent(notificationId)}/read`,
+      { method: 'PUT' },
+    ),
+
+  markAllAdminNotificationsRead: () =>
+    request<{ updated: number }>('/admin/notifications/read-all', {
+      method: 'POST',
+    }),
+
+  adminNotificationSettings: () =>
+    request<AdminNotificationSettings>('/admin/notifications/settings'),
+
+  updateAdminNotificationSettings: (settings: AdminNotificationSettings) =>
+    request<AdminNotificationSettings>('/admin/notifications/settings', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
+
+  restoreAdminNotificationDefaults: () =>
+    request<AdminNotificationSettings>(
+      '/admin/notifications/settings/restore-defaults',
+      { method: 'POST' },
+    ),
+
+  recordAdminConnectionEpisode: (episode: AdminConnectionEpisodePayload) =>
+    request<{ recorded: number }>('/admin/notifications/connection-episode', {
+      method: 'POST',
+      body: JSON.stringify(episode),
+    }),
+
+  recordProductImportAudit: (event: ProductImportAuditPayload) =>
+    request<ProductAuditResponse>('/admin/product-audit/import', {
+      method: 'POST',
+      body: JSON.stringify({
+        operation_id: event.operationId,
+        file_name: event.fileName ?? null,
+        total_rows: event.totalRows,
+        imported_count: event.importedCount,
+        failed_count: event.failedCount,
+        failed: event.failed ?? false,
+        reason: event.reason ?? null,
+      }),
+    }),
+
+  recordProductExportAudit: (event: ProductExportAuditPayload) =>
+    request<ProductAuditResponse>('/admin/product-audit/export', {
+      method: 'POST',
+      body: JSON.stringify({
+        operation_id: event.operationId,
+        file_name: event.fileName ?? null,
+        exported_count: event.exportedCount,
+        filters: event.filters ?? {},
+        failed: event.failed ?? false,
+        reason: event.reason ?? null,
+        scope: event.scope ?? 'filtered',
+        selected_count: event.selectedCount ?? null,
+      }),
+    }),
+
+  adminStores: () => request<StoreWithProductCount[]>('/admin/stores'),
+
+  createAdminStore: (store: AdminStore) =>
+    request<StoreMutationResponse>('/admin/stores', {
+      method: 'POST',
+      body: JSON.stringify(store),
+    }),
+
+  updateAdminStore: (storeId: string, store: AdminStore) =>
+    request<StoreMutationResponse>(
+      `/admin/stores/${encodeURIComponent(storeId)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(store),
+      },
+    ),
+
+  deleteAdminStore: (storeId: string) =>
+    request<{ message: string; store_id: string }>(
+      `/admin/stores/${encodeURIComponent(storeId)}`,
+      { method: 'DELETE' },
+    ),
+
+  adminCategories: () => request<AdminCategory[]>('/admin/categories'),
+
+  createAdminCategory: (category: AdminCategory) =>
+    request<AdminCategory>('/admin/categories', {
+      method: 'POST',
+      body: JSON.stringify(category),
+    }),
+
+  updateAdminCategory: (name: string, category: AdminCategory) =>
+    request<AdminCategory>(`/admin/categories/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify(category),
+    }),
+
+  deleteAdminCategory: (name: string) =>
+    request<AdminCategory>(`/admin/categories/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    }),
 
   updateAdminUserStatus: (email: string, status: UserStatus) =>
     request<AuthUser>(
@@ -324,6 +594,16 @@ export const api = {
   deleteAdminProduct: (productId: string) =>
     request<void>(`/admin/products/${encodeURIComponent(productId)}`, {
       method: 'DELETE',
+    }),
+
+  bulkDeleteProducts: (payload: BulkDeleteRequestPayload) =>
+    request<BulkDeleteResponse>('/admin/products/bulk-delete', {
+      method: 'POST',
+      body: JSON.stringify({
+        operation_id: payload.operationId,
+        product_ids: payload.productIds,
+        confirm: payload.confirm,
+      }),
     }),
 
   // Existing APIs

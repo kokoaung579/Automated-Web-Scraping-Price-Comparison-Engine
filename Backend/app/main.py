@@ -9,17 +9,31 @@ from app.routers.apify import router as apify_router
 from app.routers.auth import (
     ensure_bootstrap_admin,
     initialize_auth_database,
+    require_admin,
     router as auth_router,
 )
 from app.routers.product_matches import router as product_matches_router
 from app.routers.stores import router as stores_router
-from app.routers.audit import router as audit_router
+from app.routers.audit import (
+    initialize_audit_database,
+    request_ip,
+    router as audit_router,
+)
+from app.routers.dashboard import router as dashboard_router
+from app.routers.categories import router as categories_router
+from app.routers.product_bulk import router as product_bulk_router
+from app.routers.admin_notifications import router as admin_notifications_router
 from app.services.channel3_services import (
     find_matching_channel3_product,
     search_channel3_products,
 )
+from app.services.notifications import (
+    create_notification as emit_notification,
+    initialize_notification_database,
+    user_notification_query,
+)
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo.errors import DuplicateKeyError
 
@@ -69,6 +83,8 @@ async def lifespan(application: FastAPI):
             name="unique_product_match_listing",
         )
         await initialize_auth_database(database)
+        await initialize_audit_database(database)
+        await initialize_notification_database(database)
         await ensure_bootstrap_admin(database)
         await migrate_legacy_admin_products(database)
         await sync_existing_admin_product_prices(database)
@@ -100,12 +116,50 @@ app.include_router(channel3_router)
 app.include_router(apify_router)
 app.include_router(auth_router)
 app.include_router(stores_router)
+app.include_router(categories_router)
 app.include_router(audit_router)
 app.include_router(product_matches_router)
+app.include_router(product_bulk_router)
+app.include_router(admin_notifications_router)
+app.include_router(dashboard_router)
 
 
 def get_database():
     return app.state.database
+
+
+async def audit_event(
+    admin: dict | None,
+    request: Request | None,
+    *,
+    action: str,
+    module: str,
+    description: str,
+    status: str = "SUCCESS",
+    target_record_id: str | None = None,
+    details: list[str] | None = None,
+) -> None:
+    """Write one audit event for an operation performed by a real session user."""
+    if not isinstance(admin, dict) or not admin.get("_id") or not admin.get("email"):
+        return
+    try:
+        from app.routers.audit import record_audit_log
+
+        await record_audit_log(
+            get_database(),
+            user_id=str(admin["_id"]),
+            user_email=str(admin["email"]),
+            action=action,
+            module=module,
+            description=description,
+            ip_address=request_ip(request),
+            status=status,
+            target_record_id=target_record_id,
+            actor_role=str(admin.get("role") or "Admin"),
+            details=details,
+        )
+    except Exception as exc:
+        logger.warning("Unable to write audit event for %s: %s", action, exc)
 
 
 async def migrate_legacy_admin_products(database) -> None:
@@ -204,29 +258,30 @@ async def list_admin_products():
 async def create_admin_product(
     product: AdminProduct,
     request: Request,
+    admin: dict = Depends(require_admin),
 ):
     result = await ingest_product_listing(get_database(), product)
-    try:
-        from app.routers.audit import record_audit_log
-
-        await record_audit_log(
-            get_database(),
-            user_id="admin",
-            user_email="admin",
-            action=(
-                "CREATE"
-                if result["status"] == "created"
-                else "UPDATE"
-            ),
-            module="PRODUCT_MANAGEMENT",
-            description=(
-                f"Product {product.product_name} was {result['status']}."
-            ),
-            ip_address=request.client.host if request.client else "",
-            status="SUCCESS",
-        )
-    except Exception:
-        pass
+    await audit_event(
+        admin,
+        request,
+        action="CREATE" if result["status"] == "created" else "UPDATE",
+        module="PRODUCT_MANAGEMENT",
+        description=f"Product {product.product_name} was {result['status']}.",
+        target_record_id=product.product_id,
+        status="SUCCESS",
+    )
+    await emit_notification(
+        get_database(),
+        category="product_crud",
+        type="product_crud.created",
+        title="Product created",
+        description=f"Product {product.product_name} was created.",
+        metadata={
+            "productId": product.product_id,
+            "productName": product.product_name,
+        },
+        dedupe_key=f"product-crud:created:{product.product_id}",
+    )
     return result
 
 
@@ -237,8 +292,19 @@ async def create_admin_product(
 async def update_admin_product(
     product_id: str,
     product: AdminProduct,
+    request: Request,
+    admin: dict = Depends(require_admin),
 ):
     if product.product_id != product_id:
+        await audit_event(
+            admin,
+            request,
+            action="UPDATE",
+            module="PRODUCT_MANAGEMENT",
+            description="Failed to update product: id does not match the path.",
+            target_record_id=product_id,
+            status="FAILED",
+        )
         raise HTTPException(
             status_code=400,
             detail="Product id does not match path",
@@ -247,6 +313,15 @@ async def update_admin_product(
     database = get_database()
     existing = await database.products.find_one({"_id": product_id})
     if existing is None:
+        await audit_event(
+            admin,
+            request,
+            action="UPDATE",
+            module="PRODUCT_MANAGEMENT",
+            description="Failed to update product: product not found.",
+            target_record_id=product_id,
+            status="FAILED",
+        )
         raise HTTPException(
             status_code=404,
             detail="Product not found",
@@ -276,12 +351,41 @@ async def update_admin_product(
             detail="Another catalog product already has this identity.",
         ) from exc
     if result.matched_count == 0:
+        await audit_event(
+            admin,
+            request,
+            action="UPDATE",
+            module="PRODUCT_MANAGEMENT",
+            description="Failed to update product: product not found.",
+            target_record_id=product_id,
+            status="FAILED",
+        )
         raise HTTPException(
             status_code=404,
             detail="Product not found",
         )
 
     await upsert_admin_product_offer(database, product)
+    await audit_event(
+        admin,
+        request,
+        action="UPDATE",
+        module="PRODUCT_MANAGEMENT",
+        description=f"Updated product {product.product_name}.",
+        target_record_id=product_id,
+    )
+    await emit_notification(
+        database,
+        category="product_crud",
+        type="product_crud.updated",
+        title="Product updated",
+        description=f"Product {product.product_name} was updated.",
+        metadata={
+            "productId": product.product_id,
+            "productName": product.product_name,
+        },
+        dedupe_key=f"product-crud:updated:{product.product_id}",
+    )
     return product
 
 
@@ -289,12 +393,31 @@ async def update_admin_product(
     "/api/admin/products/{product_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_admin_product(product_id: str):
+async def delete_admin_product(
+    product_id: str,
+    request: Request,
+    admin: dict = Depends(require_admin),
+):
+    existing_product = await get_database().products.find_one(
+        {"_id": product_id}
+    )
+    product_name = (
+        (existing_product or {}).get("name") or product_id
+    )
     result = await get_database().products.delete_one(
         {"_id": product_id}
     )
 
     if result.deleted_count == 0:
+        await audit_event(
+            admin,
+            request,
+            action="DELETE",
+            module="PRODUCT_MANAGEMENT",
+            description="Failed to delete product: product not found.",
+            target_record_id=product_id,
+            status="FAILED",
+        )
         raise HTTPException(
             status_code=404,
             detail="Admin product not found",
@@ -304,6 +427,26 @@ async def delete_admin_product(product_id: str):
     await database.offers.delete_many({"productId": product_id})
     await database.watchlist.delete_one({"_id": product_id})
     await database.alerts.delete_many({"productId": product_id})
+    await audit_event(
+        admin,
+        request,
+        action="DELETE",
+        module="PRODUCT_MANAGEMENT",
+        description=f"Deleted product {product_id}.",
+        target_record_id=product_id,
+    )
+    await emit_notification(
+        database,
+        category="product_crud",
+        type="product_crud.deleted",
+        title="Product deleted",
+        description=f"Product {product_name} was deleted.",
+        metadata={
+            "productId": product_id,
+            "productName": str(product_name),
+        },
+        dedupe_key=f"product-crud:deleted:{product_id}",
+    )
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -360,8 +503,48 @@ async def root():
 
 
 @app.get("/api/health")
-async def health():
-    return {"status": "ok"}
+async def health(request: Request):
+    """Check MongoDB with a real ping and notify on connection transitions."""
+    database = request.app.state.database
+    connection_up = True
+    try:
+        command = getattr(database, "command", None)
+        if command is None:
+            connection_up = bool(
+                getattr(request.app.state, "mongo_connection_up", True)
+            )
+        else:
+            await command("ping")
+    except Exception as exc:
+        connection_up = False
+        logger.warning("MongoDB health ping failed: %s", exc)
+
+    previous_state = getattr(request.app.state, "mongo_connection_up", None)
+    if previous_state is not None and previous_state != connection_up:
+        checked_at = datetime.now(timezone.utc).isoformat()
+        if connection_up:
+            notification_type = "connection.restored"
+            title = "Connection restored"
+            description = "The MongoDB connection was restored."
+        else:
+            notification_type = "connection.lost"
+            title = "Connection lost"
+            description = "The MongoDB connection is currently unavailable."
+        await emit_notification(
+            database,
+            category="connection",
+            type=notification_type,
+            title=title,
+            description=description,
+            metadata={"checkedAt": checked_at},
+            dedupe_key=f"connection:{notification_type}:{checked_at}",
+        )
+    request.app.state.mongo_connection_up = connection_up
+
+    return {
+        "status": "ok",
+        "database": "connected" if connection_up else "disconnected",
+    }
 
 
 @app.get("/api/products", response_model=list[Product])
@@ -755,9 +938,9 @@ async def delete_watchlist_entry(product_id: str):
     response_model_exclude_none=True,
 )
 async def list_notifications():
-    documents = await get_database().notifications.find().to_list(
-        length=None
-    )
+    documents = await get_database().notifications.find(
+        user_notification_query()
+    ).to_list(length=None)
 
     return [
         serialize_document(document)
@@ -794,7 +977,7 @@ async def create_notification(notification: DemoNotification):
 )
 async def mark_notification_read(notification_id: str):
     result = await get_database().notifications.update_one(
-        {"_id": notification_id},
+        {**user_notification_query(), "_id": notification_id},
         {"$set": {"isRead": True}},
     )
 
@@ -813,7 +996,7 @@ async def mark_notification_read(notification_id: str):
 )
 async def mark_all_notifications_read():
     await get_database().notifications.update_many(
-        {},
+        user_notification_query(),
         {"$set": {"isRead": True}},
     )
 
@@ -826,7 +1009,7 @@ async def mark_all_notifications_read():
 )
 async def delete_notification(notification_id: str):
     result = await get_database().notifications.delete_one(
-        {"_id": notification_id}
+        {**user_notification_query(), "_id": notification_id}
     )
 
     if result.deleted_count == 0:
@@ -843,7 +1026,7 @@ async def delete_notification(notification_id: str):
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def clear_notifications():
-    await get_database().notifications.delete_many({})
+    await get_database().notifications.delete_many(user_notification_query())
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

@@ -397,15 +397,10 @@ export function PriceComparisonPage() {
 
   const allOffers = useMemo(
     () =>
-      dataSource === 'demo'
-        ? selectedProduct
-          ? getStoreOffers(selectedProduct)
-          : []
-        : remoteOffers &&
-            remoteOffers.productId === selectedProduct?.id
-          ? remoteOffers.offers
-          : [],
-    [dataSource, remoteOffers, selectedProduct],
+      remoteOffers && remoteOffers.productId === selectedProduct?.id
+        ? remoteOffers.offers
+        : [],
+    [remoteOffers, selectedProduct],
   )
   const hasCurrentOffers = Boolean(
     remoteOffers &&

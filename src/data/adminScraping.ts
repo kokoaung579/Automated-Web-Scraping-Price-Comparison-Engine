@@ -1,4 +1,3 @@
-import { loadAdminStores } from './adminStores'
 import type { AdminStore } from './adminStores'
 
 export type ScrapingJobStatus =
@@ -190,7 +189,9 @@ function getStoreId(name: string): string {
     .replace(/^-|-$/g, '')
 }
 
-export function getSeedScrapingJobs(): ScrapingJob[] {
+export function getSeedScrapingJobs(
+  stores: AdminStore[] = [],
+): ScrapingJob[] {
   const seedStatuses: ScrapingJobStatus[] = [
     'running',
     'completed',
@@ -199,7 +200,6 @@ export function getSeedScrapingJobs(): ScrapingJob[] {
     'queued',
     'completed',
   ]
-  const stores = loadAdminStores()
 
   return stores.map((store, index) => {
     const status = seedStatuses[index % seedStatuses.length]
@@ -230,9 +230,11 @@ export function getSeedScrapingJobs(): ScrapingJob[] {
   })
 }
 
-export function loadScrapingJobs(): ScrapingJob[] {
+export function loadScrapingJobs(
+  stores: AdminStore[] = [],
+): ScrapingJob[] {
   const saved = window.localStorage.getItem(scrapingStorageKey)
-  if (saved === null) return getSeedScrapingJobs()
+  if (saved === null) return getSeedScrapingJobs(stores)
 
   let parsed: unknown
   try {
