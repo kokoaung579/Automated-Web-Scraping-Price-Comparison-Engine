@@ -6,7 +6,6 @@ import {
   CircleGauge,
   ClipboardList,
   LayoutDashboard,
-  ListChecks,
   Settings2,
   ShieldCheck,
   Store,
@@ -39,12 +38,6 @@ const adminNavigation: {
     label: 'Product Management',
     to: '/admin/products',
     icon: Boxes,
-    group: 'workspace',
-  },
-  {
-    label: 'Product Matching Review',
-    to: '/admin/product-matches',
-    icon: ListChecks,
     group: 'workspace',
   },
   {

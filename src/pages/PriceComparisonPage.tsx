@@ -365,22 +365,28 @@ export function PriceComparisonPage() {
     const productId = selectedProduct?.id
     if (!productId || dataSource !== 'backend') return
 
-    api.offers(productId)
+    api.comparisons(productId)
       .then((offers) => {
         if (active) setRemoteOffers({ productId, offers })
       })
-      .catch((error: unknown) => {
-        console.error('Unable to load product offers from the backend', error)
-        if (active) {
-          setOfferLoadError(
-            {
+      .catch(async () => {
+        // Fall back to the per-product offers payload when the grouped
+        // comparisons endpoint is unavailable; single-store products are
+        // returned by both endpoints.
+        try {
+          const offers = await api.offers(productId)
+          if (active) setRemoteOffers({ productId, offers })
+        } catch (fallbackError: unknown) {
+          console.error('Unable to load product offers from the backend', fallbackError)
+          if (active) {
+            setOfferLoadError({
               productId,
               message:
-                error instanceof Error
-                  ? error.message
+                fallbackError instanceof Error
+                  ? fallbackError.message
                   : 'Unable to load store offers.',
-            },
-          )
+            })
+          }
         }
       })
 

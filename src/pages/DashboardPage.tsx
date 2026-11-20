@@ -112,7 +112,7 @@ export function DashboardPage() {
             />
           </section>
 
-          <section className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,1fr)]">
+          <section className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,1fr)]">
             <PriceTrendChart
               products={products}
               loading={dataSource === 'loading'}
