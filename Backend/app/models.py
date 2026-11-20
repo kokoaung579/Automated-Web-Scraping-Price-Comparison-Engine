@@ -26,6 +26,12 @@ class Product(APIModel):
     tone: str
 
 
+class PublicProduct(Product):
+    """Read-only catalog response with the Admin product's real image URL."""
+
+    image_url: str | None = None
+
+
 class AdminProduct(APIModel):
     product_id: str = Field(min_length=1)
     product_name: str = Field(min_length=1)
@@ -149,16 +155,22 @@ def catalog_document_to_public_product(document: dict) -> dict:
         return {
             "id": str(document.get("_id", product.product_id)),
             **public_fields,
+            "image_url": product.image_url,
         }
 
-    return Product.model_validate({
+    public_product = Product.model_validate({
         **{
             key: value
             for key, value in document.items()
-            if key not in {"_id", "adminProduct"}
+            if key not in {"_id", "adminProduct", "image_url"}
         },
         "id": str(document.get("_id", document.get("id", ""))),
     }).model_dump()
+    image_url = document.get("image_url")
+    public_product["image_url"] = (
+        image_url if isinstance(image_url, str) else None
+    )
+    return public_product
 
 
 class StoreOffer(APIModel):
