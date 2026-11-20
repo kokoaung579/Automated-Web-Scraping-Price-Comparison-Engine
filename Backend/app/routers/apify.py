@@ -6,8 +6,8 @@ from httpx import HTTPStatusError, RequestError
 from pymongo.errors import DuplicateKeyError
 
 from fastapi import APIRouter, HTTPException, Request
-from app.models import AdminProduct, admin_product_to_catalog_document
-from app.services.product_catalog import upsert_admin_product_offer
+from app.models import AdminProduct
+from app.services.product_catalog import ingest_product_listing
 from app.services.apify_services import (
     start_apify_actor,
     get_apify_run,
@@ -140,9 +140,28 @@ async def import_amazon_products(run_id: str, request: Request):
         db = request.app.state.database
 
         created = 0
+        matched = 0
+        pending_review = 0
+        rejected = 0
         skipped = 0
         failed = 0
         errors = []
+
+        now = datetime.now(timezone.utc).isoformat()
+        await db.stores.update_one(
+            {"_id": "amazon"},
+            {
+                "$setOnInsert": {
+                    "store_name": "Amazon",
+                    "website_url": "https://www.amazon.com",
+                    "logo_url": None,
+                    "status": "Active",
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            },
+            upsert=True,
+        )
 
         # 3. Convert and save products
         for item in items:
@@ -207,39 +226,36 @@ async def import_amazon_products(run_id: str, request: Request):
                     product_id=str(asin),
                     product_name=str(title).strip(),
                     category=item.get("category") or "Uncategorized",
-                    brand=item.get("brand"),
+                    brand=item.get("brand") or None,
+                    model=(
+                        item.get("model")
+                        or item.get("modelNumber")
+                        or item.get("model_number")
+                    ),
                     description=description,
                     image_url=item.get("thumbnailImage"),
                     product_url=item.get("url"),
                     store_id="amazon",
                     price=price,
                     currency=currency,
+                    shipping_fee=item.get("shippingFee"),
+                    sku=item.get("sku") or str(asin),
                     availability=availability,
                     source_type="scraped",
                     created_at=now,
                     updated_at=now,
                 )
 
-                # 4. Do not overwrite existing manual or scraped products
-                existing = await db.products.find_one(
-                    {"_id": product.product_id},
-                    {"_id": 1},
-                )
-
-                if existing:
-                    skipped += 1
-                    continue
-
-                # 5. Insert into MongoDB
-                await db.products.insert_one(
-                    {
-                        "_id": product.product_id,
-                        **admin_product_to_catalog_document(product),
-                    }
-                )
-                await upsert_admin_product_offer(db, product)
-
-                created += 1
+                # Manual and scraped listings share one matching path.
+                result = await ingest_product_listing(db, product)
+                if result["status"] == "created":
+                    created += 1
+                elif result["status"] == "matched":
+                    matched += 1
+                elif result["status"] == "review":
+                    pending_review += 1
+                elif result["status"] == "rejected":
+                    rejected += 1
 
             except DuplicateKeyError:
                 skipped += 1
@@ -250,32 +266,15 @@ async def import_amazon_products(run_id: str, request: Request):
                 if len(errors) < 10:
                     errors.append(str(exc))
 
-        # 6. Automatically register Amazon Store
-        if created > 0:
-            now = datetime.now(timezone.utc).isoformat()
-
-            await db.stores.update_one(
-                {"_id": "amazon"},
-                {
-                    "$setOnInsert": {
-                        "store_name": "Amazon",
-                        "website_url": "https://www.amazon.com",
-                        "logo_url": None,
-                        "status": "Active",
-                        "created_at": now,
-                        "updated_at": now,
-                    }
-                },
-                upsert=True,
-            )
-
-
         return {
             "message": "Amazon product import completed.",
             "run_id": run_id,
             "dataset_id": dataset_id,
             "total_items": len(items),
             "created": created,
+            "matched": matched,
+            "pending_review": pending_review,
+            "rejected": rejected,
             "skipped": skipped,
             "failed": failed,
             "errors": errors,

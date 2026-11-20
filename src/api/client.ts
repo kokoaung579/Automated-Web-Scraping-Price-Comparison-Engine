@@ -13,6 +13,60 @@ import type { AuthUser, BrowserAccountImport, UserStatus } from '../types/auth'
 
 type ProductRecord = Omit<DemoProduct, 'icon'>
 
+export type AdminProductIngestionResult = {
+  status: 'created' | 'matched' | 'review' | 'rejected'
+  product: Product
+  shared_product_id: string | null
+  review_id: string | null
+}
+
+export type ProductMatchCandidate = {
+  product_id: string
+  product_name: string
+  brand: string | null
+  model: string | null
+  sku: string | null
+  category: string | null
+  image_url: string | null
+  product_url: string | null
+  similarity: number
+  reasons: string[]
+  store_offers: {
+    store: string
+    store_product_name: string | null
+    product_url: string | null
+  }[]
+}
+
+export type ProductMatchReview = {
+  id: string
+  status: 'pending' | 'processing' | 'rejected' | 'confirmed' | 'separate'
+  classification: 'potential' | 'insufficient_information'
+  incoming: Product & {
+    sku: string | null
+    shipping_fee: number | null
+  }
+  incoming_store_name: string | null
+  candidates: ProductMatchCandidate[]
+  created_at: string
+  updated_at: string
+  resolved_product_id: string | null
+  decision_history: {
+    action: 'confirm' | 'reject' | 'manual_match' | 'create_separate'
+    productId: string | null
+    adminId: string
+    adminEmail: string
+    createdAt: string
+    previousStatus?: string
+    reason?: string | null
+  }[]
+  audit_warning?: string | null
+}
+
+export type AdminCatalogProduct = Product & {
+  sku: string | null
+}
+
 export type ScrapingLog = {
   id: string
   website: string
@@ -234,13 +288,32 @@ export const api = {
     ),
 
   // Admin Products CRUD
-  adminProducts: () => request<Product[]>('/admin/products'),
+  adminProducts: () => request<AdminCatalogProduct[]>('/admin/products'),
 
   createAdminProduct: (product: Product) =>
-    request<Product>('/admin/products', {
+    request<AdminProductIngestionResult>('/admin/products', {
       method: 'POST',
       body: JSON.stringify(product),
     }),
+
+  productMatchReviews: (status = 'pending') =>
+    request<ProductMatchReview[]>(
+      `/admin/product-matches?status=${encodeURIComponent(status)}`,
+    ),
+
+  decideProductMatch: (
+    reviewId: string,
+    action: 'confirm' | 'reject' | 'manual_match' | 'create_separate',
+    productId?: string,
+    reason?: string,
+  ) =>
+    request<ProductMatchReview>(
+      `/admin/product-matches/${encodeURIComponent(reviewId)}/decision`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ action, product_id: productId, reason }),
+      },
+    ),
 
   updateAdminProduct: (productId: string, product: Product) =>
     request<Product>(`/admin/products/${encodeURIComponent(productId)}`, {

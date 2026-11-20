@@ -26,6 +26,7 @@ import { ResetPasswordPage } from '../pages/ResetPasswordPage'
 import { AdminOverviewPage } from '../pages/admin/AdminOverviewPage'
 import { AdminCategoriesPage } from '../pages/admin/AdminCategoriesPage'
 import { AdminProductsPage } from '../pages/admin/AdminProductsPage'
+import { AdminProductMatchesPage } from '../pages/admin/AdminProductMatchesPage'
 import { AdminStoresPage } from '../pages/admin/AdminStoresPage'
 import { AdminScrapingPage } from '../pages/admin/AdminScrapingPage'
 import { AdminAuditLogsPage } from '../pages/admin/AdminAuditLogsPage'
@@ -258,6 +259,10 @@ export function AppRoutes() {
         <Route
           path="products"
           element={<AdminProductsPage />}
+        />
+        <Route
+          path="product-matches"
+          element={<AdminProductMatchesPage />}
         />
         <Route
           path="categories"

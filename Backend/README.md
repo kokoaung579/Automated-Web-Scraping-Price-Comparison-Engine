@@ -57,25 +57,53 @@ available at `http://127.0.0.1:8000/docs`.
 
 ## Import Channel3 products
 
-Import up to 150 products from a retailer website into MongoDB and upsert
-their offers by Channel3 product ID:
+Import up to 150 products from a retailer website into MongoDB. Each listing
+uses the same matching and offer-upsert workflow as manual catalog entry and
+Amazon scraping:
 
 ```powershell
 cd Backend
 .\venv\Scripts\python.exe -m app.import_channel3_products amazon.com
 ```
 
-The importer resolves the website through Channel3, follows its browse
-pagination cap, and stores products under `channel3-<product-id>`. Products
-without USD offers are skipped because the catalog requires a comparable price.
-Re-run the command to update existing imported products and offers.
+The importer resolves the website through Channel3 and follows its browse
+pagination cap. Exact identities are associated with an existing shared
+product; uncertain or incomplete identities are placed in the administrator
+review queue. A listing without a valid price is skipped. Re-run the command
+to update existing store offers.
 
-Admin-managed products and scraped Amazon products use the same MongoDB
-`products` collection as the public catalog, so they appear in the user-facing
-product list. Admin price changes also update the matching store offer and add
-the current price to price history. Existing records from the former
-`admin_products` collection are copied into `products` at startup if missing;
-the migration does not overwrite existing catalog records after its first run.
+## Shared catalog and matching
+
+Manual admin entry, Amazon scraping, and the Channel3 importer pass product
+identity through `app.services.product_catalog`. Text is normalized for
+matching, while the submitted names and other listing attributes are retained
+in the shared product or store offer. A complete normalized identity
+(product name, brand, model, and category) can match automatically. Similar,
+conflicting, or incomplete identities are not guessed: they are held for an
+administrator decision.
+
+Shared products are stored in the MongoDB `products` collection. Store-specific
+listings are upserted into `offers` using a normalized store ID, so a later
+listing from that store updates its offer instead of adding another one.
+Offers preserve listing name, category, brand, model, SKU, price, currency,
+availability, shipping fee, URL, source, and update time. Startup adds a
+partial unique index for complete product identity keys and a unique index for
+review listing keys. Review decisions and administrator identity are retained
+in each review's decision history.
+
+Administrators can review pending matches in the **Product Matches** page or
+through `GET /api/admin/product-matches?status=pending`. The
+`POST /api/admin/product-matches/{review_id}/decision` endpoint accepts
+`{"action":"confirm","product_id":"..."}`, `{"action":"reject"}`, or
+`{"action":"create_separate"}`. These routes require an administrator session.
+Confirmation associates the incoming store offer with the selected shared
+product; rejecting leaves the listing pending an explicit create-separate
+decision.
+
+Price comparison reads every offer associated with a shared product. It
+excludes out-of-stock and invalid-price offers from best-price calculations,
+includes shipping when listed, and compares one currency at a time; no
+currency conversion is configured.
 
 ## How workspace pages relate
 
@@ -109,6 +137,8 @@ the migration does not overwrite existing catalog records after its first run.
 - `GET /api/products/{product_id}/channel3`
 - `GET /api/channel3/search?q={query}&limit={limit}`
 - `GET /api/products/{product_id}/offers`
+- `GET /api/admin/product-matches?status=pending|rejected|confirmed|separate|all`
+- `POST /api/admin/product-matches/{review_id}/decision`
 - `GET /api/products/{product_id}/history?period=7D|30D|90D|1Y`
 - `GET /api/alerts`, `POST /api/alerts`, `PUT /api/alerts/{id}`,
   `DELETE /api/alerts/{id}`

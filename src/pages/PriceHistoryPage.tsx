@@ -29,7 +29,10 @@ import type {
   PriceHistoryPeriod,
   PriceHistoryPoint,
 } from '../data/priceHistory'
-import { getStoreOffers } from '../data/storeOffers'
+import {
+  getStoreOffers,
+  isValidStoreOffer,
+} from '../data/storeOffers'
 import type { StoreOffer } from '../data/storeOffers'
 
 type Period = PriceHistoryPeriod
@@ -285,7 +288,7 @@ export function PriceHistoryPage() {
     () => {
       if (dataSource === 'demo') {
         return product
-          ? visibleOffers.map((offer, index) => ({
+          ? visibleOffers.filter(isValidStoreOffer).map((offer, index) => ({
               store: offer.store,
               points: createStorePriceHistory(
                 product,

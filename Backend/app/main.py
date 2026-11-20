@@ -1,5 +1,6 @@
 
 import logging
+import math
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -10,6 +11,7 @@ from app.routers.auth import (
     initialize_auth_database,
     router as auth_router,
 )
+from app.routers.product_matches import router as product_matches_router
 from app.routers.stores import router as stores_router
 from app.routers.audit import router as audit_router
 from app.services.channel3_services import (
@@ -22,9 +24,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pymongo.errors import DuplicateKeyError
 
 from app.database import connect_db
-from app.services.product_catalog import upsert_admin_product_offer
+from app.services.product_catalog import (
+    ingest_product_listing,
+    normalize_store_id,
+    product_identity_key,
+    upsert_admin_product_offer,
+)
 from app.models import (
     AdminProduct,
+    AdminProductIngestionResult,
     DemoNotification,
     PriceAlert,
     Product,
@@ -49,6 +57,17 @@ async def lifespan(application: FastAPI):
     application.state.mongo_client = client
     application.state.database = database
     try:
+        await database.products.create_index(
+            "identityKey",
+            unique=True,
+            partialFilterExpression={"identityKey": {"$type": "string"}},
+            name="unique_shared_product_identity",
+        )
+        await database.product_match_reviews.create_index(
+            "listingKey",
+            unique=True,
+            name="unique_product_match_listing",
+        )
         await initialize_auth_database(database)
         await ensure_bootstrap_admin(database)
         await migrate_legacy_admin_products(database)
@@ -82,6 +101,7 @@ app.include_router(apify_router)
 app.include_router(auth_router)
 app.include_router(stores_router)
 app.include_router(audit_router)
+app.include_router(product_matches_router)
 
 
 def get_database():
@@ -178,24 +198,14 @@ async def list_admin_products():
 
 @app.post(
     "/api/admin/products",
-    response_model=AdminProduct,
+    response_model=AdminProductIngestionResult,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_admin_product(product: AdminProduct, request: Request):
-    try:
-        await get_database().products.insert_one(
-            {
-                "_id": product.product_id,
-                **admin_product_to_catalog_document(product),
-            }
-        )
-    except DuplicateKeyError:
-        raise HTTPException(
-            status_code=409,
-            detail="Admin product id already exists",
-        )
-
-    await upsert_admin_product_offer(get_database(), product)
+async def create_admin_product(
+    product: AdminProduct,
+    request: Request,
+):
+    result = await ingest_product_listing(get_database(), product)
     try:
         from app.routers.audit import record_audit_log
 
@@ -203,15 +213,21 @@ async def create_admin_product(product: AdminProduct, request: Request):
             get_database(),
             user_id="admin",
             user_email="admin",
-            action="CREATE",
+            action=(
+                "CREATE"
+                if result["status"] == "created"
+                else "UPDATE"
+            ),
             module="PRODUCT_MANAGEMENT",
-            description=f"Created product {product.product_name}.",
+            description=(
+                f"Product {product.product_name} was {result['status']}."
+            ),
             ip_address=request.client.host if request.client else "",
             status="SUCCESS",
         )
     except Exception:
         pass
-    return product
+    return result
 
 
 @app.put(
@@ -239,15 +255,26 @@ async def update_admin_product(
     previous_price = existing.get("previousPrice", existing["price"])
     if existing["price"] != product.price:
         previous_price = existing["price"]
-    result = await database.products.update_one(
-        {"_id": product_id},
-        {
-            "$set": admin_product_to_catalog_document(
-                product,
-                previous_price=previous_price,
-            )
-        },
+    fields = admin_product_to_catalog_document(
+        product,
+        previous_price=previous_price,
     )
+    identity_key = product_identity_key(product)
+    if identity_key:
+        fields["identityKey"] = identity_key
+        update = {"$set": fields}
+    else:
+        update = {"$set": fields, "$unset": {"identityKey": ""}}
+    try:
+        result = await database.products.update_one(
+            {"_id": product_id},
+            update,
+        )
+    except DuplicateKeyError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Another catalog product already has this identity.",
+        ) from exc
     if result.matched_count == 0:
         raise HTTPException(
             status_code=404,
@@ -393,43 +420,131 @@ async def product_offers(product_id: str):
 
     documents = await get_database().offers.find(
         {"productId": product_id},
-        {"_id": 1, "store": 1, "price": 1},
+        {
+            "_id": 1,
+            "store": 1,
+            "storeId": 1,
+            "offerId": 1,
+            "sourceProductId": 1,
+            "storeProductName": 1,
+            "storeBrand": 1,
+            "storeModel": 1,
+            "storeCategory": 1,
+            "sku": 1,
+            "price": 1,
+            "currency": 1,
+            "availability": 1,
+            "shippingFee": 1,
+            "productUrl": 1,
+            "updatedAt": 1,
+            "sourceType": 1,
+        },
     ).to_list(length=None)
 
-    if not isinstance(product.get("adminProduct"), dict):
-        return [
-            {"store": offer["store"], "price": offer["price"]}
-            for offer in documents
-        ]
+    def serialize_offer(offer: dict, price: float | None = None) -> dict:
+        raw_price = offer.get("price") if price is None else price
+        valid_price = (
+            float(raw_price)
+            if isinstance(raw_price, (int, float))
+            and math.isfinite(raw_price)
+            and raw_price >= 0
+            else None
+        )
+        raw_shipping_fee = offer.get("shippingFee")
+        shipping_fee = (
+            float(raw_shipping_fee)
+            if isinstance(raw_shipping_fee, (int, float))
+            and math.isfinite(raw_shipping_fee)
+            and raw_shipping_fee >= 0
+            else None
+        )
+        return {
+            "store": offer.get("store", "Unknown store"),
+            "store_id": offer.get("storeId")
+            or normalize_store_id(offer.get("store")),
+            "offer_id": offer.get("offerId") or str(offer.get("_id", "")),
+            "source_product_id": offer.get("sourceProductId"),
+            "store_product_name": offer.get("storeProductName"),
+            "store_brand": offer.get("storeBrand"),
+            "store_model": offer.get("storeModel"),
+            "store_category": offer.get("storeCategory"),
+            "sku": offer.get("sku"),
+            "price": valid_price,
+            "currency": offer.get("currency", "USD"),
+            "availability": offer.get("availability", "unknown"),
+            "shipping_fee": shipping_fee,
+            "product_url": offer.get("productUrl"),
+            "updated_at": offer.get("updatedAt"),
+            "source_type": offer.get("sourceType"),
+        }
 
-    def normalize_store(value: str) -> str:
-        return "".join(
-            character
-            for character in value.casefold()
-            if character.isalnum()
+    def deduplicate_offers(offers: list[dict]) -> list[dict]:
+        unique_offers = {}
+        for offer in offers:
+            key = normalize_store_id(offer.get("store_id") or offer.get("store"))
+            existing = unique_offers.get(key)
+            if existing is None or (
+                offer.get("updated_at") or ""
+            ) >= (existing.get("updated_at") or ""):
+                unique_offers[key] = offer
+        return list(unique_offers.values())
+
+    if not isinstance(product.get("adminProduct"), dict):
+        return deduplicate_offers(
+            [serialize_offer(offer) for offer in documents]
         )
 
-    catalog_store = product["store"]
-    normalized_catalog_store = normalize_store(catalog_store)
-    listed_offer = next(
+    admin_product = product["adminProduct"]
+    catalog_store_id = normalize_store_id(admin_product.get("store_id"))
+    current_offer = next(
         (
             offer
             for offer in documents
-            if normalize_store(offer["store"]) == normalized_catalog_store
+            if normalize_store_id(
+                offer.get("storeId") or offer.get("store")
+            ) == catalog_store_id
         ),
         None,
     )
-    current_offers = [
-        {"store": offer["store"], "price": offer["price"]}
-        for offer in documents
-        if offer.get("_id") != f"{product_id}:{offer['store']}"
-        and normalize_store(offer["store"]) != normalized_catalog_store
-    ]
-    current_offers.append({
-        "store": listed_offer["store"] if listed_offer else catalog_store,
-        "price": product["price"],
-    })
-    return current_offers
+    current_offers = []
+    for offer in documents:
+        is_legacy_seed = (
+            offer.get("_id") == f"{product_id}:{offer.get('store')}"
+            and not offer.get("offerId")
+            and not offer.get("storeId")
+        )
+        if is_legacy_seed and offer is not current_offer:
+            continue
+        current_offers.append(
+            serialize_offer(
+                offer,
+                price=product["price"]
+                if offer is current_offer
+                else None,
+            )
+        )
+
+    if current_offer is None and catalog_store_id:
+        current_offers.append({
+            "store": admin_product.get("store_id", "PricePilot"),
+            "store_id": catalog_store_id,
+            "offer_id": f"{product_id}:{catalog_store_id}",
+            "source_product_id": product_id,
+            "store_product_name": admin_product.get("product_name"),
+            "store_brand": admin_product.get("brand"),
+            "store_model": admin_product.get("model"),
+            "store_category": admin_product.get("category"),
+            "sku": admin_product.get("sku"),
+            "price": product["price"],
+            "currency": admin_product.get("currency", "USD"),
+            "availability": admin_product.get("availability", "unknown"),
+            "shipping_fee": admin_product.get("shipping_fee"),
+            "product_url": admin_product.get("product_url"),
+            "updated_at": admin_product.get("updated_at"),
+            "source_type": admin_product.get("source_type"),
+        })
+
+    return deduplicate_offers(current_offers)
 
 
 @app.get(

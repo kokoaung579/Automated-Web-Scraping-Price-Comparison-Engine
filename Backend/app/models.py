@@ -38,6 +38,8 @@ class AdminProduct(APIModel):
     store_id: str | None = None
     price: float = Field(gt=0)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
+    shipping_fee: float | None = Field(default=None, ge=0)
+    sku: str | None = None
     availability: Literal[
         "in_stock",
         "out_of_stock",
@@ -161,7 +163,7 @@ def catalog_document_to_public_product(document: dict) -> dict:
 
 class StoreOffer(APIModel):
     store: str
-    price: float = Field(ge=0)
+    price: float | None = Field(default=None, ge=0)
 
 
 class PriceHistoryPoint(APIModel):
@@ -228,7 +230,82 @@ class Store(APIModel):
 
 class StoreOffer(APIModel):
     store: str
-    price: float = Field(ge=0)
+    store_id: str | None = None
+    offer_id: str | None = None
+    source_product_id: str | None = None
+    store_product_name: str | None = None
+    store_brand: str | None = None
+    store_model: str | None = None
+    store_category: str | None = None
+    sku: str | None = None
+    price: float | None = Field(default=None, ge=0)
+    currency: str = "USD"
+    availability: str = "unknown"
+    shipping_fee: float | None = Field(default=None, ge=0)
+    product_url: str | None = None
+    updated_at: str | None = None
+    source_type: Literal["scraped", "manual"] | None = None
+
+
+class ProductMatchStoreOffer(APIModel):
+    store: str
+    store_product_name: str | None = None
+    product_url: str | None = None
+
+
+class ProductMatchCandidate(APIModel):
+    product_id: str
+    product_name: str
+    brand: str | None = None
+    model: str | None = None
+    sku: str | None = None
+    category: str | None = None
+    image_url: str | None = None
+    product_url: str | None = None
+    similarity: float = Field(ge=0, le=1)
+    reasons: list[str]
+    store_offers: list[ProductMatchStoreOffer] = Field(default_factory=list)
+
+
+class ProductMatchReview(APIModel):
+    id: str
+    status: Literal[
+        "pending",
+        "processing",
+        "rejected",
+        "confirmed",
+        "separate",
+    ]
+    incoming: AdminProduct
+    incoming_store_name: str | None = None
+    classification: Literal[
+        "potential",
+        "insufficient_information",
+    ] = "potential"
+    candidates: list[ProductMatchCandidate]
+    created_at: str
+    updated_at: str
+    resolved_product_id: str | None = None
+    decision_history: list[dict] = Field(default_factory=list)
+    audit_warning: str | None = None
+
+
+class ProductMatchDecision(APIModel):
+    action: Literal[
+        "confirm",
+        "reject",
+        "manual_match",
+        "create_separate",
+    ]
+    product_id: str | None = None
+    reason: str | None = Field(default=None, max_length=1000)
+
+
+class AdminProductIngestionResult(APIModel):
+    status: Literal["created", "matched", "review", "rejected"]
+    product: AdminProduct
+    shared_product_id: str | None = None
+    review_id: str | None = None
 
 
 class PriceHistoryPoint(APIModel):

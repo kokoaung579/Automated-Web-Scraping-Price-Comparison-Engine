@@ -36,4 +36,41 @@ describe('catalog products', () => {
     })
     expect(merged[1]).toBe(unmatchedChannel3Product)
   })
+
+  it('does not merge by name when a required identity field differs or is missing', () => {
+    const catalogProduct = products[0]
+    const differentModel = {
+      ...catalogProduct,
+      id: 'channel3-different-model',
+      specifications: catalogProduct.specifications.map((specification) =>
+        specification.label === 'Model'
+          ? { ...specification, value: 'WH-1000XM4' }
+          : specification,
+      ),
+    }
+    const missingModel = {
+      ...catalogProduct,
+      id: 'channel3-missing-model',
+      specifications: catalogProduct.specifications.filter(
+        (specification) => specification.label !== 'Model',
+      ),
+    }
+    const differentCategory = {
+      ...catalogProduct,
+      id: 'channel3-different-category',
+      category: 'Consumer Electronics',
+    }
+
+    const merged = mergeCatalogProducts(
+      [catalogProduct],
+      [differentModel, missingModel, differentCategory],
+    )
+
+    expect(merged).toHaveLength(4)
+    expect(merged.slice(1)).toEqual([
+      differentModel,
+      missingModel,
+      differentCategory,
+    ])
+  })
 })

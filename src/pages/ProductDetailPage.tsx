@@ -34,7 +34,10 @@ import type {
   PriceHistoryPoint,
 } from '../data/priceHistory'
 import type { DemoProduct } from '../data/products'
-import { getStoreOffers } from '../data/storeOffers'
+import {
+  getStoreOffers,
+  isValidStoreOffer,
+} from '../data/storeOffers'
 import type { StoreOffer } from '../data/storeOffers'
 
 type StoreHistory = { store: string; points: PriceHistoryPoint[] }
@@ -404,7 +407,16 @@ export function ProductDetailPage() {
       : []
   }, [dataSource, product, remoteData])
   const sortedOffers = useMemo(
-    () => [...storeOffers].sort((first, second) => first.price - second.price),
+    () =>
+      [...storeOffers].sort((first, second) => {
+        const firstIsValid = isValidStoreOffer(first)
+        const secondIsValid = isValidStoreOffer(second)
+        if (firstIsValid !== secondIsValid) return firstIsValid ? -1 : 1
+        if (!firstIsValid || !secondIsValid) {
+          return first.store.localeCompare(second.store)
+        }
+        return first.price - second.price
+      }),
     [storeOffers],
   )
   const histories = useMemo<StoreHistory[]>(() => {
@@ -419,7 +431,7 @@ export function ProductDetailPage() {
 
     if (dataSource === 'demo') {
       return product
-        ? storeOffers.map((offer, index) => ({
+        ? storeOffers.filter(isValidStoreOffer).map((offer, index) => ({
             store: offer.store,
             points: createStorePriceHistory(
               product,
@@ -699,7 +711,8 @@ export function ProductDetailPage() {
                   </td>
                 </tr>
               ) : sortedOffers.map((offer) => {
-                const cheapest = offer.price === cheapestPrice
+                const validPrice = isValidStoreOffer(offer)
+                const cheapest = validPrice && offer.price === cheapestPrice
                 return (
                   <tr
                     key={offer.store}
@@ -720,10 +733,14 @@ export function ProductDetailPage() {
                         cheapest ? 'text-emerald-300' : 'text-white'
                       }`}
                     >
-                      {formatPrice(offer.price)}
+                      {validPrice ? formatPrice(offer.price) : 'Invalid price'}
                     </td>
                     <td className="px-5 py-3.5 text-right">
-                      {cheapest ? (
+                      {!validPrice ? (
+                        <span className="text-[10px] text-slate-600">
+                          Invalid price
+                        </span>
+                      ) : cheapest ? (
                         <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-400/[0.08] px-2 py-1 text-[10px] font-semibold text-emerald-300">
                           <Check aria-hidden="true" size={11} />
                           Best price

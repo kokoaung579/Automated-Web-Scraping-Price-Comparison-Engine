@@ -17,6 +17,7 @@ from app.main import (
 from app.models import (
     AdminProduct,
     Product,
+    StoreOffer,
     admin_product_to_catalog_document,
 )
 
@@ -92,7 +93,17 @@ class MemoryCollection:
         return SimpleNamespace(deleted_count=len(matching_keys))
 
     async def find_one(self, query, projection=None):
-        document = self.documents.get(query["_id"])
+        document = next(
+            (
+                candidate
+                for candidate in self.documents.values()
+                if all(
+                    candidate.get(field) == value
+                    for field, value in query.items()
+                )
+            ),
+            None,
+        )
         return dict(document) if document else None
 
     def find(self, query=None, projection=None):
@@ -107,10 +118,19 @@ class MemoryCollection:
 
 
 class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
+    def test_store_offer_response_accepts_a_missing_legacy_price(self):
+        offer = StoreOffer.model_validate({
+            "store": "Legacy Store",
+            "price": None,
+        })
+
+        self.assertIsNone(offer.price)
+
     async def test_admin_product_is_stored_in_and_returned_from_public_catalog(self):
         database = SimpleNamespace(
             products=MemoryCollection(),
             admin_products=MemoryCollection(),
+            product_match_reviews=MemoryCollection(),
             offers=MemoryCollection([
                 {
                     "_id": "existing-offer",
@@ -149,7 +169,10 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch("app.main.get_database", return_value=database):
-            await create_admin_product(product)
+            await create_admin_product(
+                product,
+                SimpleNamespace(client=None),
+            )
             public_products = await list_products()
             admin_products = await list_admin_products()
 
@@ -335,13 +358,16 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
         with patch("app.main.get_database", return_value=database):
             offers = await product_offers(product_id)
 
-        self.assertEqual(
-            offers,
-            [
-                {"store": "Walmart", "price": 99.99},
-                {"store": "Best Buy", "price": 89.99},
-            ],
+        self.assertEqual(len(offers), 2)
+        walmart_offer = next(
+            offer for offer in offers if offer["store"] == "Walmart"
         )
+        best_buy_offer = next(
+            offer for offer in offers if offer["store"] == "Best Buy"
+        )
+        self.assertEqual(walmart_offer["price"], 99.99)
+        self.assertEqual(best_buy_offer["price"], 89.99)
+        self.assertEqual(best_buy_offer["currency"], "USD")
 
     async def test_user_lists_ignore_records_for_deleted_products(self):
         database = SimpleNamespace(

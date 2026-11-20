@@ -953,10 +953,13 @@ export function AdminProductsPage() {
     setFeedback('')
 
     try {
+      let ingestionStatus: 'created' | 'matched' | 'review' | 'rejected' | null =
+        null
       if (existing) {
         await api.updateAdminProduct(existing.product_id, product)
       } else {
-        await api.createAdminProduct(product)
+        const result = await api.createAdminProduct(product)
+        ingestionStatus = result.status
       }
 
       const refreshedProducts = await api.adminProducts()
@@ -964,7 +967,13 @@ export function AdminProductsPage() {
       setFeedback(
         existing
           ? `${product.product_name} updated.`
-          : `${product.product_name} added as a manual product.`,
+          : ingestionStatus === 'review'
+            ? `${product.product_name} was sent for product-matching review.`
+            : ingestionStatus === 'matched'
+              ? `${product.product_name} was linked to an existing shared product.`
+              : ingestionStatus === 'rejected'
+                ? `${product.product_name} remains in rejected matching review.`
+                : `${product.product_name} added as a manual product.`,
       )
       setFormOpen(false)
       setEditingProduct(null)
