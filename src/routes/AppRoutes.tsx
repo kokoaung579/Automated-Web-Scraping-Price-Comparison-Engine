@@ -166,7 +166,7 @@ function ProtectedAppLayout() {
     return <Navigate to="/admin" replace />
   }
 
-  return <AppLayout currentUser={user} />
+  return <AppLayout key={user.id} currentUser={user} />
 }
 
 function ProtectedAdminLayout() {

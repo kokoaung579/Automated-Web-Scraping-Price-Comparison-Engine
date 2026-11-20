@@ -7,6 +7,12 @@ class APIModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class UserSettings(APIModel):
+    emailPriceAlerts: bool = True
+    inAppPriceAlerts: bool = True
+    theme: str = "dark"
+
+
 class Specification(APIModel):
     label: str = Field(min_length=1)
     value: str = Field(min_length=1)
@@ -24,6 +30,12 @@ class Product(APIModel):
     updatedAt: str
     specifications: list[Specification]
     tone: str
+
+
+class PublicProduct(Product):
+    """Read-only catalog response with the Admin product's real image URL."""
+
+    image_url: str | None = None
 
 
 class AdminProduct(APIModel):
@@ -151,16 +163,22 @@ def catalog_document_to_public_product(document: dict) -> dict:
         return {
             "id": str(document.get("_id", product.product_id)),
             **public_fields,
+            "image_url": product.image_url,
         }
 
-    return Product.model_validate({
+    public_product = Product.model_validate({
         **{
             key: value
             for key, value in document.items()
-            if key not in {"_id", "adminProduct"}
+            if key not in {"_id", "adminProduct", "image_url"}
         },
         "id": str(document.get("_id", document.get("id", ""))),
     }).model_dump()
+    image_url = document.get("image_url")
+    public_product["image_url"] = (
+        image_url if isinstance(image_url, str) else None
+    )
+    return public_product
 
 
 class StoreOffer(APIModel):
@@ -186,11 +204,16 @@ class PriceAlert(APIModel):
     targetPrice: float = Field(gt=0)
     status: Literal["active", "triggered"]
     createdAt: str = Field(min_length=1)
+<<<<<<< HEAD
     userId: str | None = Field(
         default=None,
         validation_alias=AliasChoices("userId", "user_id"),
         serialization_alias="userId",
     )
+=======
+    user_id: str | None = None
+    emailNotifiedPrice: float | None = None
+>>>>>>> origin/member-4-dashboard
 
 
 class WatchlistEntry(APIModel):
@@ -333,11 +356,16 @@ class PriceAlert(APIModel):
     targetPrice: float = Field(gt=0)
     status: Literal["active", "triggered"]
     createdAt: str = Field(min_length=1)
+<<<<<<< HEAD
     userId: str | None = Field(
         default=None,
         validation_alias=AliasChoices("userId", "user_id"),
         serialization_alias="userId",
     )
+=======
+    user_id: str | None = None
+    emailNotifiedPrice: float | None = None
+>>>>>>> origin/member-4-dashboard
 
 
 class WatchlistEntry(APIModel):

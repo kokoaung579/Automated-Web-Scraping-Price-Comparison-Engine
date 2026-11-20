@@ -231,7 +231,7 @@ function readTimestamp(
   return timestamp.toISOString()
 }
 
-function validHttpUrl(value: string | null): boolean {
+export function validHttpUrl(value: string | null): boolean {
   if (value === null) return true
   try {
     const parsedUrl = new URL(value)
@@ -245,8 +245,13 @@ export function validateProductImportRows(
   rows: ProductImportRow[],
   existingProducts: Product[],
   knownStoreIds?: Iterable<string>,
+  allowedCategories?: string[],
 ): ProductImportResult[] {
-  const categories = new Set(getProductCategories())
+  // Admin product management supplies the shared MongoDB category names.
+  // The demo-derived list remains a fallback for local demo tooling/tests.
+  const categories = new Set(
+    allowedCategories?.length ? allowedCategories : getProductCategories(),
+  )
   const storeIds = knownStoreIds ? new Set(knownStoreIds) : null
   const existingIds = new Set(
     existingProducts.map((product) => product.product_id.toLowerCase()),

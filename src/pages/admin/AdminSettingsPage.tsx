@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import {
   AlertTriangle,
@@ -13,6 +13,8 @@ import {
   BellRing,
   X,
 } from 'lucide-react'
+import { api } from '../../api/client'
+import { useSystemSettings } from '../../context/SystemSettingsContext'
 import {
   ADMIN_CURRENCIES,
   ADMIN_TIME_ZONES,
@@ -194,12 +196,39 @@ function DemoResetDialog({
 }
 
 export function AdminSettingsPage() {
+  const systemSettings = useSystemSettings()
   const [pageState, setPageState] = useState(loadSettingsState)
   const [draft, setDraft] = useState(pageState.settings)
   const [validationErrors, setValidationErrors] = useState<string[]>([])
   const [feedback, setFeedback] = useState('')
   const [showResetDialog, setShowResetDialog] = useState(false)
   const hasChanges = JSON.stringify(draft) !== JSON.stringify(pageState.settings)
+
+  useEffect(() => {
+    let active = true
+    api
+      .systemSettings()
+      .then((result) => {
+        if (!active || !result) return
+        setDraft((current) => ({
+          ...current,
+          applicationName: result.applicationName ?? current.applicationName,
+          timeZone: result.timeZone ?? current.timeZone,
+        }))
+        setPageState((current) => ({
+          ...current,
+          settings: {
+            ...current.settings,
+            applicationName: result.applicationName ?? current.settings.applicationName,
+            timeZone: result.timeZone ?? current.settings.timeZone,
+          },
+        }))
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
 
   function updateSetting<Key extends keyof AdminSettings>(
     key: Key,
@@ -225,7 +254,7 @@ export function AdminSettingsPage() {
     setFeedback('')
   }
 
-  function handleSave(event: FormEvent<HTMLFormElement>) {
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const errors = validateAdminSettings(draft)
     setValidationErrors(errors)
@@ -234,14 +263,26 @@ export function AdminSettingsPage() {
       return
     }
 
+    const saved = { ...draft, applicationName: draft.applicationName.trim() }
     try {
-      const saved = { ...draft, applicationName: draft.applicationName.trim() }
       saveAdminSettings(saved)
-      setDraft(saved)
-      setPageState({ settings: saved, error: '' })
-      setFeedback('Demo settings saved in this browser.')
     } catch (error) {
       setFeedback(`Could not save settings: ${getErrorMessage(error)}`)
+      return
+    }
+
+    try {
+      await systemSettings.update({
+        applicationName: saved.applicationName,
+        timeZone: saved.timeZone,
+      })
+      setDraft(saved)
+      setPageState({ settings: saved, error: '' })
+      setFeedback('System settings saved.')
+    } catch (error) {
+      setDraft(saved)
+      setPageState({ settings: saved, error: '' })
+      setFeedback(`Could not save system settings: ${getErrorMessage(error)}`)
     }
   }
 

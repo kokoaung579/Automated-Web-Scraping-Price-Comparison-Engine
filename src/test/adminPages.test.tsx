@@ -103,6 +103,39 @@ function jsonResponse(data: unknown, status = 200) {
   }
 }
 
+function categoryVariants(name: string): Set<string> {
+  const lower = name.trim().toLowerCase()
+  const variants = new Set([lower])
+  if (lower.endsWith('s') && lower.length > 1) variants.add(lower.slice(0, -1))
+  else variants.add(`${lower}s`)
+  return variants
+}
+
+/** Mirror the backend's canonical, shared-category lookup in the mock API. */
+function canonicalSharedCategory(name: string): string | null {
+  if (!backendCategories.length) return null
+  const target = categoryVariants(name)
+  const exact = backendCategories.find(
+    (category) => category.name === name.trim(),
+  )
+  if (exact) return exact.name
+  const match = backendCategories.find((category) => {
+    const candidate = categoryVariants(category.name)
+    return [...target].some((variant) => candidate.has(variant))
+  })
+  return match?.name ?? null
+}
+
+function setSharedCategories(names: string[]): void {
+  backendCategories = names.map((name) => ({
+    name,
+    description: `Shared ${name} category.`,
+    status: 'Active' as const,
+    created_at: '2026-11-20T00:00:00.000Z',
+    updated_at: '2026-11-20T00:00:00.000Z',
+  }))
+}
+
 async function productWorkbookFile(
   fileName: string,
   rows: Record<string, unknown>[],
@@ -145,6 +178,19 @@ function bulkProductFixtures(): Product[] {
     ...template,
     product_id: productId,
     product_name: `Bulk Product ${'abc'[index].toUpperCase()}`,
+    store_id: amazonStore.store_id,
+  }))
+}
+
+function paginatedProductFixtures(count = 18): Product[] {
+  const [template] = loadAdminProducts()
+  const categories = getProductCategories()
+  return Array.from({ length: count }, (_, index) => ({
+    ...template,
+    product_id: `page-product-${String(index + 1).padStart(2, '0')}`,
+    product_name: `Page Product ${index + 1}`,
+    category: categories[index % 2 === 0 ? 0 : 1],
+    source_type: index % 2 === 0 ? 'manual' : 'scraped',
     store_id: amazonStore.store_id,
   }))
 }
@@ -228,7 +274,19 @@ async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
   if (url.pathname === '/api/admin/products') {
     if (method === 'GET') return jsonResponse(backendProducts)
     if (method === 'POST') {
-      const product = JSON.parse(String(init?.body)) as Product
+      let product = JSON.parse(String(init?.body)) as Product
+      const canonical = canonicalSharedCategory(product.category)
+      if (backendCategories.length && !canonical) {
+        return jsonResponse(
+          {
+            detail: `Category "${product.category}" does not exist in Category Management.`,
+          },
+          400,
+        )
+      }
+      if (canonical && canonical !== product.category) {
+        product = { ...product, category: canonical }
+      }
       backendProducts = [...backendProducts, product]
       return jsonResponse(product, 201)
     }
@@ -238,11 +296,7 @@ async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
     if (method === 'GET') return jsonResponse(backendCategories)
     if (method === 'POST') {
       const category = JSON.parse(String(init?.body)) as AdminCategory
-      if (
-        backendCategories.some(
-          (item) => item.name.toLowerCase() === category.name.toLowerCase(),
-        )
-      ) {
+      if (canonicalSharedCategory(category.name)) {
         return jsonResponse(
           { detail: 'A category with this name already exists.' },
           409,
@@ -393,7 +447,19 @@ async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
   if (productMatch) {
     const productId = decodeURIComponent(productMatch[1])
     if (method === 'PUT') {
-      const product = JSON.parse(String(init?.body)) as Product
+      let product = JSON.parse(String(init?.body)) as Product
+      const canonical = canonicalSharedCategory(product.category)
+      if (backendCategories.length && !canonical) {
+        return jsonResponse(
+          {
+            detail: `Category "${product.category}" does not exist in Category Management.`,
+          },
+          400,
+        )
+      }
+      if (canonical && canonical !== product.category) {
+        product = { ...product, category: canonical }
+      }
       backendProducts = backendProducts.map((item) =>
         item.product_id === productId ? product : item,
       )
@@ -1666,5 +1732,527 @@ describe('admin and shared user pages', () => {
     renderRoutes('/')
     expect(await screen.findByText('Total Products')).toBeDefined()
     expect(screen.getByText('MongoDB connected')).toBeDefined()
+  })
+
+  it('paginates 18 catalog products into 15 on the first page and 3 on the second', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = paginatedProductFixtures(18)
+
+    render(<AdminProductsPage />)
+    const firstPageTable = await screen.findByRole('table')
+    await waitFor(() =>
+      expect(within(firstPageTable).getAllByRole('row')).toHaveLength(16),
+    )
+    expect(screen.getByText('Showing 1–15 of 18 products')).toBeDefined()
+    expect(within(firstPageTable).getByText('Page Product 1')).toBeDefined()
+    expect(within(firstPageTable).getByText('Page Product 15')).toBeDefined()
+    expect(within(firstPageTable).queryByText('Page Product 16')).toBeNull()
+    expect(
+      (screen.getByRole('button', { name: 'Previous page' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+    expect(
+      screen.getByRole('button', { name: 'Page 1' }).getAttribute('aria-current'),
+    ).toBe('page')
+    expect(screen.getByRole('button', { name: 'Page 2' })).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Page 3' })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    const secondPageTable = screen.getByRole('table')
+    expect(await screen.findByText('Showing 16–18 of 18 products')).toBeDefined()
+    expect(within(secondPageTable).getAllByRole('row')).toHaveLength(4)
+    expect(within(secondPageTable).getByText('Page Product 16')).toBeDefined()
+    expect(within(secondPageTable).getByText('Page Product 18')).toBeDefined()
+    expect(within(secondPageTable).queryByText('Page Product 15')).toBeNull()
+    expect(
+      (screen.getByRole('button', { name: 'Next page' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+    expect(
+      (screen.getByRole('button', { name: 'Previous page' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false)
+
+    await user.click(screen.getByRole('button', { name: 'Page 1' }))
+    expect(await screen.findByText('Page Product 1')).toBeDefined()
+    expect(screen.getByText('Showing 1–15 of 18 products')).toBeDefined()
+  })
+
+  it('resets to page 1 for every filter and shows an empty state when nothing matches', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = paginatedProductFixtures(18)
+
+    render(<AdminProductsPage />)
+    await screen.findByText('Showing 1–15 of 18 products')
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(screen.getByText('Showing 16–18 of 18 products')).toBeDefined()
+
+    const search = screen.getByRole('searchbox', { name: 'Search products' })
+    fireEvent.change(search, { target: { value: 'Page Product 17' } })
+    expect(await screen.findByText('Showing 1–1 of 1 products')).toBeDefined()
+    expect(
+      screen.getByRole('button', { name: 'Page 1' }).getAttribute('aria-current'),
+    ).toBe('page')
+    expect(screen.queryByRole('button', { name: 'Page 2' })).toBeNull()
+
+    fireEvent.change(search, { target: { value: '' } })
+    expect(await screen.findByText('Showing 1–15 of 18 products')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(screen.getByText('Showing 16–18 of 18 products')).toBeDefined()
+    await user.selectOptions(
+      screen.getByLabelText('Filter by category'),
+      getProductCategories()[0],
+    )
+    expect(await screen.findByText('Showing 1–9 of 9 products')).toBeDefined()
+    expect(
+      screen.getByRole('button', { name: 'Page 1' }).getAttribute('aria-current'),
+    ).toBe('page')
+
+    fireEvent.change(search, { target: { value: 'No Such Product' } })
+    expect(await screen.findByText('No products match these filters')).toBeDefined()
+    expect(screen.getByText('Showing 0–0 of 0 products')).toBeDefined()
+    expect(
+      (screen.getByRole('button', { name: 'Next page' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+  }, 20_000)
+
+  it('scopes the header checkbox to the current page and keeps selections across pages', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = paginatedProductFixtures(18)
+
+    render(<AdminProductsPage />)
+    await user.click(await screen.findByLabelText('Select all visible products'))
+    expect(screen.getByText('15 products selected')).toBeDefined()
+    expect(
+      screen.getByRole('button', { name: 'Select all 18 filtered products' }),
+    ).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(screen.getByText('15 products selected')).toBeDefined()
+    const headerCheckbox = screen.getByLabelText(
+      'Select all visible products',
+    ) as HTMLInputElement
+    expect(headerCheckbox.checked).toBe(false)
+    await user.click(headerCheckbox)
+    expect(screen.getByText('18 products selected')).toBeDefined()
+    expect(
+      screen.getByRole('button', { name: 'Deselect all 18 filtered products' }),
+    ).toBeDefined()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Deselect all 18 filtered products' }),
+    )
+    expect(screen.getByText('0 products selected')).toBeDefined()
+    expect(backendProducts).toHaveLength(18)
+  })
+
+  it('exports and deletes only the products selected across different pages', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = paginatedProductFixtures(18)
+
+    render(<AdminProductsPage />)
+    await user.click(await screen.findByLabelText('Select page-product-01'))
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    await user.click(await screen.findByLabelText('Select page-product-16'))
+    expect(screen.getByText('2 products selected')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Export Selected' }))
+    await waitFor(() => expect(lastExportedBlob).not.toBeNull())
+    const rows = await readWorkbookRows(lastExportedBlob!)
+    expect(rows.map((row) => row.product_id)).toEqual([
+      'page-product-01',
+      'page-product-16',
+    ])
+
+    await user.click(screen.getByRole('button', { name: 'Delete Selected' }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog.textContent).toContain('Delete 2 selected products?')
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Delete 2 selected' }),
+    )
+
+    await waitFor(() => expect(backendProducts).toHaveLength(16))
+    expect(
+      backendProducts.some((product) => product.product_id === 'page-product-01'),
+    ).toBe(false)
+    expect(
+      backendProducts.some((product) => product.product_id === 'page-product-16'),
+    ).toBe(false)
+    expect(
+      backendProducts.some((product) => product.product_id === 'page-product-02'),
+    ).toBe(true)
+    const deleteAudits = productAuditCalls.filter(
+      (call) => call.kind === 'delete',
+    )
+    expect(deleteAudits).toHaveLength(1)
+    expect(deleteAudits[0].payload.product_ids).toEqual(
+      expect.arrayContaining(['page-product-01', 'page-product-16']),
+    )
+  })
+
+  it('refreshes pagination after adding and deleting products', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = paginatedProductFixtures(18)
+
+    render(<AdminProductsPage />)
+    await screen.findByText('Showing 1–15 of 18 products')
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(screen.getByText('Showing 16–18 of 18 products')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Add manual product' }))
+    const form = await screen.findByRole('dialog')
+    await user.clear(within(form).getByLabelText('Product ID'))
+    await user.type(within(form).getByLabelText('Product ID'), 'page-product-19')
+    await user.type(within(form).getByLabelText('Product name'), 'Page Product 19')
+    await user.type(within(form).getByLabelText('Price'), '59.99')
+    await user.click(
+      within(form).getByRole('button', { name: 'Add manual product' }),
+    )
+
+    expect(await screen.findByText('Page Product 19')).toBeDefined()
+    expect(screen.getByText('Showing 16–19 of 19 products')).toBeDefined()
+
+    for (const productName of [
+      'Page Product 19',
+      'Page Product 18',
+      'Page Product 17',
+      'Page Product 16',
+    ]) {
+      await user.click(
+        screen.getByRole('button', { name: `Delete ${productName}` }),
+      )
+      const confirmation = await screen.findByRole('alertdialog')
+      await user.click(
+        within(confirmation).getByRole('button', { name: 'Delete product' }),
+      )
+      await waitFor(() =>
+        expect(
+          screen.queryByRole('button', { name: `Delete ${productName}` }),
+        ).toBeNull(),
+      )
+    }
+
+    expect(await screen.findByText('Showing 1–15 of 15 products')).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Page 2' })).toBeNull()
+    expect(backendProducts).toHaveLength(15)
+  }, 20_000)
+
+  it('shows loading and error states without exposing stale pagination', async () => {
+    let resolveProducts:
+      | ((value: ReturnType<typeof jsonResponse>) => void)
+      | undefined
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), 'http://localhost')
+        if (
+          url.pathname === '/api/admin/products' &&
+          (init?.method ?? 'GET') === 'GET'
+        ) {
+          return new Promise<ReturnType<typeof jsonResponse>>((resolve) => {
+            resolveProducts = resolve
+          })
+        }
+        return mockBackendFetch(input, init)
+      }),
+    )
+    seedAccounts('admin@example.test', 'Admin')
+
+    const view = render(<AdminProductsPage />)
+    await waitFor(() => expect(resolveProducts).toBeDefined())
+    expect(
+      (screen.getByRole('button', { name: 'Add manual product' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+
+    resolveProducts!(jsonResponse(paginatedProductFixtures(18)))
+    expect(await screen.findByText('Showing 1–15 of 18 products')).toBeDefined()
+    view.unmount()
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), 'http://localhost')
+        if (
+          url.pathname === '/api/admin/products' &&
+          (init?.method ?? 'GET') === 'GET'
+        ) {
+          return Promise.resolve(jsonResponse({ detail: 'boom' }, 500))
+        }
+        return mockBackendFetch(input, init)
+      }),
+    )
+    render(<AdminProductsPage />)
+    expect(await screen.findByRole('alert')).toBeDefined()
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Could not load products from the backend',
+    )
+    expect(
+      (screen.getByRole('button', { name: 'Export Products' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+  })
+
+  it('keeps pagination controls available at mobile and tablet widths', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = paginatedProductFixtures(18)
+
+    render(<AdminProductsPage />)
+    await screen.findByText('Showing 1–15 of 18 products')
+    const pagination = screen.getByRole('navigation', {
+      name: 'Product catalog pagination',
+    })
+    expect(pagination.className).toContain('sm:flex-row')
+
+    for (const width of [375, 768, 1280]) {
+      Object.defineProperty(window, 'innerWidth', {
+        configurable: true,
+        value: width,
+      })
+      window.dispatchEvent(new Event('resize'))
+      expect(
+        screen.getByRole('button', { name: 'Previous page' }),
+      ).toBeDefined()
+      expect(screen.getByRole('button', { name: 'Next page' })).toBeDefined()
+      expect(screen.getByRole('button', { name: 'Page 2' })).toBeDefined()
+    }
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(screen.getByText('Showing 16–18 of 18 products')).toBeDefined()
+  })
+
+  it('loads product form categories from the shared category API instead of a demo list', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    setSharedCategories(['Audio', 'Phone', 'Uncategorized'])
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', { name: 'Add manual product' }),
+    )
+    const form = await screen.findByRole('dialog')
+    const select = within(form).getByLabelText('Category')
+    const options = within(select)
+      .getAllByRole('option')
+      .map((option) => option.textContent)
+    expect(options).toEqual(['Audio', 'Phone', 'Uncategorized'])
+    expect(options).not.toContain('Cameras')
+    expect(options).not.toContain('Gaming')
+  })
+
+  it('shows the real shared category when editing a scraped product', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    setSharedCategories(['Audio', 'Phone', 'Uncategorized'])
+    backendProducts = [
+      {
+        ...backendProducts[0],
+        product_id: 'scraped-1',
+        product_name: 'Scraped Headphones',
+        category: 'Uncategorized',
+        source_type: 'scraped',
+      },
+    ]
+
+    render(<AdminProductsPage />)
+    expect(await screen.findByText('Showing 1–1 of 1 products')).toBeDefined()
+    expect(
+      within(screen.getByRole('table')).getByText('Uncategorized'),
+    ).toBeDefined()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Edit Scraped Headphones' }),
+    )
+    const form = await screen.findByRole('dialog')
+    const select = within(form).getByLabelText('Category') as HTMLSelectElement
+    expect(select.value).toBe('Uncategorized')
+    expect(
+      within(select).getAllByRole('option').map((option) => option.textContent),
+    ).toContain('Uncategorized')
+
+    await user.click(within(form).getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(backendProducts[0].category).toBe('Uncategorized'))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('makes a newly created category immediately available in Product Management', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    setSharedCategories(['Audio', 'Uncategorized'])
+
+    const categoriesView = render(<AdminCategoriesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Add category' }))
+    const categoryForm = await screen.findByRole('dialog')
+    await user.type(
+      within(categoryForm).getByLabelText('Category name'),
+      'Wearables',
+    )
+    await user.click(
+      within(categoryForm).getByRole('button', { name: 'Save category' }),
+    )
+    await waitFor(() =>
+      expect(
+        backendCategories.some((category) => category.name === 'Wearables'),
+      ).toBe(true),
+    )
+    categoriesView.unmount()
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', { name: 'Add manual product' }),
+    )
+    const productForm = await screen.findByRole('dialog')
+    const select = within(productForm).getByLabelText('Category')
+    expect(
+      within(select).getAllByRole('option').map((option) => option.textContent),
+    ).toContain('Wearables')
+  })
+
+  it('updates category product counts when a product is added with that category', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    setSharedCategories(['Audio', 'Uncategorized'])
+    backendProducts = []
+
+    const productsView = render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', { name: 'Add manual product' }),
+    )
+    const form = await screen.findByRole('dialog')
+    await user.type(within(form).getByLabelText('Product name'), 'Smart Band')
+    await user.selectOptions(
+      within(form).getByLabelText('Category'),
+      'Uncategorized',
+    )
+    await user.type(within(form).getByLabelText('Price'), '49.99')
+    await user.click(
+      within(form).getByRole('button', { name: 'Add manual product' }),
+    )
+    await waitFor(() => expect(backendProducts).toHaveLength(1))
+    expect(backendProducts[0].category).toBe('Uncategorized')
+    productsView.unmount()
+
+    render(<AdminCategoriesPage />)
+    const row = (await screen.findByText('Uncategorized')).closest('tr')
+    expect(row).not.toBeNull()
+    expect(within(row!).getByText('1')).toBeDefined()
+  })
+
+  it('renames a category and keeps linked product categories in sync', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    setSharedCategories(['Audio', 'Uncategorized'])
+    backendProducts = [
+      {
+        ...backendProducts[0],
+        product_id: 'audio-1',
+        product_name: 'Audio Item',
+        category: 'Audio',
+      },
+    ]
+
+    const categoriesView = render(<AdminCategoriesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Edit Audio' }))
+    const form = await screen.findByRole('dialog')
+    const nameInput = within(form).getByLabelText('Category name')
+    await user.clear(nameInput)
+    await user.type(nameInput, 'Sound')
+    await user.click(within(form).getByRole('button', { name: 'Save category' }))
+    await waitFor(() => expect(backendProducts[0].category).toBe('Sound'))
+    expect(backendCategories.some((category) => category.name === 'Sound')).toBe(
+      true,
+    )
+    expect(backendCategories.some((category) => category.name === 'Audio')).toBe(
+      false,
+    )
+    categoriesView.unmount()
+
+    render(<AdminProductsPage />)
+    expect(await screen.findByText('Showing 1–1 of 1 products')).toBeDefined()
+    expect(within(screen.getByRole('table')).getByText('Sound')).toBeDefined()
+  })
+
+  it('updates both pages when a product category is changed', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    setSharedCategories(['Audio', 'Phone'])
+    backendProducts = [
+      {
+        ...backendProducts[0],
+        product_id: 'audio-2',
+        product_name: 'Audio Item 2',
+        category: 'Audio',
+      },
+    ]
+
+    const productsView = render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', { name: 'Edit Audio Item 2' }),
+    )
+    const form = await screen.findByRole('dialog')
+    await user.selectOptions(within(form).getByLabelText('Category'), 'Phone')
+    await user.click(within(form).getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(backendProducts[0].category).toBe('Phone'))
+    productsView.unmount()
+
+    render(<AdminCategoriesPage />)
+    await screen.findByText('Phone')
+    const audioRow = (await screen.findByText('Audio')).closest('tr')
+    const phoneRow = screen.getByText('Phone').closest('tr')
+    expect(within(audioRow!).getByText('0')).toBeDefined()
+    expect(within(phoneRow!).getByText('1')).toBeDefined()
+  })
+
+  it('blocks duplicate categories including plural variants', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    setSharedCategories(['Phone', 'Audio'])
+
+    render(<AdminCategoriesPage />)
+    await user.click(await screen.findByRole('button', { name: 'Add category' }))
+    const form = await screen.findByRole('dialog')
+    await user.type(within(form).getByLabelText('Category name'), 'Phones')
+    await user.click(within(form).getByRole('button', { name: 'Save category' }))
+    expect(await screen.findByRole('status')).toBeDefined()
+    expect(screen.getByRole('status').textContent).toContain('already exists')
+    expect(backendCategories).toHaveLength(2)
+  })
+
+  it('shows an error and pauses product writes when categories cannot load', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), 'http://localhost')
+        if (
+          url.pathname === '/api/admin/categories' &&
+          (init?.method ?? 'GET') === 'GET'
+        ) {
+          return Promise.resolve(jsonResponse({ detail: 'boom' }, 500))
+        }
+        return mockBackendFetch(input, init)
+      }),
+    )
+    seedAccounts('admin@example.test', 'Admin')
+
+    render(<AdminProductsPage />)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(
+      'Could not load categories from Category Management',
+    )
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Add manual product',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true)
   })
 })

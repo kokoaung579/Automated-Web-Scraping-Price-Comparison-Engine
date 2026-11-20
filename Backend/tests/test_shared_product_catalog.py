@@ -16,8 +16,12 @@ from app.main import (
 )
 from app.models import (
     AdminProduct,
+<<<<<<< HEAD
     Product,
     StoreOffer,
+=======
+    PublicProduct,
+>>>>>>> origin/member-4-dashboard
     admin_product_to_catalog_document,
 )
 
@@ -144,12 +148,15 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
             price_history=MemoryCollection(),
             audit_logs=MemoryCollection(),
             watchlist=MemoryCollection([{
-                "_id": "admin-product-1",
+                "_id": "user-watchlist:user-1:admin-product-1",
+                "user_id": "user-1",
                 "productId": "admin-product-1",
                 "addedAt": "2026-11-17T00:00:00Z",
             }]),
             alerts=MemoryCollection([{
-                "_id": "admin-product-alert",
+                "_id": "user-alert:user-1:admin-product-alert",
+                "id": "admin-product-alert",
+                "user_id": "user-1",
                 "productId": "admin-product-1",
             }]),
         )
@@ -160,7 +167,7 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
             brand="PricePilot",
             model="PP-1",
             description="Wireless headphones",
-            image_url=None,
+            image_url="https://example.test/images/admin-catalog-headphones.jpg",
             product_url="https://example.test/product",
             store_id="best-buy",
             price=89.99,
@@ -182,8 +189,12 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("admin-product-1", database.admin_products.documents)
         self.assertEqual(public_products[0]["name"], "Admin Catalog Headphones")
         self.assertEqual(public_products[0]["id"], "admin-product-1")
+        self.assertEqual(
+            public_products[0]["image_url"],
+            "https://example.test/images/admin-catalog-headphones.jpg",
+        )
         self.assertEqual(admin_products[0], product)
-        Product.model_validate(public_products[0])
+        PublicProduct.model_validate(public_products[0])
         self.assertEqual(
             next(iter(database.offers.documents.values()))["price"],
             89.99,
@@ -431,7 +442,9 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
             products=MemoryCollection([{"_id": "existing-product"}]),
             alerts=MemoryCollection([
                 {
-                    "_id": "valid-alert",
+                    "_id": "user-alert:user-1:valid-alert",
+                    "id": "valid-alert",
+                    "user_id": "user-1",
                     "productId": "existing-product",
                     "type": "target-price",
                     "threshold": 100,
@@ -440,7 +453,9 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
                     "createdAt": "2026-11-17T00:00:00Z",
                 },
                 {
-                    "_id": "orphan-alert",
+                    "_id": "user-alert:user-1:orphan-alert",
+                    "id": "orphan-alert",
+                    "user_id": "user-1",
                     "productId": "deleted-product",
                     "type": "target-price",
                     "threshold": 100,
@@ -451,12 +466,14 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
             ]),
             watchlist=MemoryCollection([
                 {
-                    "_id": "existing-product",
+                    "_id": "user-watchlist:user-1:existing-product",
+                    "user_id": "user-1",
                     "productId": "existing-product",
                     "addedAt": "2026-11-17T00:00:00Z",
                 },
                 {
-                    "_id": "deleted-product",
+                    "_id": "user-watchlist:user-1:deleted-product",
+                    "user_id": "user-1",
                     "productId": "deleted-product",
                     "addedAt": "2026-11-17T00:00:00Z",
                 },
@@ -464,8 +481,8 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch("app.main.get_database", return_value=database):
-            alerts = await list_alerts()
-            watchlist = await list_watchlist()
+            alerts = await list_alerts({"_id": "user-1"})
+            watchlist = await list_watchlist({"_id": "user-1"})
 
         self.assertEqual([alert["id"] for alert in alerts], ["valid-alert"])
         self.assertEqual(
