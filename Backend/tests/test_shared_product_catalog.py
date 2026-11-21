@@ -16,12 +16,8 @@ from app.main import (
 )
 from app.models import (
     AdminProduct,
-<<<<<<< HEAD
-    Product,
-    StoreOffer,
-=======
     PublicProduct,
->>>>>>> origin/member-4-dashboard
+    StoreOffer,
     admin_product_to_catalog_document,
 )
 

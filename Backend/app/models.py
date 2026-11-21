@@ -1,6 +1,6 @@
 ﻿from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class APIModel(BaseModel):
@@ -204,16 +204,6 @@ class PriceAlert(APIModel):
     targetPrice: float = Field(gt=0)
     status: Literal["active", "triggered"]
     createdAt: str = Field(min_length=1)
-<<<<<<< HEAD
-    userId: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("userId", "user_id"),
-        serialization_alias="userId",
-    )
-=======
-    user_id: str | None = None
-    emailNotifiedPrice: float | None = None
->>>>>>> origin/member-4-dashboard
 
 
 class WatchlistEntry(APIModel):
@@ -356,16 +346,6 @@ class PriceAlert(APIModel):
     targetPrice: float = Field(gt=0)
     status: Literal["active", "triggered"]
     createdAt: str = Field(min_length=1)
-<<<<<<< HEAD
-    userId: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("userId", "user_id"),
-        serialization_alias="userId",
-    )
-=======
-    user_id: str | None = None
-    emailNotifiedPrice: float | None = None
->>>>>>> origin/member-4-dashboard
 
 
 class WatchlistEntry(APIModel):

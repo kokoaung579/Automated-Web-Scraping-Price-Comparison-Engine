@@ -24,6 +24,7 @@ import type { AppOutletContext } from '../context/AppOutletContext'
 import { validHttpUrl } from '../data/adminProducts'
 import { mergeCatalogProducts } from '../data/catalogProducts'
 import type { DemoProduct } from '../data/products'
+import { isValidStoreOffer } from '../data/storeOffers'
 import type { StoreOffer } from '../data/storeOffers'
 
 type PriceRange = 'all' | 'under-200' | '200-400' | 'over-400'
@@ -814,7 +815,7 @@ function BestOfferSection({ product }: { product: DemoProduct | null }) {
 
   const offers =
     product && offerState?.productId === product.id ? offerState.offers : []
-  const validOffers = offers.filter((offer) => offer.price > 0)
+  const validOffers = offers.filter(isValidStoreOffer)
   const prices = validOffers.map((offer) => offer.price)
   const lowest = prices.length ? Math.min(...prices) : 0
   const highest = prices.length ? Math.max(...prices) : 0

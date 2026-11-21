@@ -550,7 +550,6 @@ export function ProductDetailPage() {
   )
   const sortedOffers = useMemo(
     () =>
-<<<<<<< HEAD
       [...storeOffers].sort((first, second) => {
         const firstIsValid = isValidStoreOffer(first)
         const secondIsValid = isValidStoreOffer(second)
@@ -560,11 +559,6 @@ export function ProductDetailPage() {
         }
         return first.price - second.price
       }),
-=======
-      [...storeOffers]
-        .filter((offer) => Number.isFinite(offer.price) && offer.price > 0)
-        .sort((first, second) => first.price - second.price),
->>>>>>> origin/member-4-dashboard
     [storeOffers],
   )
   const histories = useMemo<StoreHistory[]>(() => {
@@ -694,8 +688,9 @@ export function ProductDetailPage() {
     ? historyPrices.reduce((total, price) => total + price, 0) /
       historyPrices.length
     : product.price
-  const cheapestPrice = sortedOffers[0]?.price ?? product.price
-  const cheapestStore = sortedOffers[0]?.store ?? product.store
+  const cheapestOffer = sortedOffers.find(isValidStoreOffer)
+  const cheapestPrice = cheapestOffer?.price ?? product.price
+  const cheapestStore = cheapestOffer?.store ?? product.store
   const priceDifference = getPriceDifference(product)
   const isWatchlisted = watchlistIds.includes(product.id)
   const hasCurrentPriceData = Boolean(
@@ -959,36 +954,6 @@ export function ProductDetailPage() {
             }
           />
         </div>
-<<<<<<< HEAD
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[480px] text-left">
-            <thead className="border-b border-white/[0.06] bg-white/[0.015]">
-              <tr className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                <th scope="col" className="px-5 py-3">Store</th>
-                <th scope="col" className="px-4 py-3">Price</th>
-                <th scope="col" className="px-5 py-3 text-right">Offer</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/[0.05]">
-              {sortedOffers.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={3}
-                    className="px-5 py-8 text-center text-xs text-slate-500"
-                    role="status"
-                  >
-                    {isLoadingPriceData
-                      ? 'Loading current store offers…'
-                      : currentPriceDataError
-                        ? `Could not load current store offers: ${currentPriceDataError}`
-                        : 'No current store offers are recorded.'}
-                  </td>
-                </tr>
-              ) : sortedOffers.map((offer) => {
-                const validPrice = isValidStoreOffer(offer)
-                const cheapest = validPrice && offer.price === cheapestPrice
-=======
-
         <div className="min-w-0 p-4 sm:p-6">
           {isLoadingPriceData ? (
             <div role="status" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -1019,9 +984,9 @@ export function ProductDetailPage() {
             </div>
           ) : sortedOffers.length > 0 ? (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {sortedOffers.map((offer, index) => {
-                const cheapest = index === 0
->>>>>>> origin/member-4-dashboard
+              {sortedOffers.map((offer) => {
+                const validPrice = isValidStoreOffer(offer)
+                const cheapest = validPrice && offer.price === cheapestPrice
                 return (
                   <article
                     key={offer.store}
@@ -1052,36 +1017,20 @@ export function ProductDetailPage() {
                         cheapest ? 'text-emerald-200' : 'text-white'
                       }`}
                     >
-<<<<<<< HEAD
                       {validPrice ? formatPrice(offer.price) : 'Invalid price'}
-                    </td>
-                    <td className="px-5 py-3.5 text-right">
-                      {!validPrice ? (
-                        <span className="text-[10px] text-slate-600">
-                          Invalid price
-                        </span>
-                      ) : cheapest ? (
-                        <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-400/[0.08] px-2 py-1 text-[10px] font-semibold text-emerald-300">
-                          <Check aria-hidden="true" size={11} />
-                          Best price
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-slate-500">
-                          +{formatPrice(offer.price - cheapestPrice)}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-=======
-                      {formatPrice(offer.price)}
                     </p>
-                    <p className="mt-1 text-[10px] text-slate-500">
-                      {cheapest
-                        ? 'Lowest recorded offer'
-                        : `${formatPrice(offer.price - cheapestPrice)} above best price`}
-                    </p>
+                    {validPrice ? (
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        {cheapest
+                          ? 'Lowest recorded offer'
+                          : `${formatPrice(offer.price - cheapestPrice)} above best price`}
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        No valid price is recorded for this offer.
+                      </p>
+                    )}
                   </article>
->>>>>>> origin/member-4-dashboard
                 )
               })}
             </div>

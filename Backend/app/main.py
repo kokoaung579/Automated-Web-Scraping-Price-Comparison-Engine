@@ -44,20 +44,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from pymongo.errors import DuplicateKeyError
 
 from app.database import connect_db
-<<<<<<< HEAD
 from app.services.product_catalog import (
     find_comparable_product_ids,
-    ingest_product_listing,
     normalize_store_id,
     product_identity_key,
     upsert_admin_product_offer,
-=======
-from app.services.product_catalog import upsert_admin_product_offer
+)
 from app.services.category_catalog import (
     canonical_category_name,
     ensure_product_categories,
     stored_category_names,
->>>>>>> origin/member-4-dashboard
 )
 from app.models import (
     AdminProduct,
@@ -210,9 +206,10 @@ async def migrate_legacy_admin_products(database) -> None:
 
         previous_price = None
         if existing:
-            previous_price = existing.get("previousPrice", existing["price"])
-            if existing["price"] != product.price:
-                previous_price = existing["price"]
+            previous_price = existing.get("previousPrice")
+            existing_price = existing.get("price")
+            if existing_price is not None and existing_price != product.price:
+                previous_price = existing_price
         await database.products.update_one(
             {"_id": product.product_id},
             {
@@ -320,7 +317,6 @@ def mongo_payload(model) -> dict:
     return model.model_dump(exclude={"id"}, exclude_none=True)
 
 
-<<<<<<< HEAD
 OFFER_QUERY_PROJECTION = {
     "_id": 1,
     "store": 1,
@@ -359,10 +355,10 @@ def serialize_offer(offer: dict, price: float | None = None) -> dict:
         and raw_shipping_fee >= 0
         else None
     )
+    store = offer.get("store") or "Unknown store"
     return {
-        "store": offer.get("store", "Unknown store"),
-        "store_id": offer.get("storeId")
-        or normalize_store_id(offer.get("store")),
+        "store": store,
+        "store_id": offer.get("storeId") or normalize_store_id(store),
         "offer_id": offer.get("offerId") or str(offer.get("_id", "")),
         "source_product_id": offer.get("sourceProductId"),
         "store_product_name": offer.get("storeProductName"),
@@ -371,8 +367,8 @@ def serialize_offer(offer: dict, price: float | None = None) -> dict:
         "store_category": offer.get("storeCategory"),
         "sku": offer.get("sku"),
         "price": valid_price,
-        "currency": offer.get("currency", "USD"),
-        "availability": offer.get("availability", "unknown"),
+        "currency": offer.get("currency") or "USD",
+        "availability": offer.get("availability") or "unknown",
         "shipping_fee": shipping_fee,
         "product_url": offer.get("productUrl"),
         "updated_at": offer.get("updatedAt"),
@@ -390,7 +386,8 @@ def deduplicate_offers(offers: list[dict]) -> list[dict]:
         ) >= (existing.get("updated_at") or ""):
             unique_offers[key] = offer
     return list(unique_offers.values())
-=======
+
+
 PRIVATE_ALERT_FIELDS = (
     "id",
     "productId",
@@ -423,7 +420,6 @@ def alert_document_id(user_id: str, alert_id: str) -> str:
 
 def watchlist_document_id(user_id: str, product_id: str) -> str:
     return f"user-watchlist:{user_id}:{product_id}"
->>>>>>> origin/member-4-dashboard
 
 
 # ==========================================
@@ -452,9 +448,6 @@ async def create_admin_product(
     request: Request,
     admin: dict = Depends(require_admin),
 ):
-<<<<<<< HEAD
-    result = await ingest_product_listing(get_database(), product)
-=======
     product = await require_shared_category(product, admin, request, "CREATE")
     try:
         await get_database().products.insert_one(
@@ -494,11 +487,16 @@ async def create_admin_product(
         )
         raise
 
->>>>>>> origin/member-4-dashboard
+    result = {
+        "status": "created",
+        "product": product,
+        "shared_product_id": product.product_id,
+        "review_id": None,
+    }
     await audit_event(
         admin,
         request,
-        action="CREATE" if result["status"] == "created" else "UPDATE",
+        action="CREATE",
         module="PRODUCT_MANAGEMENT",
         description=f"Product {product.product_name} was {result['status']}.",
         target_record_id=product.product_id,
@@ -562,9 +560,10 @@ async def update_admin_product(
         )
 
     product = await require_shared_category(product, admin, request, "UPDATE")
-    previous_price = existing.get("previousPrice", existing["price"])
-    if existing["price"] != product.price:
-        previous_price = existing["price"]
+    previous_price = existing.get("previousPrice")
+    existing_price = existing.get("price")
+    if existing_price is not None and existing_price != product.price:
+        previous_price = existing_price
     fields = admin_product_to_catalog_document(
         product,
         previous_price=previous_price,
@@ -981,27 +980,11 @@ async def list_alerts(user: dict = Depends(require_user)):
     ).to_list(length=None)
     product_ids = {document["_id"] for document in product_documents}
 
-<<<<<<< HEAD
-    alerts: list[PriceAlert] = []
-    for document in documents:
-        if document.get("productId") not in product_ids:
-            continue
-        try:
-            alerts.append(PriceAlert.model_validate(serialize_document(document)))
-        except Exception as exc:
-            logger.warning(
-                "Skipping malformed price alert document %s: %s",
-                document.get("_id"),
-                exc,
-            )
-    return [alert.model_dump() for alert in alerts]
-=======
     return [
         serialize_owned_document(document, PRIVATE_ALERT_FIELDS)
         for document in documents
         if document.get("productId") in product_ids
     ]
->>>>>>> origin/member-4-dashboard
 
 
 @app.post(
