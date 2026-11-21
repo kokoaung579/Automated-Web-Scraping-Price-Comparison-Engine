@@ -255,6 +255,7 @@ type HarnessOptions = {
   context?: AppOutletContext | null
   error?: boolean
   comparisonHandler?: (url: URL) => unknown
+  initialEntry?: string | { pathname: string; state?: unknown }
 }
 
 function renderPage(options: HarnessOptions = {}) {
@@ -323,7 +324,7 @@ function renderPage(options: HarnessOptions = {}) {
   }
 
   render(
-    <MemoryRouter initialEntries={['/comparison']}>
+    <MemoryRouter initialEntries={[options.initialEntry ?? '/comparison']}>
       <Routes>
         {context ? (
           <Route path="/comparison" element={<ContextRoute />}>
@@ -374,6 +375,28 @@ describe('Price Comparison page', () => {
     expect(within(summary).getAllByText('$29.95').length).toBeGreaterThan(0)
     expect(within(summary).queryByText('$15.70')).toBeNull()
     expect(screen.getByText('Actual stored product description.')).toBeDefined()
+  })
+
+  it('pre-selects the product passed from the Products page', async () => {
+    renderPage({
+      initialEntry: {
+        pathname: '/comparison',
+        state: { productId: 'B0GHY4PR3N', productName: 'JBL Tune 530BT' },
+      },
+    })
+
+    const item = await screen.findByRole('button', { name: /JBL Tune 530BT/ })
+    await waitFor(() => {
+      expect(item).toHaveProperty('aria-pressed', 'true')
+    })
+    expect(
+      screen.getByRole('heading', { name: 'JBL Tune 530BT' }),
+    ).toBeDefined()
+    expect(
+      screen.getByRole('searchbox', {
+        name: /Search products by name, brand, model or ASIN/i,
+      }),
+    ).toHaveProperty('value', 'JBL Tune 530BT')
   })
 
   it('searches by ASIN, brand or model through the shared API client', async () => {

@@ -494,7 +494,7 @@ describe('Product Catalog pagination', () => {
     expect(screen.queryByText(/Save \$/)).toBeNull()
 
     const compareLink = screen.getByRole('link', { name: /Compare Prices/i })
-    expect(compareLink.getAttribute('href')).toBe('/price-comparison')
+    expect(compareLink.getAttribute('href')).toBe('/comparison')
     expect(compareLink.className).toContain('from-violet-500')
 
     expect(screen.getByRole('button', { name: 'Clear filters' })).toHaveProperty(
