@@ -1,17 +1,17 @@
 import {
   isScrapingExecution,
   isScrapingJob,
+  isScrapingTarget,
 } from '../data/adminScraping'
 import type {
   CreateScrapingJobInput,
   ScrapingExecution,
   ScrapingJob,
+  ScrapingTarget,
 } from '../data/adminScraping'
-import type { Product } from '../types/product'
-
-export type ScrapedProductResults = Product[]
 
 export type ScrapingApiOperation =
+  | 'getTargets'
   | 'createJob'
   | 'getJobs'
   | 'getJobDetails'
@@ -40,127 +40,26 @@ export type ScrapingApiConfiguration = {
 }
 
 export type ScrapingApiMode =
-  | { mode: 'demo' }
   | { mode: 'live'; client: ScrapingApiClient }
   | { mode: 'error'; message: string }
 
-const operations: ScrapingApiOperation[] = [
-  'createJob',
-  'getJobs',
-  'getJobDetails',
-  'startJob',
-  'pauseJob',
-  'resumeJob',
-  'cancelJob',
-  'getExecutionHistory',
-]
-const jobOperations: ScrapingApiOperation[] = [
-  'getJobDetails',
-  'startJob',
-  'pauseJob',
-  'resumeJob',
-  'cancelJob',
-  'getExecutionHistory',
-]
-const methods: ScrapingHttpMethod[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
-
-function isEndpoint(value: unknown): value is ScrapingApiEndpoint {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return false
-  }
-  const endpoint = value as Record<string, unknown>
-  return (
-    typeof endpoint.path === 'string' &&
-    endpoint.path.startsWith('/') &&
-    !endpoint.path.startsWith('//') &&
-    !endpoint.path.includes('://') &&
-    typeof endpoint.method === 'string' &&
-    methods.includes(endpoint.method as ScrapingHttpMethod)
-  )
-}
-
-function isScrapingApiEndpoints(value: unknown): value is ScrapingApiEndpoints {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return false
-  }
-  const endpointMap = value as Record<string, unknown>
-  return (
-    operations.every((operation) => isEndpoint(endpointMap[operation])) &&
-    jobOperations.every((operation) => {
-      const endpoint = endpointMap[operation]
-      return isEndpoint(endpoint) && endpoint.path.includes('{jobId}')
-    })
-  )
-}
-
-function parseEndpoints(value: string): ScrapingApiEndpoints {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(value)
-  } catch {
-    throw new Error('VITE_SCRAPING_API_ENDPOINTS must contain valid JSON.')
-  }
-  if (!isScrapingApiEndpoints(parsed)) {
-    throw new Error(
-      'Configure a relative path and HTTP method for every scraping operation. Job-specific paths must include the {jobId} placeholder.',
-    )
-  }
-  return parsed
-}
-
-export function resolveScrapingApiMode(
-  baseUrlValue?: string,
-  endpointsValue?: string,
-): ScrapingApiMode {
-  const baseUrl = baseUrlValue?.trim() ?? ''
-  const endpointsJson = endpointsValue?.trim() ?? ''
-  if (!baseUrl && !endpointsJson) return { mode: 'demo' }
-  if (!baseUrl || !endpointsJson) {
-    return {
-      mode: 'error',
-      message:
-        'Live scraping API mode requires both VITE_SCRAPING_API_BASE_URL and VITE_SCRAPING_API_ENDPOINTS. Demo controls are disabled.',
-    }
-  }
-
-  let parsedUrl: URL
-  try {
-    parsedUrl = new URL(baseUrl)
-  } catch {
-    return { mode: 'error', message: 'The scraping API base URL is invalid.' }
-  }
-  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-    return {
-      mode: 'error',
-      message: 'The scraping API base URL must use HTTP or HTTPS.',
-    }
-  }
-
-  try {
-    const config: ScrapingApiConfiguration = {
-      baseUrl: parsedUrl.toString().replace(/\/+$/, ''),
-      endpoints: parseEndpoints(endpointsJson),
-    }
-    return { mode: 'live', client: createScrapingApiClient(config) }
-  } catch (error) {
-    return {
-      mode: 'error',
-      message:
-        error instanceof Error
-          ? error.message
-          : 'Scraping API endpoint configuration is invalid.',
-    }
-  }
-}
-
-export function getScrapingApiMode(): ScrapingApiMode {
-  return resolveScrapingApiMode(
-    import.meta.env.VITE_SCRAPING_API_BASE_URL,
-    import.meta.env.VITE_SCRAPING_API_ENDPOINTS,
-  )
+export const backendScrapingEndpoints: ScrapingApiEndpoints = {
+  getTargets: { path: '/api/admin/scraping/targets', method: 'GET' },
+  createJob: { path: '/api/admin/scraping/jobs', method: 'POST' },
+  getJobs: { path: '/api/admin/scraping/jobs', method: 'GET' },
+  getJobDetails: { path: '/api/admin/scraping/jobs/{jobId}', method: 'GET' },
+  startJob: { path: '/api/admin/scraping/jobs/{jobId}/run', method: 'POST' },
+  pauseJob: { path: '/api/admin/scraping/jobs/{jobId}/pause', method: 'POST' },
+  resumeJob: { path: '/api/admin/scraping/jobs/{jobId}/resume', method: 'POST' },
+  cancelJob: { path: '/api/admin/scraping/jobs/{jobId}/cancel', method: 'POST' },
+  getExecutionHistory: {
+    path: '/api/admin/scraping/jobs/{jobId}/executions',
+    method: 'GET',
+  },
 }
 
 export type ScrapingApiClient = {
+  getTargets: () => Promise<ScrapingTarget[]>
   createJob: (input: CreateScrapingJobInput) => Promise<ScrapingJob>
   getJobs: () => Promise<ScrapingJob[]>
   getJobDetails: (jobId: string) => Promise<ScrapingJob>
@@ -188,7 +87,9 @@ export function createScrapingApiClient(
       /\{jobId\}/g,
       encodeURIComponent(options.jobId ?? ''),
     )
-    const url = new URL(path.slice(1), `${configuration.baseUrl}/`)
+    const url = configuration.baseUrl
+      ? new URL(path.slice(1), `${configuration.baseUrl}/`).toString()
+      : path
     const headers = new Headers(configuration.headers)
     headers.set('Accept', 'application/json')
     if (options.body !== undefined) headers.set('Content-Type', 'application/json')
@@ -197,11 +98,9 @@ export function createScrapingApiClient(
     try {
       response = await fetcher(url, {
         method: endpoint.method,
+        credentials: configuration.baseUrl ? 'omit' : 'include',
         headers,
-        body:
-          options.body === undefined
-            ? undefined
-            : JSON.stringify(options.body),
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
       })
     } catch (error) {
       throw new Error(
@@ -209,19 +108,29 @@ export function createScrapingApiClient(
         { cause: error },
       )
     }
-    if (!response.ok) {
-      throw new Error(
-        `Scraping API ${operation} failed with HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}.`,
-      )
+
+    let body: unknown = null
+    try {
+      body = await response.json()
+    } catch {
+      body = null
     }
 
-    try {
-      return await response.json()
-    } catch {
-      throw new Error(
-        `Scraping API ${operation} must return a JSON response body.`,
-      )
+    if (!response.ok) {
+      const detail =
+        typeof body === 'object' &&
+        body !== null &&
+        'detail' in body &&
+        typeof (body as { detail?: unknown }).detail === 'string'
+          ? (body as { detail: string }).detail
+          : `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`
+      throw new Error(detail)
     }
+
+    if (body === null) {
+      throw new Error(`Scraping API ${operation} must return a JSON response body.`)
+    }
+    return body
   }
 
   async function readJob(
@@ -236,6 +145,13 @@ export function createScrapingApiClient(
   }
 
   return {
+    async getTargets() {
+      const value = await request('getTargets')
+      if (!Array.isArray(value) || !value.every(isScrapingTarget)) {
+        throw new Error('Scraping API getTargets returned invalid targets.')
+      }
+      return value
+    },
     createJob: (input) => readJob('createJob', { body: input }),
     async getJobs() {
       const value = await request('getJobs')
@@ -259,4 +175,17 @@ export function createScrapingApiClient(
       return value
     },
   }
+}
+
+export function createBackendScrapingApiClient(
+  fetcher: typeof fetch = fetch,
+): ScrapingApiClient {
+  return createScrapingApiClient(
+    { baseUrl: '', endpoints: backendScrapingEndpoints },
+    fetcher,
+  )
+}
+
+export function getScrapingApiMode(): ScrapingApiMode {
+  return { mode: 'live', client: createBackendScrapingApiClient() }
 }

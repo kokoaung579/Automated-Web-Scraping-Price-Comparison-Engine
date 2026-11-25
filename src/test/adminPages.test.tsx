@@ -19,9 +19,16 @@ import {
 } from '../data/adminCategories'
 import type { AdminCategory } from '../data/adminCategories'
 import type { AdminStore } from '../data/adminStores'
-import { loadScrapingJobs } from '../data/adminScraping'
+import type {
+  CreateScrapingJobInput,
+  ScrapingExecution,
+  ScrapingJob,
+  ScrapingJobStatus,
+  ScrapingTarget,
+} from '../data/adminScraping'
 import type { AuditLog } from '../data/adminAuditLogs'
 import type { Product } from '../types/product'
+import type { ManualOfferRecord } from '../types/manualOffer'
 import type { AuthUser, BrowserAccountImport } from '../types/auth'
 import { AuthProvider } from '../auth/AuthProvider'
 import { SystemSettingsProvider } from '../context/SystemSettingsContext'
@@ -39,13 +46,16 @@ type TestAccount = {
 let backendProducts: Product[] = []
 let backendCategories: AdminCategory[] = []
 let backendStores: Array<AdminStore & { product_count: number }> = []
+let backendManualOffers: ManualOfferRecord[] = []
+let manualVerificationError: { status: number; detail: string } | null = null
 let backendAuditLogs: AuditLog[] = []
+let backendScrapingJobs: ScrapingJob[] = []
 let backendUsers: AuthUser[] = []
 let backendSession: AuthUser | null = null
 let failNextUserDelete = false
 let storeCreateRequests = 0
 let productAuditCalls: Array<{
-  kind: 'import' | 'export' | 'delete'
+  kind: 'import' | 'export' | 'delete' | 'verify_manual_offer'
   payload: Record<string, unknown>
 }> = []
 let failBulkDeleteIds: Set<string> = new Set()
@@ -72,6 +82,70 @@ const amazonStore: AdminStore & { product_count: number } = {
   created_at: '2026-11-13T00:00:00.000Z',
   updated_at: '2026-11-13T00:00:00.000Z',
   product_count: 5,
+}
+
+const webScraperTarget: ScrapingTarget = {
+  store_id: 'webscraper-io',
+  store_name: 'WebScraper.io Test Site',
+  website_url: 'https://webscraper.io',
+  logo_url: null,
+  status: 'Active',
+  created_at: '2026-11-20T00:00:00.000Z',
+  updated_at: '2026-11-20T00:00:00.000Z',
+  target_url:
+    'https://webscraper.io/test-sites/e-commerce/static/computers/laptops',
+  default_product_limit: 10,
+  max_product_limit: 15,
+}
+
+function realExecution(
+  status: ScrapingJobStatus,
+  errors: string[] = [],
+): ScrapingExecution {
+  return {
+    id: `execution-${backendScrapingJobs.length + 1}`,
+    job_id: `job-${backendScrapingJobs.length + 1}`,
+    started_at: '2026-11-20T03:00:00.000Z',
+    finished_at: '2026-11-20T03:00:12.000Z',
+    status,
+    products_found: 10,
+    success_count: errors.length ? 9 : 10,
+    failure_count: errors.length ? 1 : 0,
+    products_created: errors.length ? 9 : 10,
+    products_refreshed: 0,
+    success_rate: errors.length ? 90 : 100,
+    duration_seconds: 12,
+    errors,
+    logs: ['Fetched 2 pages and validated 10 products.'],
+    target_url: webScraperTarget.target_url,
+    product_limit: 10,
+  }
+}
+
+function makeScrapingJob(
+  overrides: Partial<ScrapingJob> = {},
+): ScrapingJob {
+  return {
+    id: 'job-1',
+    store_id: webScraperTarget.store_id,
+    store_name: webScraperTarget.store_name,
+    website_url: webScraperTarget.website_url,
+    configuration: {
+      interval_minutes: 60,
+      scheduled_at: '2026-11-20T04:00:00.000Z',
+      request_timeout_seconds: 30,
+      retry_attempts: 3,
+      product_limit: 10,
+    },
+    status: 'completed',
+    last_run: '2026-11-20T03:00:00.000Z',
+    next_run: '2026-11-20T04:00:00.000Z',
+    products_found: 10,
+    success_rate: 100,
+    executions: [realExecution('completed')],
+    updated_at: '2026-11-20T03:00:12.000Z',
+    ...overrides,
+  }
 }
 
 function backendAuditLog(index: number): AuditLog {
@@ -172,6 +246,49 @@ function productRow(productId: string, productName: string) {
     currency: 'usd',
     availability: 'in_stock',
     source_type: 'manual',
+  }
+}
+
+function manualVerificationProduct(): Product {
+  const [template] = loadAdminProducts()
+  return {
+    ...template,
+    product_id: 'manual-verification-1',
+    product_name: 'Manual Verification Product',
+    category: getProductCategories()[0],
+    store_id: 'zone',
+    product_url: 'https://www.zone.example/manual-verification-1',
+    price: 120,
+    currency: 'USD',
+    availability: 'in_stock',
+    source_type: 'manual',
+  }
+}
+
+function manualOfferRecord(
+  overrides: Partial<ManualOfferRecord> = {},
+): ManualOfferRecord {
+  return {
+    offer_id: 'manual-offer-1',
+    product_id: 'manual-verification-1',
+    store: 'Zone',
+    store_id: 'zone',
+    price: 120,
+    currency: 'USD',
+    product_url: 'https://www.zone.example/manual-verification-1',
+    availability: 'unknown',
+    catalog_availability: 'in_stock',
+    source_type: 'manual',
+    verification_status: 'unverified_excluded',
+    verified: false,
+    verified_by: null,
+    verified_at: null,
+    evidence_url: null,
+    verification_note: null,
+    last_checked_at: null,
+    updated_at: null,
+    is_test_site: false,
+    ...overrides,
   }
 }
 
@@ -300,6 +417,97 @@ async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
       backendProducts = [...backendProducts, product]
       return jsonResponse(product, 201)
     }
+  }
+
+  if (url.pathname === '/api/admin/manual-offers' && method === 'GET') {
+    const productId = url.searchParams.get('product_id')
+    return jsonResponse(
+      productId
+        ? backendManualOffers.filter((offer) => offer.product_id === productId)
+        : backendManualOffers,
+    )
+  }
+
+  const manualVerifyMatch = url.pathname.match(
+    /^\/api\/admin\/manual-offers\/([^/]+)\/verify$/,
+  )
+  if (manualVerifyMatch && method === 'POST') {
+    if (manualVerificationError) {
+      const error = manualVerificationError
+      manualVerificationError = null
+      return jsonResponse({ detail: error.detail }, error.status)
+    }
+    const offerId = decodeURIComponent(manualVerifyMatch[1])
+    const body = JSON.parse(String(init?.body)) as {
+      availability: ManualOfferRecord['availability']
+      evidence_url?: string | null
+      verification_note?: string | null
+    }
+    const offer = backendManualOffers.find((item) => item.offer_id === offerId)
+    if (!offer) return jsonResponse({ detail: 'Manual offer not found.' }, 404)
+    if (offer.source_type !== 'manual') {
+      return jsonResponse(
+        { detail: 'Only manual offers can use this verification endpoint.' },
+        400,
+      )
+    }
+    const evidence =
+      typeof body.evidence_url === 'string' ? body.evidence_url.trim() : ''
+    const validEvidence = /^https?:\/\/[^\s]+$/i.test(evidence)
+    if (evidence && !validEvidence) {
+      return jsonResponse(
+        { detail: 'Evidence URL must be a valid HTTP or HTTPS URL.' },
+        400,
+      )
+    }
+    if (body.availability === 'in_stock' && !validEvidence) {
+      return jsonResponse(
+        { detail: 'A valid HTTP or HTTPS evidence URL is required.' },
+        400,
+      )
+    }
+
+    const verified = body.availability === 'in_stock'
+    const updated: ManualOfferRecord = {
+      ...offer,
+      availability: body.availability,
+      evidence_url: evidence || null,
+      verification_note: body.verification_note?.trim() || null,
+      verification_status: verified ? 'manually_verified' : 'unverified_excluded',
+      verified,
+      verified_by: verified ? 'admin@example.test' : null,
+      verified_at: verified ? '2026-11-20T10:00:00.000Z' : null,
+      last_checked_at: '2026-11-20T10:00:00.000Z',
+      updated_at: '2026-11-20T10:00:00.000Z',
+    }
+    backendManualOffers = backendManualOffers.map((item) =>
+      item.offer_id === offerId ? updated : item,
+    )
+    productAuditCalls.push({
+      kind: 'verify_manual_offer',
+      payload: { offer_id: offerId, ...body },
+    })
+    backendAuditLogs = [
+      {
+        id: `product-audit-${productAuditCalls.length}`,
+        timestamp: '2026-11-20T10:00:00.000Z',
+        actor_name: 'Admin User',
+        actor_email: 'admin@example.test',
+        actor_role: 'Admin',
+        action: 'VERIFY_MANUAL_OFFER',
+        action_type: 'verify-manual-offer',
+        module: 'product-management',
+        description: verified
+          ? `Manually verified In-Stock offer ${offerId}.`
+          : `Saved manual offer ${offerId} availability as ${body.availability} without verification.`,
+        ip_address: '127.0.0.1',
+        status: 'success',
+        details: [`offer_id: ${offerId}`, `availability: ${body.availability}`],
+        source: 'backend',
+      },
+      ...backendAuditLogs,
+    ]
+    return jsonResponse(updated)
   }
 
   if (url.pathname === '/api/admin/categories') {
@@ -748,6 +956,104 @@ async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(undefined, 204)
   }
 
+  if (
+    url.pathname === '/api/admin/scraping/targets' &&
+    method === 'GET'
+  ) {
+    return jsonResponse([webScraperTarget])
+  }
+  if (url.pathname === '/api/admin/scraping/jobs' && method === 'GET') {
+    return jsonResponse(backendScrapingJobs)
+  }
+  if (url.pathname === '/api/admin/scraping/jobs' && method === 'POST') {
+    const input = JSON.parse(String(init?.body)) as CreateScrapingJobInput
+    const job = makeScrapingJob({
+      id: `job-${backendScrapingJobs.length + 1}`,
+      configuration: {
+        interval_minutes: input.interval_minutes,
+        scheduled_at: input.scheduled_at,
+        request_timeout_seconds: input.request_timeout_seconds,
+        retry_attempts: input.retry_attempts,
+        product_limit: input.product_limit ?? 10,
+      },
+      status: 'queued',
+      last_run: null,
+      products_found: 0,
+      success_rate: 0,
+      executions: [],
+    })
+    backendScrapingJobs = [job, ...backendScrapingJobs]
+    return jsonResponse(job, 201)
+  }
+  const executionMatch = url.pathname.match(
+    /^\/api\/admin\/scraping\/jobs\/([^/]+)\/executions$/,
+  )
+  if (executionMatch && method === 'GET') {
+    const job = backendScrapingJobs.find(
+      (candidate) => candidate.id === decodeURIComponent(executionMatch[1]),
+    )
+    return jsonResponse(job?.executions ?? [])
+  }
+  const runMatch = url.pathname.match(
+    /^\/api\/admin\/scraping\/jobs\/([^/]+)\/run$/,
+  )
+  if (runMatch && method === 'POST') {
+    const index = backendScrapingJobs.findIndex(
+      (candidate) => candidate.id === decodeURIComponent(runMatch[1]),
+    )
+    if (index < 0) return jsonResponse({ detail: 'Scraping job not found.' }, 404)
+    const previous = backendScrapingJobs[index]
+    const execution = realExecution('completed', [
+      'Skipped one product card with a missing description.',
+    ])
+    const job = makeScrapingJob({
+      ...previous,
+      status: 'completed',
+      products_found: 10,
+      success_rate: 90,
+      executions: [execution, ...previous.executions],
+    })
+    backendScrapingJobs = backendScrapingJobs.map((candidate, position) =>
+      position === index ? job : candidate,
+    )
+    return jsonResponse(job)
+  }
+  const statusMatch = url.pathname.match(
+    /^\/api\/admin\/scraping\/jobs\/([^/]+)\/(pause|resume|cancel)$/,
+  )
+  if (statusMatch && method === 'POST') {
+    const action = statusMatch[2]
+    const index = backendScrapingJobs.findIndex(
+      (candidate) => candidate.id === decodeURIComponent(statusMatch[1]),
+    )
+    if (index < 0) return jsonResponse({ detail: 'Scraping job not found.' }, 404)
+    const nextStatus: ScrapingJobStatus =
+      action === 'pause'
+        ? 'paused'
+        : action === 'resume'
+          ? 'running'
+          : 'cancelled'
+    const job = makeScrapingJob({
+      ...backendScrapingJobs[index],
+      status: nextStatus,
+    })
+    backendScrapingJobs = backendScrapingJobs.map((candidate, position) =>
+      position === index ? job : candidate,
+    )
+    return jsonResponse(job)
+  }
+  const jobDetailsMatch = url.pathname.match(
+    /^\/api\/admin\/scraping\/jobs\/([^/]+)$/,
+  )
+  if (jobDetailsMatch && method === 'GET') {
+    const job = backendScrapingJobs.find(
+      (candidate) => candidate.id === decodeURIComponent(jobDetailsMatch[1]),
+    )
+    return job
+      ? jsonResponse(job)
+      : jsonResponse({ detail: 'Scraping job not found.' }, 404)
+  }
+
   if (url.pathname === '/api/health') {
     return jsonResponse({ status: 'ok', database: 'connected' })
   }
@@ -821,9 +1127,12 @@ describe('admin and shared user pages', () => {
     backendProducts = loadAdminProducts()
     backendCategories = getSeedAdminCategories()
     backendStores = [{ ...amazonStore }]
+    backendManualOffers = []
+    manualVerificationError = null
     backendAuditLogs = Array.from({ length: 20 }, (_, index) =>
       backendAuditLog(index),
     )
+    backendScrapingJobs = [makeScrapingJob()]
     backendUsers = []
     backendSession = null
     failNextUserDelete = false
@@ -1530,6 +1839,267 @@ describe('admin and shared user pages', () => {
     expect(productAuditCalls).toHaveLength(0)
   })
 
+  it('shows an existing manual offer as unverified before admin verification', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = [manualVerificationProduct()]
+    backendManualOffers = [manualOfferRecord()]
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Verify manual offer for Manual Verification Product',
+      }),
+    )
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Verify Manual Offer',
+    })
+    expect(within(dialog).getByText('Zone')).toBeDefined()
+    expect(within(dialog).getByText('$120.00')).toBeDefined()
+    expect(within(dialog).getByText('USD')).toBeDefined()
+    expect(within(dialog).getAllByText('unknown').length).toBeGreaterThan(0)
+    expect(
+      within(dialog).getByText('Catalog availability (separate)').parentElement
+        ?.textContent,
+    ).toContain('in stock')
+    expect(within(dialog).getByText('unverified excluded')).toBeDefined()
+    expect(within(dialog).queryByText('admin@example.test')).toBeNull()
+    expect(
+      within(dialog).getByRole('button', { name: 'Verify Manual Offer' }),
+    ).toBeDefined()
+    expect(productAuditCalls).toHaveLength(0)
+  })
+
+  it('verifies an existing manual offer and records one audit event', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = [manualVerificationProduct()]
+    backendManualOffers = [manualOfferRecord()]
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Verify manual offer for Manual Verification Product',
+      }),
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Verify Manual Offer',
+    })
+    await user.selectOptions(
+      within(dialog).getByLabelText('Offer availability'),
+      'in_stock',
+    )
+    await user.type(
+      within(dialog).getByLabelText('Evidence URL (required)'),
+      'https://www.zone.example/proof/manual-offer-1',
+    )
+    await user.type(
+      within(dialog).getByLabelText('Verification note (optional)'),
+      'Checked the retailer product page.',
+    )
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Verify Manual Offer' }),
+    )
+
+    await waitFor(() => expect(productAuditCalls).toHaveLength(1))
+    expect(productAuditCalls[0].kind).toBe('verify_manual_offer')
+    expect(productAuditCalls[0].payload).toMatchObject({
+      offer_id: 'manual-offer-1',
+      availability: 'in_stock',
+      evidence_url: 'https://www.zone.example/proof/manual-offer-1',
+      verification_note: 'Checked the retailer product page.',
+    })
+    expect(backendManualOffers[0]).toMatchObject({
+      verification_status: 'manually_verified',
+      verified: true,
+      verified_by: 'admin@example.test',
+      verified_at: '2026-11-20T10:00:00.000Z',
+    })
+
+    await waitFor(() => {
+      expect(within(dialog).getByText('manually verified')).toBeDefined()
+    })
+    expect(within(dialog).getByText(/admin@example.test/)).toBeDefined()
+    expect(within(dialog).getByText('Manual offer verification saved.')).toBeDefined()
+    const audit = backendAuditLogs.find(
+      (log) => log.action === 'VERIFY_MANUAL_OFFER',
+    )
+    expect(audit).toMatchObject({
+      action_type: 'verify-manual-offer',
+      module: 'product-management',
+      status: 'success',
+      actor_email: 'admin@example.test',
+    })
+  })
+
+  it('rejects missing and invalid evidence before submitting verification', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = [manualVerificationProduct()]
+    backendManualOffers = [manualOfferRecord()]
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Verify manual offer for Manual Verification Product',
+      }),
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Verify Manual Offer',
+    })
+    const form = dialog.querySelector('form')
+    expect(form).not.toBeNull()
+    await user.selectOptions(
+      within(dialog).getByLabelText('Offer availability'),
+      'in_stock',
+    )
+
+    fireEvent.submit(form as HTMLFormElement)
+    expect(
+      (await within(dialog).findByRole('alert')).textContent,
+    ).toContain('valid HTTP or HTTPS evidence URL is required')
+
+    await user.type(
+      within(dialog).getByLabelText('Evidence URL (required)'),
+      'ftp://zone.example/proof',
+    )
+    fireEvent.submit(form as HTMLFormElement)
+    await waitFor(() => {
+      expect(within(dialog).getByRole('alert').textContent).toContain(
+        'Evidence URL must be a valid HTTP or HTTPS URL.',
+      )
+    })
+
+    const fetchMock = vi.mocked(globalThis.fetch)
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input).includes('/verify') && init?.method === 'POST',
+      ),
+    ).toBe(false)
+    expect(productAuditCalls).toHaveLength(0)
+    expect(backendManualOffers[0].verified).toBe(false)
+  })
+
+  it('saves non-in-stock availability without marking the manual offer verified', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = [manualVerificationProduct()]
+    backendManualOffers = [manualOfferRecord()]
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Verify manual offer for Manual Verification Product',
+      }),
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Verify Manual Offer',
+    })
+    await user.selectOptions(
+      within(dialog).getByLabelText('Offer availability'),
+      'out_of_stock',
+    )
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Verify Manual Offer' }),
+    )
+
+    await waitFor(() => expect(productAuditCalls).toHaveLength(1))
+    expect(productAuditCalls[0].payload).toMatchObject({
+      availability: 'out_of_stock',
+      evidence_url: null,
+    })
+    expect(backendManualOffers[0]).toMatchObject({
+      availability: 'out_of_stock',
+      verification_status: 'unverified_excluded',
+      verified: false,
+      verified_by: null,
+      verified_at: null,
+    })
+    await waitFor(() => {
+      expect(within(dialog).getByText('unverified excluded')).toBeDefined()
+    })
+    expect(within(dialog).getAllByText('out of stock').length).toBeGreaterThan(0)
+  })
+
+  it('surfaces an unauthorized verification rejection from the backend', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = [manualVerificationProduct()]
+    backendManualOffers = [manualOfferRecord()]
+    manualVerificationError = {
+      status: 403,
+      detail: 'Administrator access required.',
+    }
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Verify manual offer for Manual Verification Product',
+      }),
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Verify Manual Offer',
+    })
+    await user.selectOptions(
+      within(dialog).getByLabelText('Offer availability'),
+      'in_stock',
+    )
+    await user.type(
+      within(dialog).getByLabelText('Evidence URL (required)'),
+      'https://www.zone.example/proof/manual-offer-1',
+    )
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Verify Manual Offer' }),
+    )
+
+    expect((await within(dialog).findByRole('alert')).textContent).toContain(
+      'Administrator access required.',
+    )
+    expect(productAuditCalls).toHaveLength(0)
+    expect(backendManualOffers[0].verified).toBe(false)
+  })
+
+  it('rejects a scraped offer submitted to the manual verification endpoint', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = [manualVerificationProduct()]
+    backendManualOffers = [
+      manualOfferRecord({ offer_id: 'scraped-offer-1', source_type: 'scraped' }),
+    ]
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Verify manual offer for Manual Verification Product',
+      }),
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Verify Manual Offer',
+    })
+    await user.selectOptions(
+      within(dialog).getByLabelText('Offer availability'),
+      'in_stock',
+    )
+    await user.type(
+      within(dialog).getByLabelText('Evidence URL (required)'),
+      'https://www.zone.example/proof/scraped-offer-1',
+    )
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Verify Manual Offer' }),
+    )
+
+    expect((await within(dialog).findByRole('alert')).textContent).toContain(
+      'Only manual offers can use this verification endpoint.',
+    )
+    expect(
+      within(dialog).queryByRole('button', { name: 'Verify Manual Offer' }),
+    ).not.toBeNull()
+    expect(productAuditCalls).toHaveLength(0)
+    expect(backendManualOffers[0].verified).toBe(false)
+  })
+
   it('shows products with missing or unknown store IDs as Unassigned without rewriting them', async () => {
     const [template] = loadAdminProducts()
     backendProducts = [
@@ -1626,50 +2196,86 @@ describe('admin and shared user pages', () => {
       .toBe(true)
   })
 
-  it('runs scraping demo actions and persists each state transition', async () => {
+  it('runs a real job through the backend and shows execution error details', async () => {
     const user = userEvent.setup()
-    const initialJob = (await import('../data/adminScraping')).getSeedScrapingJobs([
-      amazonStore,
-    ])[0]
     render(<AdminScrapingPage />)
 
     await user.click(
       await screen.findByRole('button', {
-        name: `Pause ${initialJob.store_name} job`,
+        name: `Run Now ${webScraperTarget.store_name} job now`,
       }),
     )
-    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Pause job' }))
-    expect(loadScrapingJobs().find((job) => job.id === initialJob.id)?.status).toBe('paused')
-    await user.click(screen.getByRole('button', { name: `Resume ${initialJob.store_name} job` }))
-    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Resume job' }))
-    expect(loadScrapingJobs().find((job) => job.id === initialJob.id)?.status).toBe('running')
-    await user.click(screen.getByRole('button', { name: `Cancel ${initialJob.store_name} job` }))
-    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel job' }))
-    expect(loadScrapingJobs().find((job) => job.id === initialJob.id)?.status).toBe('cancelled')
-    await user.click(screen.getByRole('button', { name: `Start ${initialJob.store_name} job` }))
-    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start job' }))
-    expect(loadScrapingJobs().find((job) => job.id === initialJob.id)?.status).toBe('running')
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Run Now' }),
+    )
+
+    await waitFor(() => {
+      expect(backendScrapingJobs[0].executions[0].errors[0]).toContain(
+        'Skipped one product card',
+      )
+    })
+    const fetchMock = vi.mocked(globalThis.fetch)
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input) === '/api/admin/scraping/jobs/job-1/run' &&
+          init?.method === 'POST',
+      ),
+    ).toBe(true)
+    expect(await screen.findByRole('columnheader', { name: 'Error Details' })).toBeDefined()
+    expect(screen.getByText(/Skipped one product card/)).toBeDefined()
+
+    await user.click(
+      screen.getByRole('button', {
+        name: `View ${webScraperTarget.store_name} job details`,
+      }),
+    )
+    const dialog = await screen.findByRole('dialog')
+    await waitFor(() => {
+      expect(within(dialog).getByText(/No demo results are shown here/)).toBeDefined()
+    })
+    expect(within(dialog).getByText(/90.0% success rate/)).toBeDefined()
+    expect(within(dialog).getByText(/Skipped one product card/)).toBeDefined()
   })
 
-  it('creates a validated demo job for an active managed store', async () => {
+  it('creates a validated live job for the supported scraping target', async () => {
     const user = userEvent.setup()
-    const store = amazonStore
     render(<AdminScrapingPage />)
 
-    await screen.findByRole('button', { name: 'Pause Amazon job' })
+    await screen.findByRole('button', { name: 'Create Scraping Job' })
     await user.click(screen.getByRole('button', { name: 'Create Scraping Job' }))
     const dialog = screen.getByRole('dialog')
-    await user.selectOptions(within(dialog).getByLabelText('Managed store'), store.store_id)
+    await user.selectOptions(
+      within(dialog).getByLabelText('Scraping target'),
+      webScraperTarget.store_id,
+    )
+    await user.clear(within(dialog).getByLabelText('Product limit'))
+    await user.type(within(dialog).getByLabelText('Product limit'), '15')
     await user.click(within(dialog).getByRole('button', { name: 'Create job' }))
 
     await waitFor(() => {
-      expect(loadScrapingJobs().some((job) =>
-        job.store_id === store.store_id &&
+      expect(backendScrapingJobs.some((job) =>
+        job.store_id === webScraperTarget.store_id &&
         job.status === 'queued' &&
-        job.configuration?.interval_minutes === 60,
+        job.configuration?.product_limit === 15,
       )).toBe(true)
     })
-    expect(screen.getByRole('status').textContent).toContain('no scraping was executed')
+    const fetchMock = vi.mocked(globalThis.fetch)
+    const createCall = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input) === '/api/admin/scraping/jobs' && init?.method === 'POST',
+    )
+    expect(createCall).toBeDefined()
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+      store_id: webScraperTarget.store_id,
+      product_limit: 15,
+      interval_minutes: 60,
+    })
+    await waitFor(() => {
+      expect(screen.getByRole('status').textContent).toContain(
+        'Live scraping job created',
+      )
+    })
   })
 
   it('filters audit records, paginates, and presents details as read-only', async () => {

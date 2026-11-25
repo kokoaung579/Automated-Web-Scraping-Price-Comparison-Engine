@@ -201,8 +201,9 @@ class ComparisonApiTests(unittest.IsolatedAsyncioTestCase):
         response = await build_comparison_response(sample_database())
         reasons = [
             reason
-            for item in response.items
-            for excluded in item.excluded_offers
+            for excluded in (
+                response.meta.diagnostics.excluded_offers
+            )
             for reason in excluded.reasons
         ]
         self.assertIn("STORE_INACTIVE", reasons)
@@ -296,6 +297,8 @@ class ComparisonApiTests(unittest.IsolatedAsyncioTestCase):
         first = await build_comparison_response(database, page=1, page_size=2)
         second = await build_comparison_response(database, page=2, page_size=2)
         third = await build_comparison_response(database, page=3, page_size=2)
+        # The inactive-store product is catalog In Stock, so it remains in the
+        # normal list even though all of its offers are excluded.
         self.assertEqual(first.total_groups, 4)
         self.assertEqual(len(first.items), 2)
         self.assertEqual(len(second.items), 2)
@@ -353,6 +356,13 @@ class ComparisonApiTests(unittest.IsolatedAsyncioTestCase):
             item for item in response.items
             if item.identity.canonical_key == "asin:B0GHY4PR3N"
         )
+        self.assertEqual(jbl.catalog_availability.value, "in_stock")
+        self.assertEqual(jbl.offers, [])
         self.assertEqual(jbl.verified.status, "no_verified_offers")
-        reasons = [reason for excluded in jbl.excluded_offers for reason in excluded.reasons]
+        self.assertIsNone(jbl.verified.lowest)
+        reasons = [
+            reason
+            for excluded in response.meta.diagnostics.excluded_offers
+            for reason in excluded.reasons
+        ]
         self.assertIn("STALE_OFFER", reasons)

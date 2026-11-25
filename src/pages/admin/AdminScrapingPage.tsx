@@ -20,22 +20,15 @@ import {
   Square,
   X,
 } from 'lucide-react'
-import {
-  applyDemoJobAction,
-  createDemoScrapingJob,
-  loadScrapingJobs,
-  saveScrapingJobs,
-  validateScrapingJobInput,
-} from '../../data/adminScraping'
+import { validateScrapingJobInput } from '../../data/adminScraping'
 import type {
   CreateScrapingJobInput,
   DemoJobAction,
   ScrapingExecution,
   ScrapingJob,
   ScrapingJobStatus,
+  ScrapingTarget,
 } from '../../data/adminScraping'
-import type { AdminStore } from '../../data/adminStores'
-import { getStores } from '../../services/storesApi'
 import { getScrapingApiMode } from '../../services/scrapingApi'
 
 const statusLabels: Record<ScrapingJobStatus, string> = {
@@ -79,6 +72,17 @@ function formatDate(value: string | null): string {
 
 function formatDuration(execution: ScrapingExecution | undefined): string {
   if (!execution) return '—'
+  if (typeof execution.duration_seconds === 'number') {
+    const seconds = Math.floor(execution.duration_seconds)
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    const remainingSeconds = seconds % 60
+    return hours > 0
+      ? `${hours}h ${minutes}m`
+      : minutes > 0
+        ? `${minutes}m ${remainingSeconds}s`
+        : `${remainingSeconds}s`
+  }
   const end = execution.finished_at ? Date.parse(execution.finished_at) : Date.now()
   const start = Date.parse(execution.started_at)
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return '—'
@@ -104,6 +108,11 @@ function getDefaultSchedule(): string {
   const date = new Date(Date.now() + 60 * 60 * 1000)
   date.setSeconds(0, 0)
   return date.toISOString()
+}
+
+function firstError(job: ScrapingJob): string {
+  const error = job.executions[0]?.errors[0]
+  return error || '—'
 }
 
 function JobStatusBadge({ status }: { status: ScrapingJobStatus }) {
@@ -187,6 +196,8 @@ function ExecutionDetails({ execution }: { execution: ScrapingExecution }) {
       </div>
       <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-slate-400">
         <span>{execution.products_found} products found</span>
+        <span>{execution.success_count ?? 0} succeeded</span>
+        <span>{execution.failure_count ?? 0} failed</span>
         <span>{execution.success_rate.toFixed(1)}% success rate</span>
         <span>Duration {formatDuration(execution)}</span>
       </div>
@@ -194,7 +205,7 @@ function ExecutionDetails({ execution }: { execution: ScrapingExecution }) {
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <div>
           <h4 className="text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-            Errors
+            Error details
           </h4>
           {execution.errors.length ? (
             <ul className="mt-2 space-y-1.5">
@@ -242,12 +253,10 @@ function ExecutionDetails({ execution }: { execution: ScrapingExecution }) {
 
 function JobDetailsDialog({
   job,
-  mode,
   loading,
   onClose,
 }: {
   job: ScrapingJob
-  mode: 'demo' | 'live'
   loading: boolean
   onClose: () => void
 }) {
@@ -268,7 +277,7 @@ function JobDetailsDialog({
         <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4 sm:px-6">
           <div className="min-w-0">
             <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-blue-300">
-              {mode === 'demo' ? 'Demo job details' : 'Live backend job details'}
+              Live backend job details
             </p>
             <h2
               id="job-details-title"
@@ -301,23 +310,17 @@ function JobDetailsDialog({
             </div>
             <JobStatusBadge status={job.status} />
           </div>
-          {mode === 'demo' ? (
-            <div className="rounded-xl border border-amber-300/10 bg-amber-400/[0.05] px-3.5 py-3 text-[10px] leading-5 text-amber-100/90">
-              Demo history only. Job controls update local demo state and do not
-              connect to the store or execute scraping.
-            </div>
-          ) : (
-            <div className="rounded-xl border border-emerald-300/10 bg-emerald-400/[0.04] px-3.5 py-3 text-[10px] leading-5 text-emerald-100/90">
-              Live backend data. Scraping execution is owned by the configured
-              backend service.
-            </div>
-          )}
+          <div className="rounded-xl border border-emerald-300/10 bg-emerald-400/[0.04] px-3.5 py-3 text-[10px] leading-5 text-emerald-100/90">
+            Execution statistics below come from real backend job records and the
+            shared product catalog. No demo results are shown here.
+          </div>
           {job.configuration && (
             <dl className="grid gap-2 rounded-xl border border-white/[0.07] bg-[#090e18]/70 p-4 text-[10px] sm:grid-cols-2">
               <div><dt className="text-slate-500">Interval</dt><dd className="mt-1 text-slate-200">{job.configuration.interval_minutes} minutes</dd></div>
-              <div><dt className="text-slate-500">Next scheduled run</dt><dd className="mt-1 text-slate-200">{formatDate(job.configuration.scheduled_at)}</dd></div>
+              <div><dt className="text-slate-500">Next scheduled run</dt><dd className="mt-1 text-slate-200">{formatDate(job.next_run)}</dd></div>
               <div><dt className="text-slate-500">Request timeout</dt><dd className="mt-1 text-slate-200">{job.configuration.request_timeout_seconds} seconds</dd></div>
               <div><dt className="text-slate-500">Retry attempts</dt><dd className="mt-1 text-slate-200">{job.configuration.retry_attempts}</dd></div>
+              <div><dt className="text-slate-500">Product limit</dt><dd className="mt-1 text-slate-200">{job.configuration.product_limit ?? 10}</dd></div>
             </dl>
           )}
           {loading ? (
@@ -359,33 +362,33 @@ function JobDetailsDialog({
 }
 
 function CreateScrapingJobDialog({
-  stores,
+  targets,
   saving,
   onCancel,
   onSubmit,
 }: {
-  stores: AdminStore[]
+  targets: ScrapingTarget[]
   saving: boolean
   onCancel: () => void
   onSubmit: (input: CreateScrapingJobInput) => Promise<void>
 }) {
   const [input, setInput] = useState<CreateScrapingJobInput>(() => ({
-    store_id: stores[0]?.store_id ?? '',
+    store_id: targets[0]?.store_id ?? '',
     interval_minutes: 60,
     scheduled_at: getDefaultSchedule(),
     request_timeout_seconds: 30,
     retry_attempts: 3,
+    product_limit: targets[0]?.default_product_limit ?? 10,
   }))
   const [error, setError] = useState('')
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const errors = validateScrapingJobInput(input, stores)
+    const errors = validateScrapingJobInput(input, targets)
     if (errors.length > 0) {
       setError(errors.join(' '))
       return
     }
-
     try {
       await onSubmit(input)
     } catch (submitError) {
@@ -398,7 +401,11 @@ function CreateScrapingJobDialog({
   }
 
   function updateNumber(
-    field: 'interval_minutes' | 'request_timeout_seconds' | 'retry_attempts',
+    field:
+      | 'interval_minutes'
+      | 'request_timeout_seconds'
+      | 'retry_attempts'
+      | 'product_limit',
     value: string,
   ) {
     setInput((current) => ({ ...current, [field]: Number(value) }))
@@ -421,15 +428,26 @@ function CreateScrapingJobDialog({
         <form onSubmit={(event) => void handleSubmit(event)} className="space-y-4 px-5 py-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="block sm:col-span-2">
-              <span className="mb-1.5 block text-[11px] font-medium text-slate-300">Managed store</span>
-              <select aria-label="Managed store" required value={input.store_id} onChange={(event) => setInput((current) => ({ ...current, store_id: event.currentTarget.value }))} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none focus:border-blue-400/40">
-                {stores.map((store) => <option key={store.store_id} value={store.store_id}>{store.store_name} · {store.website_url}</option>)}
+              <span className="mb-1.5 block text-[11px] font-medium text-slate-300">Scraping target</span>
+              <select aria-label="Scraping target" required value={input.store_id} onChange={(event) => {
+                const target = targets.find((item) => item.store_id === event.currentTarget.value)
+                setInput((current) => ({
+                  ...current,
+                  store_id: event.currentTarget.value,
+                  product_limit: target?.default_product_limit ?? current.product_limit,
+                }))
+              }} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none focus:border-blue-400/40">
+                {targets.map((target) => <option key={target.store_id} value={target.store_id}>{target.store_name} · {target.target_url}</option>)}
               </select>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-[11px] font-medium text-slate-300">Product limit</span>
+              <input aria-label="Product limit" type="number" min={1} max={15} step={1} required value={input.product_limit ?? 10} onChange={(event) => updateNumber('product_limit', event.currentTarget.value)} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none focus:border-blue-400/40" />
+              <span className="mt-1 block text-[9px] text-slate-600">Default 10, maximum 15 products per run.</span>
             </label>
             <label className="block">
               <span className="mb-1.5 block text-[11px] font-medium text-slate-300">Scraping interval (minutes)</span>
               <input aria-label="Scraping interval (minutes)" type="number" min={1} max={10080} step={1} required value={input.interval_minutes} onChange={(event) => updateNumber('interval_minutes', event.currentTarget.value)} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none focus:border-blue-400/40" />
-              <span className="mt-1 block text-[9px] text-slate-600">Between 1 and 10,080 minutes.</span>
             </label>
             <label className="block">
               <span className="mb-1.5 block text-[11px] font-medium text-slate-300">First run schedule</span>
@@ -442,26 +460,25 @@ function CreateScrapingJobDialog({
                 }))
                 setError('')
               }} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none [color-scheme:dark] focus:border-blue-400/40" />
-              <span className="mt-1 block text-[9px] text-slate-600">Must be a future date and time.</span>
             </label>
             <label className="block">
               <span className="mb-1.5 block text-[11px] font-medium text-slate-300">Request timeout (seconds)</span>
               <input aria-label="Request timeout (seconds)" type="number" min={1} max={300} step={1} required value={input.request_timeout_seconds} onChange={(event) => updateNumber('request_timeout_seconds', event.currentTarget.value)} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none focus:border-blue-400/40" />
-              <span className="mt-1 block text-[9px] text-slate-600">Between 1 and 300 seconds.</span>
             </label>
             <label className="block">
               <span className="mb-1.5 block text-[11px] font-medium text-slate-300">Retry attempts</span>
               <input aria-label="Retry attempts" type="number" min={0} max={10} step={1} required value={input.retry_attempts} onChange={(event) => updateNumber('retry_attempts', event.currentTarget.value)} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none focus:border-blue-400/40" />
-              <span className="mt-1 block text-[9px] text-slate-600">Between 0 and 10 attempts.</span>
             </label>
           </div>
           {error && <p role="alert" className="rounded-lg border border-rose-300/10 bg-rose-400/[0.06] px-3 py-2 text-[10px] leading-4 text-rose-200">{error}</p>}
           <p className="rounded-lg border border-blue-300/10 bg-blue-400/[0.04] px-3 py-2.5 text-[10px] leading-4 text-blue-100/80">
-            This frontend sends configuration to the selected mode only. In demo mode, the job is queued locally and no request is sent to a store.
+            The backend stores this job in MongoDB. Run Now performs a real HTTP
+            request to the WebScraper.io test site and writes real results to the
+            shared catalog.
           </p>
           <div className="flex flex-col-reverse gap-2 border-t border-white/[0.06] pt-4 sm:flex-row sm:justify-end">
             <button type="button" onClick={onCancel} disabled={saving} className="rounded-xl border border-white/[0.08] px-4 py-2.5 text-xs font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:opacity-50">Cancel</button>
-            <button type="submit" disabled={saving || stores.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50">
+            <button type="submit" disabled={saving || targets.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50">
               {saving ? <LoaderCircle aria-hidden="true" size={14} className="animate-spin" /> : <CalendarClock aria-hidden="true" size={14} />}
               {saving ? 'Creating…' : 'Create job'}
             </button>
@@ -475,19 +492,17 @@ function CreateScrapingJobDialog({
 function ConfirmJobActionDialog({
   job,
   action,
-  mode,
   saving,
   onCancel,
   onConfirm,
 }: {
   job: ScrapingJob
   action: DemoJobAction
-  mode: 'demo' | 'live'
   saving: boolean
   onCancel: () => void
   onConfirm: () => void
 }) {
-  const actionName = action[0].toUpperCase() + action.slice(1)
+  const actionName = action === 'start' ? 'Run Now' : action[0].toUpperCase() + action.slice(1)
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm">
       <button type="button" aria-label="Close action confirmation" onClick={onCancel} className="absolute inset-0 cursor-default" />
@@ -495,16 +510,16 @@ function ConfirmJobActionDialog({
         <span className="flex size-10 items-center justify-center rounded-xl border border-amber-300/10 bg-amber-400/[0.06] text-amber-200">
           <AlertTriangle aria-hidden="true" size={17} />
         </span>
-        <h2 id="confirm-job-action-title" className="mt-4 text-sm font-semibold text-white">Confirm {actionName.toLowerCase()} job?</h2>
+        <h2 id="confirm-job-action-title" className="mt-4 text-sm font-semibold text-white">Confirm {actionName.toLowerCase()}?</h2>
         <p className="mt-1.5 text-xs leading-5 text-slate-400">
-          {actionName} the scraping job for <span className="font-medium text-slate-200">{job.store_name}</span>.
-          {mode === 'demo' ? ' This records a simulated demo action only.' : ' The configured backend will receive this action.'}
+          {actionName} for <span className="font-medium text-slate-200">{job.store_name}</span>.
+          {' '}The backend will perform the action and record the real outcome.
         </p>
         <div className="mt-5 flex justify-end gap-2">
           <button type="button" onClick={onCancel} disabled={saving} className="rounded-xl border border-white/[0.08] px-3.5 py-2 text-[11px] font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:opacity-50">Keep job</button>
           <button type="button" onClick={onConfirm} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-blue-500 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50">
             {saving && <LoaderCircle aria-hidden="true" size={13} className="animate-spin" />}
-            {saving ? 'Working…' : `${actionName} job`}
+            {saving ? 'Working…' : action === 'start' ? 'Run Now' : `${actionName} job`}
           </button>
         </div>
       </section>
@@ -519,12 +534,10 @@ export function AdminScrapingPage() {
     jobs: [] as ScrapingJob[],
     error: '',
   }))
-  const [managedStores, setManagedStores] = useState<AdminStore[]>([])
-  const [storeError, setStoreError] = useState('')
+  const [targets, setTargets] = useState<ScrapingTarget[]>([])
+  const [targetError, setTargetError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState<
-    'all' | ScrapingJobStatus
-  >('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | ScrapingJobStatus>('all')
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null)
   const [detailJob, setDetailJob] = useState<ScrapingJob | null>(null)
   const [detailsLoading, setDetailsLoading] = useState(false)
@@ -542,50 +555,30 @@ export function AdminScrapingPage() {
     action: DemoJobAction
   } | null>(null)
   const jobs = catalog.jobs
-  const activeStores = managedStores.filter(
-    (store) => store.status === 'Active',
-  )
+  const activeTargets = targets.filter((target) => target.status === 'Active')
+  const selectedJob = detailJob ?? jobs.find((job) => job.id === selectedJobId) ?? null
 
   useEffect(() => {
+    if (!apiClient) return
     let active = true
-
-    getStores()
-      .then((stores) => {
+    apiClient.getTargets()
+      .then((liveTargets) => {
         if (!active) return
-        setManagedStores(stores)
-        setStoreError('')
-
-        if (apiMode.mode === 'demo') {
-          try {
-            setCatalog({ jobs: loadScrapingJobs(stores), error: '' })
-          } catch (error) {
-            setCatalog({
-              jobs: [],
-              error:
-                error instanceof Error
-                  ? error.message
-                  : 'Could not load scraping demo data.',
-            })
-          }
-        }
+        setTargets(liveTargets)
+        setTargetError('')
       })
       .catch((error: unknown) => {
         if (!active) return
-        setStoreError(
+        setTargetError(
           error instanceof Error
             ? error.message
-            : 'Could not load managed stores.',
+            : 'Could not load real scraping targets.',
         )
       })
-
     return () => {
       active = false
     }
-  }, [apiMode.mode])
-  const selectedJob =
-    detailJob?.id === selectedJobId
-      ? detailJob
-      : jobs.find((job) => job.id === selectedJobId) ?? null
+  }, [apiClient])
 
   const refreshLiveJobs = useCallback(async (showLoading = false) => {
     if (!apiClient) return
@@ -661,27 +654,16 @@ export function AdminScrapingPage() {
   )
 
   async function createJob(input: CreateScrapingJobInput) {
+    if (!apiClient) throw new Error('The scraping backend is unavailable.')
     setCreating(true)
     setPageError('')
     try {
-      let job: ScrapingJob
-      if (apiClient) {
-        job = await apiClient.createJob(input)
-        setCatalog((current) => ({
-          jobs: [job, ...current.jobs.filter((item) => item.id !== job.id)],
-          error: '',
-        }))
-      } else {
-        job = createDemoScrapingJob(input, activeStores)
-        const nextJobs = [job, ...jobs]
-        saveScrapingJobs(nextJobs)
-        setCatalog({ jobs: nextJobs, error: '' })
-      }
-      setFeedback(
-        apiClient
-          ? `Live scraping job created for ${job.store_name}.`
-          : `Demo job queued for ${job.store_name}; no scraping was executed.`,
-      )
+      const job = await apiClient.createJob(input)
+      setCatalog((current) => ({
+        jobs: [job, ...current.jobs.filter((item) => item.id !== job.id)],
+        error: '',
+      }))
+      setFeedback(`Live scraping job created for ${job.store_name}.`)
       setShowCreateDialog(false)
     } catch (error) {
       const message =
@@ -694,34 +676,29 @@ export function AdminScrapingPage() {
   }
 
   async function confirmAction() {
-    if (!pendingAction) return
+    if (!pendingAction || !apiClient) return
     const { job, action } = pendingAction
     setBusyJobId(job.id)
     setPageError('')
     try {
-      let updatedJob: ScrapingJob
-      if (apiClient) {
-        const apiActions: Record<DemoJobAction, (jobId: string) => Promise<ScrapingJob>> = {
-          start: apiClient.startJob,
-          pause: apiClient.pauseJob,
-          resume: apiClient.resumeJob,
-          cancel: apiClient.cancelJob,
-        }
-        updatedJob = await apiActions[action](job.id)
-      } else {
-        updatedJob = applyDemoJobAction(job, action)
+      const apiActions: Record<DemoJobAction, (jobId: string) => Promise<ScrapingJob>> = {
+        start: apiClient.startJob,
+        pause: apiClient.pauseJob,
+        resume: apiClient.resumeJob,
+        cancel: apiClient.cancelJob,
       }
-
-      const nextJobs = jobs.map((item) =>
-        item.id === updatedJob.id ? updatedJob : item,
-      )
-      if (!apiClient) saveScrapingJobs(nextJobs)
-      setCatalog({ jobs: nextJobs, error: '' })
+      const updatedJob = await apiActions[action](job.id)
+      setCatalog((current) => ({
+        jobs: current.jobs.map((item) =>
+          item.id === updatedJob.id ? updatedJob : item,
+        ),
+        error: '',
+      }))
       if (selectedJobId === updatedJob.id) setDetailJob(updatedJob)
       setFeedback(
-        apiClient
-          ? `${action[0].toUpperCase()}${action.slice(1)} request accepted for ${job.store_name}.`
-          : `${action[0].toUpperCase()}${action.slice(1)} demo action recorded for ${job.store_name}; no scraping was executed.`,
+        action === 'start'
+          ? `Real scraping run finished for ${job.store_name}.`
+          : `${action[0].toUpperCase()}${action.slice(1)} request accepted for ${job.store_name}.`,
       )
       setPendingAction(null)
     } catch (error) {
@@ -736,10 +713,9 @@ export function AdminScrapingPage() {
   }
 
   async function openJobDetails(job: ScrapingJob) {
+    if (!apiClient) return
     setSelectedJobId(job.id)
     setDetailJob(job)
-    if (!apiClient) return
-
     setDetailsLoading(true)
     setPageError('')
     try {
@@ -760,12 +736,7 @@ export function AdminScrapingPage() {
   }
 
   const controlsDisabled =
-    apiMode.mode === 'error' || Boolean(catalog.error) || Boolean(storeError)
-  const modeName = apiMode.mode === 'live'
-    ? 'LIVE BACKEND MODE'
-    : apiMode.mode === 'demo'
-      ? 'DEMO MODE'
-      : 'API CONFIGURATION ERROR'
+    apiMode.mode === 'error' || Boolean(catalog.error) || Boolean(targetError)
 
   return (
     <div className="space-y-6 sm:space-y-7">
@@ -781,24 +752,23 @@ export function AdminScrapingPage() {
             Scraping Management
           </h2>
           <p className="mt-1.5 max-w-2xl text-xs leading-5 text-slate-500 sm:text-[13px]">
-            Configure managed-store jobs, monitor execution status, and review run history.
+            Configure a real WebScraper.io job, run it on demand, and inspect
+            MongoDB-backed execution results.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 self-start">
           <span className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-[10px] font-semibold ${
             apiMode.mode === 'live'
               ? 'border-emerald-300/10 bg-emerald-400/[0.05] text-emerald-100'
-              : apiMode.mode === 'demo'
-                ? 'border-amber-300/10 bg-amber-400/[0.05] text-amber-100'
-                : 'border-rose-300/10 bg-rose-400/[0.05] text-rose-100'
+              : 'border-rose-300/10 bg-rose-400/[0.05] text-rose-100'
           }`}>
             {apiMode.mode === 'live' ? <Activity aria-hidden="true" size={13} /> : <AlertTriangle aria-hidden="true" size={13} />}
-            {modeName}
+            {apiMode.mode === 'live' ? 'LIVE BACKEND MODE' : 'API CONFIGURATION ERROR'}
           </span>
           <button
             type="button"
             onClick={() => setShowCreateDialog(true)}
-            disabled={controlsDisabled || activeStores.length === 0}
+            disabled={controlsDisabled || activeTargets.length === 0}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-950/20 transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Plus aria-hidden="true" size={15} />
@@ -807,19 +777,13 @@ export function AdminScrapingPage() {
         </div>
       </section>
 
-      {apiMode.mode === 'demo' && (
-        <p className="rounded-xl border border-amber-300/10 bg-amber-400/[0.04] px-4 py-3 text-[10px] leading-5 text-amber-100/90">
-          Demo mode: jobs and controls use browser-local demo data. No store requests are made and no scraping executes.
-        </p>
-      )}
-      {apiMode.mode === 'live' && (
-        <p className="rounded-xl border border-emerald-300/10 bg-emerald-400/[0.04] px-4 py-3 text-[10px] leading-5 text-emerald-100/90">
-          Live backend mode: job state is loaded from the configured API and refreshed every 10 seconds. Scraping execution remains a backend responsibility.
-        </p>
-      )}
-      {(catalog.error || storeError || pageError) && (
+      <p className="rounded-xl border border-emerald-300/10 bg-emerald-400/[0.04] px-4 py-3 text-[10px] leading-5 text-emerald-100/90">
+        Live backend mode: jobs and execution history are stored in MongoDB and
+        refreshed every 10 seconds. Run Now performs a real, low-rate HTTP scrape.
+      </p>
+      {(catalog.error || targetError || pageError) && (
         <div role="alert" className="flex flex-col gap-3 rounded-xl border border-rose-300/10 bg-rose-400/[0.06] px-4 py-3 text-xs leading-5 text-rose-200 sm:flex-row sm:items-center sm:justify-between">
-          <span>{catalog.error || storeError || pageError}</span>
+          <span>{catalog.error || targetError || pageError}</span>
           {apiClient && (
             <button type="button" onClick={() => void refreshLiveJobs(true)} disabled={refreshing} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-rose-200/10 px-3 py-2 text-[10px] font-medium text-rose-100 transition hover:bg-rose-400/[0.07] disabled:opacity-50">
               <RefreshCw aria-hidden="true" size={12} className={refreshing ? 'animate-spin' : ''} />
@@ -849,7 +813,7 @@ export function AdminScrapingPage() {
             <div>
               <h3 className="text-sm font-semibold text-white">Scraping jobs</h3>
               <p className="mt-1 text-[10px] text-slate-500">
-                Showing {filteredJobs.length} of {jobs.length} {apiMode.mode === 'live' ? 'live' : 'demo'} jobs
+                Showing {filteredJobs.length} of {jobs.length} live jobs
               </p>
             </div>
             <button type="button" onClick={() => void refreshLiveJobs(true)} disabled={!apiClient || refreshing || loading} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/[0.08] px-3 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40">
@@ -882,7 +846,7 @@ export function AdminScrapingPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1240px] border-collapse text-left">
+            <table className="w-full min-w-[1460px] border-collapse text-left">
               <thead className="bg-[#111a29]">
                 <tr className="border-b border-white/[0.06] text-[9px] font-semibold uppercase tracking-[0.1em] text-slate-500">
                   <th className="px-5 py-3.5">Store</th>
@@ -893,6 +857,7 @@ export function AdminScrapingPage() {
                   <th className="px-4 py-3.5">Products Found</th>
                   <th className="px-4 py-3.5">Success Rate</th>
                   <th className="px-4 py-3.5">Duration</th>
+                  <th className="px-4 py-3.5">Error Details</th>
                   <th className="px-5 py-3.5 text-right">Actions</th>
                 </tr>
               </thead>
@@ -922,6 +887,9 @@ export function AdminScrapingPage() {
                         </span>
                       </td>
                       <td className="px-4 py-4 text-[10px] text-slate-400">{formatDuration(job.executions[0])}</td>
+                      <td className="max-w-[260px] px-4 py-4 text-[10px] text-rose-200" title={job.executions[0]?.errors.join('\n') || ''}>
+                        <span className="line-clamp-2">{firstError(job)}</span>
+                      </td>
                       <td className="px-5 py-4">
                         <div className="flex items-center justify-end gap-1">
                           {job.status === 'running' ? (
@@ -933,7 +901,7 @@ export function AdminScrapingPage() {
                               <RotateCcw aria-hidden="true" size={14} />
                             </button>
                           ) : (
-                            <button type="button" onClick={() => askToPerform('start')} aria-label={`Start ${job.store_name} job`} title="Start job" disabled={controlsDisabled || actionBusy} className="rounded-lg p-2 text-slate-400 transition hover:bg-emerald-400/[0.08] hover:text-emerald-200 disabled:opacity-40">
+                            <button type="button" onClick={() => askToPerform('start')} aria-label={`Run Now ${job.store_name} job now`} title="Run Now" disabled={controlsDisabled || actionBusy} className="rounded-lg p-2 text-slate-400 transition hover:bg-emerald-400/[0.08] hover:text-emerald-200 disabled:opacity-40">
                               {actionBusy ? <LoaderCircle aria-hidden="true" size={14} className="animate-spin" /> : <Play aria-hidden="true" size={14} />}
                             </button>
                           )}
@@ -951,9 +919,9 @@ export function AdminScrapingPage() {
                   )
                 })}
                 {filteredJobs.length === 0 && (
-                  <tr><td colSpan={9} className="px-5 py-12 text-center">
-                    <p className="text-xs font-medium text-slate-300">{apiMode.mode === 'live' ? 'No live scraping jobs' : 'No scraping jobs found'}</p>
-                    <p className="mt-1 text-[10px] text-slate-500">{jobs.length === 0 ? 'Create a job for a managed store to get started.' : 'Try a different search or status filter.'}</p>
+                  <tr><td colSpan={10} className="px-5 py-12 text-center">
+                    <p className="text-xs font-medium text-slate-300">No live scraping jobs</p>
+                    <p className="mt-1 text-[10px] text-slate-500">{jobs.length === 0 ? 'Create a job for the supported target to get started.' : 'Try a different search or status filter.'}</p>
                   </td></tr>
                 )}
               </tbody>
@@ -962,19 +930,17 @@ export function AdminScrapingPage() {
         )}
 
         <div className="flex flex-col gap-2 border-t border-white/[0.06] px-5 py-3.5 text-[10px] text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-          <span>{apiMode.mode === 'live' ? 'Live job status refreshes every 10 seconds.' : 'Demo job state is persisted in this browser.'}</span>
-          {apiMode.mode === 'demo' && (
-            <span className="inline-flex items-center gap-1.5 text-amber-200/80">
-              <AlertTriangle aria-hidden="true" size={12} />
-              Controls are simulated only; no scraper or network worker is invoked.
-            </span>
-          )}
+          <span>Live job status refreshes every 10 seconds.</span>
+          <span className="inline-flex items-center gap-1.5 text-emerald-200/80">
+            <Activity aria-hidden="true" size={12} />
+            Real scraping statistics only.
+          </span>
         </div>
       </section>
 
       {showCreateDialog && (
         <CreateScrapingJobDialog
-          stores={activeStores}
+          targets={activeTargets}
           saving={creating}
           onCancel={() => setShowCreateDialog(false)}
           onSubmit={createJob}
@@ -984,7 +950,6 @@ export function AdminScrapingPage() {
         <ConfirmJobActionDialog
           job={pendingAction.job}
           action={pendingAction.action}
-          mode={apiClient ? 'live' : 'demo'}
           saving={busyJobId === pendingAction.job.id}
           onCancel={() => setPendingAction(null)}
           onConfirm={() => void confirmAction()}
@@ -993,7 +958,6 @@ export function AdminScrapingPage() {
       {selectedJob && (
         <JobDetailsDialog
           job={selectedJob}
-          mode={apiClient ? 'live' : 'demo'}
           loading={detailsLoading}
           onClose={() => {
             setSelectedJobId(null)

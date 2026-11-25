@@ -400,14 +400,24 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch("app.main.get_database", return_value=database):
-            offers = await product_offers(product_id)
+            active_offers = await product_offers(product_id)
+            all_offers = await product_offers(product_id, availability="all")
 
+        # Offers with missing availability are unknown, never implicitly In
+        # Stock, so they cannot appear in the default active comparison.
+        self.assertEqual(active_offers, [])
         self.assertEqual(
-            offers,
-            [
-                {"store": "Walmart", "price": 99.99},
-                {"store": "Best Buy", "price": 89.99},
-            ],
+            [(offer["store"], offer["price"]) for offer in all_offers],
+            [("Walmart", 99.99), ("best-buy", 89.99)],
+        )
+        self.assertTrue(
+            all(offer["availability"] == "unknown" for offer in all_offers)
+        )
+        self.assertTrue(
+            all(
+                offer["verification_status"] == "unverified_excluded"
+                for offer in all_offers
+            )
         )
 
     async def test_user_lists_ignore_records_for_deleted_products(self):

@@ -41,6 +41,17 @@ function makeProduct(description: string, imageUrl?: string): DemoProduct {
   }
 }
 
+function makeProductWithAvailability(value: string): DemoProduct {
+  const product = makeProduct(SHORT_DESCRIPTION)
+  return {
+    ...product,
+    specifications: [
+      ...product.specifications,
+      { label: 'Availability', value },
+    ],
+  }
+}
+
 function jsonResponse(data: unknown, status = 200) {
   return {
     ok: status >= 200 && status < 300,
@@ -49,9 +60,26 @@ function jsonResponse(data: unknown, status = 200) {
   } as Response
 }
 
+type BackendOffer = {
+  store: string
+  price: number
+  availability?: string | null
+  source_type?: string | null
+  verification_status?: string | null
+  is_test_site?: boolean
+}
+
+type BackendHistory = {
+  store: string
+  points: { date: string; price: number }[]
+  availability?: string | null
+  verification_status?: string | null
+  is_test_site?: boolean
+}
+
 type BackendOptions = {
-  offers?: { store: string; price: number }[]
-  history?: { store: string; points: { date: string; price: number }[] }[]
+  offers?: BackendOffer[]
+  history?: BackendHistory[]
   failPriceData?: boolean
   delayPriceData?: number
 }
@@ -96,7 +124,15 @@ function mockBackend(
         if (options.delayPriceData) {
           await new Promise((resolve) => setTimeout(resolve, options.delayPriceData))
         }
-        return jsonResponse(options.offers ?? [])
+        return jsonResponse(
+          (options.offers ?? []).map((offer) => ({
+            availability: 'in_stock',
+            source_type: 'scraped',
+            verification_status: 'verified_scraped',
+            is_test_site: false,
+            ...offer,
+          })),
+        )
       }
       if (/\/history$/.test(url.pathname)) {
         if (options.failPriceData) {
@@ -105,7 +141,14 @@ function mockBackend(
         if (options.delayPriceData) {
           await new Promise((resolve) => setTimeout(resolve, options.delayPriceData))
         }
-        return jsonResponse(options.history ?? [])
+        return jsonResponse(
+          (options.history ?? []).map((history) => ({
+            availability: 'in_stock',
+            verification_status: 'verified_scraped',
+            is_test_site: false,
+            ...history,
+          })),
+        )
       }
       if (/\/channel3$/.test(url.pathname)) return jsonResponse({ product: null })
       if (url.pathname === '/api/alerts' && method === 'GET') {
@@ -316,6 +359,151 @@ describe('Product Detail image and description layout', () => {
     expect(sevenDays.getAttribute('aria-pressed')).toBe('true')
   })
 
+  it('uses only canonical In Stock offers for sorting and the best-price panel', async () => {
+    renderDetail(makeProduct(SHORT_DESCRIPTION), null, {
+      offers: [
+        { store: 'Amazon', price: 328 },
+        {
+          store: 'Cheap Out',
+          price: 10,
+          availability: 'out_of_stock',
+          verification_status: 'unverified_excluded',
+        },
+        {
+          store: 'WebScraper.io Test Site',
+          price: 1,
+          verification_status: 'test_site_illustrative',
+          is_test_site: true,
+        },
+      ],
+      history: [
+        {
+          store: 'Amazon',
+          points: [{ date: '2026-11-01', price: 340 }],
+        },
+        {
+          store: 'Cheap Out',
+          points: [{ date: '2026-11-01', price: 10 }],
+          availability: 'out_of_stock',
+        },
+      ],
+    })
+    await waitForDetail()
+
+    const offers = screen.getByRole('region', { name: 'Prices across stores' })
+    await waitFor(() => expect(within(offers).getByText('Amazon')).toBeDefined())
+    expect(within(offers).queryByText('Cheap Out')).toBeNull()
+    expect(within(offers).queryByText('WebScraper.io Test Site')).toBeNull()
+    expect(within(offers).getByText('In Stock')).toBeDefined()
+    expect(within(offers).getByText('Scraped')).toBeDefined()
+    expect(within(offers).getByText('Verified scraped')).toBeDefined()
+    expect(screen.getByText('Cheapest store')).toBeDefined()
+
+    const history = screen.getByRole('region', { name: 'Price history' })
+    await waitFor(() =>
+      expect(within(history).getByText('Lowest price')).toBeDefined(),
+    )
+    expect(within(history).queryByText('$10.00')).toBeNull()
+  })
+
+  it('excludes ineligible manual offers from best-price calculations', async () => {
+    renderDetail(makeProduct(SHORT_DESCRIPTION), null, {
+      offers: [
+        {
+          store: 'Valid Manual',
+          price: 120,
+          source_type: 'manual',
+          verification_status: 'manually_verified',
+        },
+        {
+          store: 'Ineligible Manual',
+          price: 10,
+          source_type: 'manual',
+          verification_status: 'manual_illustrative',
+        },
+      ],
+    })
+    await waitForDetail()
+
+    const offers = screen.getByRole('region', { name: 'Prices across stores' })
+    await waitFor(() => expect(within(offers).getByText('Valid Manual')).toBeDefined())
+    expect(within(offers).getByText('Ineligible Manual')).toBeDefined()
+    expect(within(offers).getByText('Lowest verified offer')).toBeDefined()
+
+    const bestBadges = within(offers).getAllByText('Best price')
+    expect(bestBadges).toHaveLength(1)
+    expect(bestBadges[0].closest('article')?.textContent).toContain('Valid Manual')
+  })
+
+  it('distinguishes illustrative-only, unavailable-only, and no-offer empty states', async () => {
+    const { unmount } = renderDetail(makeProduct(SHORT_DESCRIPTION), null, {
+      offers: [
+        {
+          store: 'Manual Listing',
+          price: 5,
+          availability: 'unknown',
+          source_type: 'manual',
+          verification_status: 'manual_illustrative',
+        },
+      ],
+    })
+    await waitForDetail()
+    expect(
+      await screen.findByText('Only illustrative/test-site data is available'),
+    ).toBeDefined()
+    expect(screen.queryByText('Cheapest store')).toBeNull()
+    unmount()
+
+    renderDetail(makeProduct(SHORT_DESCRIPTION), null, {
+      offers: [
+        {
+          store: 'Amazon',
+          price: 328,
+          availability: 'out_of_stock',
+          verification_status: 'unverified_excluded',
+        },
+      ],
+    })
+    await waitForDetail()
+    expect(
+      await screen.findByText('No In Stock offers match these filters'),
+    ).toBeDefined()
+  })
+
+  it('does not treat Unavailable as an in-stock product', async () => {
+    renderDetail(makeProductWithAvailability('Unavailable'), null, {
+      offers: [{ store: 'Amazon', price: 328 }],
+    })
+    await waitForDetail()
+
+    const badge = screen
+      .getAllByText('Unavailable')
+      .map((element) => element.closest('span'))
+      .find((element) => element?.className.includes('border-amber-400/20'))
+    expect(badge).toBeDefined()
+    const offers = screen.getByRole('region', { name: 'Prices across stores' })
+    await waitFor(() => expect(within(offers).getByText('Amazon')).toBeDefined())
+  })
+
+  it('requests availability-scoped offers and history from the backend', async () => {
+    renderDetail(makeProduct(SHORT_DESCRIPTION), null, {
+      offers: [{ store: 'Amazon', price: 328 }],
+    })
+    await waitForDetail()
+
+    const requested = vi.mocked(fetch).mock.calls.map(([input]) => String(input))
+    expect(
+      requested.some((url) =>
+        url.includes('/offers?availability=in_stock'),
+      ),
+    ).toBe(true)
+    expect(
+      requested.some((url) =>
+        url.includes('/history?period=30D&availability=in_stock'),
+      ),
+    ).toBe(true)
+  })
+
   it('shows loading and then empty states without getting stuck', async () => {
     renderDetail(makeProduct(SHORT_DESCRIPTION), null, {
       delayPriceData: 120,
@@ -334,9 +522,7 @@ describe('Product Detail image and description layout', () => {
         ).toBeNull(),
       { timeout: 2000 },
     )
-    expect(
-      screen.getByText('No current store offers are recorded.'),
-    ).toBeDefined()
+    expect(screen.getByText('No offers found')).toBeDefined()
     expect(
       screen.getByText('No recorded price history is available for this range.'),
     ).toBeDefined()

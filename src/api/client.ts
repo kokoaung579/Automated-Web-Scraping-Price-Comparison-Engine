@@ -15,7 +15,15 @@ import type { AuditLogsQuery, AuditLogsResponse } from '../data/adminAuditLogs'
 import type { AdminCategory } from '../data/adminCategories'
 import type { AdminStore } from '../data/adminStores'
 import type { DashboardResponse } from '../types/dashboard'
-import type { ComparisonQuery, ComparisonResponse } from '../types/comparison'
+import type {
+  ComparisonAvailability,
+  ComparisonQuery,
+  ComparisonResponse,
+} from '../types/comparison'
+import type {
+  ManualOfferRecord,
+  ManualOfferVerificationRequest,
+} from '../types/manualOffer'
 
 export type HealthResponse = {
   status: string
@@ -617,6 +625,25 @@ export const api = {
       }),
     }),
 
+  adminManualOffers: (productId?: string) => {
+    const suffix = productId
+      ? `?product_id=${encodeURIComponent(productId)}`
+      : ''
+    return request<ManualOfferRecord[]>(`/admin/manual-offers${suffix}`)
+  },
+
+  verifyManualOffer: (
+    offerId: string,
+    payload: ManualOfferVerificationRequest,
+  ) =>
+    request<ManualOfferRecord>(
+      `/admin/manual-offers/${encodeURIComponent(offerId)}/verify`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    ),
+
   comparisonProducts: (query: ComparisonQuery = {}) => {
     const params = new URLSearchParams()
     const values: Record<string, string | number | boolean | undefined> = {
@@ -718,12 +745,21 @@ export const api = {
 
   scrapingLogs: () => request<ScrapingLog[]>('/scraping-logs'),
 
-  offers: (productId: string) =>
-    request<StoreOffer[]>(`/products/${encodeURIComponent(productId)}/offers`),
+  offers: (
+    productId: string,
+    availability: ComparisonAvailability = 'in_stock',
+  ) =>
+    request<StoreOffer[]>(
+      `/products/${encodeURIComponent(productId)}/offers?availability=${availability}`,
+    ),
 
-  priceHistory: (productId: string, period: PriceHistoryPeriod) =>
+  priceHistory: (
+    productId: string,
+    period: PriceHistoryPeriod,
+    availability: ComparisonAvailability = 'in_stock',
+  ) =>
     request<StoreHistory[]>(
-      `/products/${encodeURIComponent(productId)}/history?period=${period}`,
+      `/products/${encodeURIComponent(productId)}/history?period=${period}&availability=${availability}`,
     ),
 
   systemSettings: () =>
