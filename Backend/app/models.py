@@ -182,6 +182,12 @@ def catalog_document_to_public_product(document: dict) -> dict:
 class StoreOffer(APIModel):
     store: str
     price: float = Field(ge=0)
+    availability: str | None = None
+    source_type: str | None = None
+    verification_status: str | None = None
+    is_test_site: bool = False
+    product_url: str | None = None
+    updated_at: str | None = None
 
 
 class PriceHistoryPoint(APIModel):
@@ -192,6 +198,9 @@ class PriceHistoryPoint(APIModel):
 class StoreHistory(APIModel):
     store: str
     points: list[PriceHistoryPoint]
+    availability: str | None = None
+    verification_status: str | None = None
+    is_test_site: bool = False
 
 
 class PriceAlert(APIModel):
@@ -234,6 +243,70 @@ class ScrapingLog(APIModel):
     status: Literal["success", "failure"]
     error: str
 
+
+class ScrapingJobConfiguration(APIModel):
+    interval_minutes: int = Field(ge=1, le=10080)
+    scheduled_at: str = Field(min_length=1)
+    request_timeout_seconds: int = Field(ge=1, le=300)
+    retry_attempts: int = Field(ge=0, le=10)
+    product_limit: int = Field(default=10, ge=1, le=15)
+
+
+class CreateScrapingJobInput(APIModel):
+    store_id: str = Field(min_length=1)
+    interval_minutes: int = Field(ge=1, le=10080)
+    scheduled_at: str = Field(min_length=1)
+    request_timeout_seconds: int = Field(ge=1, le=300)
+    retry_attempts: int = Field(ge=0, le=10)
+    product_limit: int = Field(default=10, ge=1, le=15)
+
+
+class ScrapingExecution(APIModel):
+    id: str
+    job_id: str
+    started_at: str
+    finished_at: str | None = None
+    status: Literal["queued", "running", "paused", "completed", "failed", "cancelled"]
+    products_found: int = Field(ge=0)
+    success_count: int = Field(ge=0)
+    failure_count: int = Field(ge=0)
+    products_created: int = Field(ge=0)
+    products_refreshed: int = Field(ge=0)
+    success_rate: float = Field(ge=0, le=100)
+    duration_seconds: float = Field(ge=0)
+    errors: list[str]
+    logs: list[str]
+    target_url: str
+    product_limit: int = Field(ge=1, le=15)
+
+
+class ScrapingJob(APIModel):
+    id: str
+    store_id: str
+    store_name: str
+    website_url: str
+    configuration: ScrapingJobConfiguration
+    status: Literal["queued", "running", "paused", "completed", "failed", "cancelled"]
+    last_run: str | None = None
+    next_run: str | None = None
+    products_found: int = Field(ge=0)
+    success_rate: float = Field(ge=0, le=100)
+    executions: list[ScrapingExecution]
+    updated_at: str
+
+
+class ScrapingTarget(APIModel):
+    store_id: str
+    store_name: str
+    website_url: str
+    logo_url: str | None = None
+    status: Literal["Active", "Inactive"]
+    created_at: str
+    updated_at: str
+    target_url: str
+    default_product_limit: int
+    max_product_limit: int
+
 class Store(APIModel):
     store_id: str = Field(
         min_length=1,
@@ -251,6 +324,45 @@ class Store(APIModel):
 class StoreOffer(APIModel):
     store: str
     price: float = Field(ge=0)
+    availability: str | None = None
+    source_type: str | None = None
+    verification_status: str | None = None
+    is_test_site: bool = False
+    product_url: str | None = None
+    updated_at: str | None = None
+
+
+class ManualOfferVerificationRequest(APIModel):
+    availability: Literal[
+        "in_stock",
+        "out_of_stock",
+        "preorder",
+        "unknown",
+    ]
+    evidence_url: str | None = None
+    verification_note: str | None = Field(default=None, max_length=1000)
+
+
+class ManualOfferRecord(APIModel):
+    offer_id: str
+    product_id: str
+    store: str
+    store_id: str | None = None
+    price: float = Field(ge=0)
+    currency: str | None = None
+    product_url: str | None = None
+    availability: str
+    catalog_availability: str | None = None
+    source_type: str
+    verification_status: str
+    verified: bool = False
+    verified_by: str | None = None
+    verified_at: str | None = None
+    evidence_url: str | None = None
+    verification_note: str | None = None
+    last_checked_at: str | None = None
+    updated_at: str | None = None
+    is_test_site: bool = False
 
 
 class PriceHistoryPoint(APIModel):
@@ -261,6 +373,9 @@ class PriceHistoryPoint(APIModel):
 class StoreHistory(APIModel):
     store: str
     points: list[PriceHistoryPoint]
+    availability: str | None = None
+    verification_status: str | None = None
+    is_test_site: bool = False
 
 
 class PriceAlert(APIModel):

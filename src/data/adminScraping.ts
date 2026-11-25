@@ -10,13 +10,21 @@ export type ScrapingJobStatus =
 
 export type ScrapingExecution = {
   id: string
+  job_id?: string
   started_at: string
   finished_at: string | null
   status: ScrapingJobStatus
   products_found: number
+  success_count?: number
+  failure_count?: number
+  products_created?: number
+  products_refreshed?: number
   success_rate: number
+  duration_seconds?: number
   errors: string[]
   logs: string[]
+  target_url?: string
+  product_limit?: number
 }
 
 export type ScrapingJobConfiguration = {
@@ -24,10 +32,17 @@ export type ScrapingJobConfiguration = {
   scheduled_at: string
   request_timeout_seconds: number
   retry_attempts: number
+  product_limit?: number
 }
 
 export type CreateScrapingJobInput = ScrapingJobConfiguration & {
   store_id: string
+}
+
+export type ScrapingTarget = AdminStore & {
+  target_url: string
+  default_product_limit: number
+  max_product_limit: number
 }
 
 export type ScrapingJob = {
@@ -103,7 +118,11 @@ function isScrapingJobConfiguration(
     Number(configuration.request_timeout_seconds) <= 300 &&
     Number.isInteger(configuration.retry_attempts) &&
     Number(configuration.retry_attempts) >= 0 &&
-    Number(configuration.retry_attempts) <= 10
+    Number(configuration.retry_attempts) <= 10 &&
+    (configuration.product_limit === undefined ||
+      (Number.isInteger(configuration.product_limit) &&
+        Number(configuration.product_limit) >= 1 &&
+        Number(configuration.product_limit) <= 15))
   )
 }
 
@@ -138,6 +157,29 @@ export function isScrapingJob(value: unknown): value is ScrapingJob {
     job.executions.every(isScrapingExecution) &&
     typeof job.updated_at === 'string' &&
     Number.isFinite(Date.parse(job.updated_at))
+  )
+}
+
+export function isScrapingTarget(value: unknown): value is ScrapingTarget {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false
+  }
+  const target = value as Record<string, unknown>
+  return (
+    typeof target.store_id === 'string' &&
+    typeof target.store_name === 'string' &&
+    typeof target.website_url === 'string' &&
+    (target.logo_url === null || typeof target.logo_url === 'string') &&
+    (target.status === 'Active' || target.status === 'Inactive') &&
+    typeof target.created_at === 'string' &&
+    typeof target.updated_at === 'string' &&
+    typeof target.target_url === 'string' &&
+    Number.isInteger(target.default_product_limit) &&
+    Number(target.default_product_limit) >= 1 &&
+    Number(target.default_product_limit) <= 15 &&
+    Number.isInteger(target.max_product_limit) &&
+    Number(target.max_product_limit) >= 1 &&
+    Number(target.max_product_limit) <= 15
   )
 }
 
@@ -218,6 +260,7 @@ export function getSeedScrapingJobs(
         scheduled_at: nextRun ?? getDemoDate(-index - 1),
         request_timeout_seconds: 30,
         retry_attempts: 3,
+        product_limit: 10,
       },
       status,
       last_run: execution.started_at,
@@ -298,6 +341,14 @@ export function validateScrapingJobInput(
   ) {
     errors.push('Retry attempts must be between 0 and 10.')
   }
+  if (
+    input.product_limit !== undefined &&
+    (!Number.isInteger(input.product_limit) ||
+      input.product_limit < 1 ||
+      input.product_limit > 15)
+  ) {
+    errors.push('Product limit must be between 1 and 15.')
+  }
   return errors
 }
 
@@ -322,6 +373,7 @@ export function createDemoScrapingJob(
       scheduled_at: input.scheduled_at,
       request_timeout_seconds: input.request_timeout_seconds,
       retry_attempts: input.retry_attempts,
+      product_limit: input.product_limit ?? 10,
     },
     status: 'queued',
     last_run: null,

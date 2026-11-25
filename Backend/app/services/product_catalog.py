@@ -2,6 +2,7 @@ import re
 from datetime import datetime, timezone
 
 from app.models import AdminProduct
+from app.services.comparison import resolve_offer_availability
 
 HISTORY_PERIODS = ("7D", "30D", "90D", "1Y")
 
@@ -16,7 +17,16 @@ async def upsert_admin_product_offer(database, product: AdminProduct) -> None:
 
     product_offers = await database.offers.find(
         {"productId": product.product_id},
-        {"store": 1, "price": 1},
+        {
+            "store": 1,
+            "price": 1,
+            "availability": 1,
+            "sourceType": 1,
+            "storeId": 1,
+            "currency": 1,
+            "productUrl": 1,
+            "updatedAt": 1,
+        },
     ).to_list(length=None)
     store_id = _normalize_store_name(product.store_id)
     existing_offer = next(
@@ -32,6 +42,18 @@ async def upsert_admin_product_offer(database, product: AdminProduct) -> None:
         if existing_offer
         else product.store_id.replace("-", " ").title()
     )
+
+    if existing_offer is None:
+        offer_availability = resolve_offer_availability(
+            {"availability": product.availability}
+        )
+    else:
+        # A known offer value wins. Missing availability may inherit only a
+        # known non-In-Stock product state, never an assumed In Stock state.
+        offer_availability = resolve_offer_availability(
+            existing_offer, product_availability=product.availability
+        )
+
     await database.offers.update_one(
         {"productId": product.product_id, "store": store_name},
         {
@@ -39,6 +61,12 @@ async def upsert_admin_product_offer(database, product: AdminProduct) -> None:
                 "productId": product.product_id,
                 "store": store_name,
                 "price": product.price,
+                "availability": offer_availability,
+                "sourceType": product.source_type,
+                "storeId": product.store_id,
+                "currency": product.currency,
+                "productUrl": product.product_url,
+                "updatedAt": product.updated_at,
             }
         },
         upsert=True,

@@ -44,11 +44,103 @@ import type {
 import type { DemoProduct } from '../data/products'
 import type { StoreOffer } from '../data/storeOffers'
 
-type StoreHistory = { store: string; points: PriceHistoryPoint[] }
+type StoreHistory = {
+  store: string
+  points: PriceHistoryPoint[]
+  availability?: string | null
+  verification_status?: string | null
+  is_test_site?: boolean
+}
 type ChartPoint = { date: string; [store: string]: number | string }
 
 const chartColors = ['#34d399', '#60a5fa', '#fbbf24', '#c084fc', '#fb7185']
 const detailPeriods: PriceHistoryPeriod[] = ['7D', '30D', '90D']
+
+const VERIFICATION_LABELS: Record<string, string> = {
+  verified_scraped: 'Verified scraped',
+  manually_verified: 'Verified manual',
+  manual_illustrative: 'Manual illustrative',
+  test_site_illustrative: 'Test-site practice data',
+  unverified_excluded: 'Excluded / unavailable',
+}
+
+function normalizeOfferAvailability(value: string | null | undefined) {
+  return typeof value === 'string'
+    ? value.trim().toLowerCase().replace(/\s+/g, '_')
+    : ''
+}
+
+function isCanonicalInStock(value: string | null | undefined) {
+  return normalizeOfferAvailability(value) === 'in_stock'
+}
+
+function availabilityDisplayLabel(value: string | null | undefined) {
+  const normalized = normalizeOfferAvailability(value)
+  if (normalized === 'in_stock') return 'In Stock'
+  if (normalized === 'out_of_stock') return 'Out of stock'
+  if (normalized === 'preorder') return 'Preorder'
+  if (normalized === 'unknown') return 'Unknown'
+  return value?.trim() || 'Unknown'
+}
+
+function isIllustrativeOffer(offer: StoreOffer) {
+  const status = normalizeOfferAvailability(offer.verification_status)
+  return (
+    offer.is_test_site === true ||
+    status === 'manual_illustrative' ||
+    status === 'test_site_illustrative'
+  )
+}
+
+function isVerifiedForPricing(offer: StoreOffer) {
+  const status = normalizeOfferAvailability(offer.verification_status)
+  return (
+    offer.is_test_site !== true &&
+    (status === 'verified_scraped' || status === 'manually_verified')
+  )
+}
+
+function offerBadgeLabel(
+  offer: StoreOffer,
+  kind: 'availability' | 'source' | 'verification',
+) {
+  if (kind === 'availability') {
+    const availability = normalizeOfferAvailability(offer.availability)
+    if (availability === 'in_stock') return 'In Stock'
+    if (availability === 'out_of_stock') return 'Out of stock'
+    if (availability === 'preorder') return 'Preorder'
+    return 'Unknown'
+  }
+  if (kind === 'source') {
+    if (offer.is_test_site) return 'WebScraper.io Test Site'
+    const source = offer.source_type?.trim().toLowerCase()
+    if (source === 'scraped') return 'Scraped'
+    if (source === 'manual') return 'Manual'
+    return 'Unknown'
+  }
+  const status = normalizeOfferAvailability(offer.verification_status)
+  return VERIFICATION_LABELS[status] ?? 'Excluded / unavailable'
+}
+
+function offerBadgeClass(
+  offer: StoreOffer,
+  kind: 'source' | 'verification',
+) {
+  if (kind === 'source' && offer.is_test_site) {
+    return 'border-violet-400/20 bg-violet-400/[0.08] text-violet-300'
+  }
+  const status = normalizeOfferAvailability(offer.verification_status)
+  if (status === 'test_site_illustrative' || offer.is_test_site) {
+    return 'border-violet-400/20 bg-violet-400/[0.08] text-violet-300'
+  }
+  if (status === 'verified_scraped' || status === 'manually_verified') {
+    return 'border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-300'
+  }
+  if (status === 'manual_illustrative') {
+    return 'border-amber-400/20 bg-amber-400/[0.08] text-amber-300'
+  }
+  return 'border-rose-400/20 bg-rose-400/[0.08] text-rose-300'
+}
 
 function formatPrice(price: number) {
   return new Intl.NumberFormat('en-US', {
@@ -540,12 +632,23 @@ export function ProductDetailPage() {
     }
   }, [product])
 
-  const storeOffers = useMemo(
+  const remoteOffers = useMemo(
     () =>
       remoteData && remoteData.productId === product?.id
         ? remoteData.offers
         : [],
     [product, remoteData],
+  )
+  const storeOffers = useMemo(
+    () =>
+      remoteOffers.filter(
+        (offer) =>
+          isCanonicalInStock(offer.availability) &&
+          offer.is_test_site !== true &&
+          normalizeOfferAvailability(offer.verification_status) !==
+            'test_site_illustrative',
+      ),
+    [remoteOffers],
   )
   const sortedOffers = useMemo(
     () =>
@@ -554,17 +657,26 @@ export function ProductDetailPage() {
         .sort((first, second) => first.price - second.price),
     [storeOffers],
   )
+  const eligibleSortedOffers = useMemo(
+    () => sortedOffers.filter(isVerifiedForPricing),
+    [sortedOffers],
+  )
   const histories = useMemo<StoreHistory[]>(() => {
     if (
       remoteData &&
       remoteData.productId === product?.id &&
-      remoteData.period === period
+      remoteData.period === period &&
+      storeOffers.length > 0
     ) {
-      return remoteData.histories
+      return remoteData.histories.filter(
+        (history) =>
+          history.is_test_site !== true &&
+          (history.availability == null || isCanonicalInStock(history.availability)),
+      )
     }
 
     return []
-  }, [product, remoteData, period])
+  }, [product, remoteData, period, storeOffers.length])
 
   if (!product) {
     if (dataSource === 'loading') {
@@ -654,9 +766,15 @@ export function ProductDetailPage() {
     (specification) =>
       specification.label.trim().toLowerCase() === 'availability',
   )?.value
-  const isAvailable = availability
-    ? /available|in stock|ready/i.test(availability)
-    : false
+  const isAvailable = isCanonicalInStock(availability)
+  const offerEmptyMessage =
+    sortedOffers.length > 0
+      ? null
+      : remoteOffers.some(isIllustrativeOffer)
+        ? 'Only illustrative/test-site data is available'
+        : remoteOffers.length > 0
+          ? 'No In Stock offers match these filters'
+          : 'No offers found'
   const chartRows = new Map<string, ChartPoint>()
   histories.forEach((history) => {
     history.points.forEach((point) => {
@@ -681,8 +799,9 @@ export function ProductDetailPage() {
     ? historyPrices.reduce((total, price) => total + price, 0) /
       historyPrices.length
     : product.price
-  const cheapestPrice = sortedOffers[0]?.price ?? product.price
-  const cheapestStore = sortedOffers[0]?.store ?? product.store
+  const cheapestOffer = eligibleSortedOffers[0]
+  const cheapestPrice = cheapestOffer?.price ?? product.price
+  const cheapestStore = cheapestOffer?.store ?? product.store
   const priceDifference = getPriceDifference(product)
   const isWatchlisted = watchlistIds.includes(product.id)
   const hasCurrentPriceData = Boolean(
@@ -765,7 +884,7 @@ export function ProductDetailPage() {
                       isAvailable ? 'bg-emerald-400' : 'bg-amber-400'
                     }`}
                   />
-                  {availability}
+                  {availabilityDisplayLabel(availability)}
                 </span>
               )}
             </div>
@@ -794,16 +913,14 @@ export function ProductDetailPage() {
                 icon={Tag}
                 accent
               />
-              <PriceStatCard
-                label="Cheapest store"
-                value={formatPrice(cheapestPrice)}
-                detail={
-                  sortedOffers.length > 0
-                    ? cheapestStore
-                    : `listed at ${product.store}`
-                }
-                icon={Store}
-              />
+              {sortedOffers.length > 0 && (
+                <PriceStatCard
+                  label="Cheapest store"
+                  value={formatPrice(cheapestPrice)}
+                  detail={cheapestStore}
+                  icon={Store}
+                />
+              )}
               <PriceStatCard
                 label="Previous difference"
                 value={
@@ -935,7 +1052,7 @@ export function ProductDetailPage() {
       >
         <div className="border-b border-white/[0.06] p-4 sm:p-6">
           <SectionHeading
-            eyebrow="Live offers"
+            eyebrow="Recorded offers"
             title="Prices across stores"
             description={`Recorded store offers for ${product.name}`}
             icon={Store}
@@ -977,8 +1094,12 @@ export function ProductDetailPage() {
             </div>
           ) : sortedOffers.length > 0 ? (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {sortedOffers.map((offer, index) => {
-                const cheapest = index === 0
+              {sortedOffers.map((offer) => {
+                const cheapest = Boolean(
+                  cheapestOffer &&
+                    offer.store === cheapestOffer.store &&
+                    offer.price === cheapestOffer.price,
+                )
                 return (
                   <article
                     key={offer.store}
@@ -1004,6 +1125,21 @@ export function ProductDetailPage() {
                         </span>
                       )}
                     </div>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      <span className="rounded-lg border border-white/[0.07] bg-white/[0.03] px-2 py-1 text-[9px] text-slate-400">
+                        {offerBadgeLabel(offer, 'availability')}
+                      </span>
+                      <span
+                        className={`rounded-lg border px-2 py-1 text-[9px] ${offerBadgeClass(offer, 'source')}`}
+                      >
+                        {offerBadgeLabel(offer, 'source')}
+                      </span>
+                      <span
+                        className={`rounded-lg border px-2 py-1 text-[9px] ${offerBadgeClass(offer, 'verification')}`}
+                      >
+                        {offerBadgeLabel(offer, 'verification')}
+                      </span>
+                    </div>
                     <p
                       className={`mt-4 text-xl font-semibold tabular-nums tracking-tight ${
                         cheapest ? 'text-emerald-200' : 'text-white'
@@ -1013,7 +1149,7 @@ export function ProductDetailPage() {
                     </p>
                     <p className="mt-1 text-[10px] text-slate-500">
                       {cheapest
-                        ? 'Lowest recorded offer'
+                        ? 'Lowest verified offer'
                         : `${formatPrice(offer.price - cheapestPrice)} above best price`}
                     </p>
                   </article>
@@ -1027,10 +1163,10 @@ export function ProductDetailPage() {
             >
               <PackageSearch aria-hidden="true" size={22} className="text-slate-500" />
               <p className="mt-3 text-xs font-medium text-slate-300">
-                No current store offers are recorded.
+                {offerEmptyMessage}
               </p>
               <p className="mt-1 text-[11px] text-slate-500">
-                Offers appear here when stores report a valid price.
+                Only canonical In Stock offers are shown here.
               </p>
             </div>
           )}
