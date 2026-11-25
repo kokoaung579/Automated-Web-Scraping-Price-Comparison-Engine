@@ -294,15 +294,19 @@ function StoreDialog({
 function DeleteStoreDialog({
   store,
   productCount,
+  offerCount,
   error,
   onCancel,
   onConfirm,
+  onConfirmWithOffers,
 }: {
   store: AdminStore
   productCount: number
+  offerCount: number
   error: string
   onCancel: () => void
   onConfirm: () => void
+  onConfirmWithOffers: () => void
 }) {
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
@@ -343,6 +347,13 @@ function DeleteStoreDialog({
             {productCount === 1 ? 'product' : 'products'}.
           </p>
         ) : null}
+        {offerCount > 0 ? (
+          <p className="mt-3 rounded-lg border border-amber-300/10 bg-amber-400/[0.06] px-3 py-2 text-[10px] leading-4 text-amber-100">
+            Cannot delete this store: it is linked to {offerCount}{' '}
+            {offerCount === 1 ? 'offer' : 'offers'}. Review and reassign or
+            remove those offers before deleting this store.
+          </p>
+        ) : null}
 
         {error && (
           <p
@@ -365,11 +376,20 @@ function DeleteStoreDialog({
           <button
             type="button"
             onClick={onConfirm}
-            disabled={productCount > 0}
+            disabled={productCount > 0 || offerCount > 0}
             className="rounded-xl bg-rose-500/90 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Delete store
           </button>
+          {offerCount > 0 && productCount === 0 ? (
+            <button
+              type="button"
+              onClick={onConfirmWithOffers}
+              className="rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3.5 py-2 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-400/[0.14]"
+            >
+              Delete store and {offerCount} offers
+            </button>
+          ) : null}
         </div>
       </section>
     </div>
@@ -514,6 +534,7 @@ export function AdminStoresPage() {
     if (!deletingStore) return
 
     const productCount = deletingStore.product_count
+    const offerCount = deletingStore.offer_count ?? 0
 
     if (productCount > 0) {
       setDeleteError(
@@ -523,11 +544,37 @@ export function AdminStoresPage() {
       )
       return
     }
+    if (offerCount > 0) {
+      setDeleteError(
+        `Cannot delete ${deletingStore.store_name}: it is linked to ${offerCount} ${
+          offerCount === 1 ? 'offer' : 'offers'
+        }.`,
+      )
+      return
+    }
 
     try {
       await deleteStore(deletingStore.store_id)
       await refreshStores()
       setFeedback(`${deletingStore.store_name} deleted.`)
+      setDeletingStore(null)
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error
+          ? error.message
+          : 'Could not delete store from the server.',
+      )
+    }
+  }
+
+  async function confirmDeleteWithOffers() {
+    if (!deletingStore) return
+    try {
+      const result = await deleteStore(deletingStore.store_id, true)
+      await refreshStores()
+      setFeedback(
+        `${deletingStore.store_name} and ${result.deleted_offers ?? 0} linked offers deleted.`,
+      )
       setDeletingStore(null)
     } catch (error) {
       setDeleteError(
@@ -844,9 +891,11 @@ export function AdminStoresPage() {
         <DeleteStoreDialog
           store={deletingStore}
           productCount={deletingStore.product_count}
+          offerCount={deletingStore.offer_count ?? 0}
           error={deleteError}
           onCancel={() => setDeletingStore(null)}
           onConfirm={confirmDelete}
+          onConfirmWithOffers={confirmDeleteWithOffers}
         />
       )}
     </div>

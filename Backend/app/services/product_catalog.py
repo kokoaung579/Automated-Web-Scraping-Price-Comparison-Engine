@@ -39,6 +39,10 @@ async def upsert_admin_product_offer(database, product: AdminProduct) -> None:
                 "productId": product.product_id,
                 "store": store_name,
                 "price": product.price,
+                "storeId": store_id,
+                "currency": "USD",
+                "sourceType": "manual",
+                "updatedAt": datetime.now(timezone.utc).isoformat(),
             }
         },
         upsert=True,

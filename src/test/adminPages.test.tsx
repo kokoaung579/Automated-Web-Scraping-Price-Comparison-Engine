@@ -24,6 +24,7 @@ import type { AuditLog } from '../data/adminAuditLogs'
 import type { Product } from '../types/product'
 import type { AuthUser, BrowserAccountImport } from '../types/auth'
 import { AuthProvider } from '../auth/AuthProvider'
+import { SystemSettingsProvider } from '../context/SystemSettingsContext'
 
 type TestAccount = {
   email: string
@@ -49,6 +50,8 @@ let productAuditCalls: Array<{
 }> = []
 let failBulkDeleteIds: Set<string> = new Set()
 let lastExportedBlob: Blob | null = null
+let lastSystemSettingsUpdate: Record<string, unknown> | null = null
+let systemSettingsResponse: Record<string, unknown> = {}
 
 const defaultNotificationSettings = {
   scraping: true,
@@ -222,6 +225,13 @@ async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
 
   if (url.pathname === '/api/auth/session') {
     return jsonResponse(backendSession)
+  }
+  if (url.pathname === '/api/system/settings') {
+    if (method === 'PUT') {
+      lastSystemSettingsUpdate = JSON.parse(String(init?.body)) as Record<string, unknown>
+      systemSettingsResponse = { ...systemSettingsResponse, ...lastSystemSettingsUpdate }
+    }
+    return jsonResponse(systemSettingsResponse)
   }
   if (url.pathname === '/api/admin/users/import-browser' && method === 'POST') {
     const body = JSON.parse(String(init?.body)) as {
@@ -821,6 +831,8 @@ describe('admin and shared user pages', () => {
     productAuditCalls = []
     failBulkDeleteIds = new Set()
     lastExportedBlob = null
+    lastSystemSettingsUpdate = null
+    systemSettingsResponse = {}
     Object.defineProperty(URL, 'createObjectURL', {
       configurable: true,
       value: vi.fn((blob: Blob) => {
@@ -1689,21 +1701,22 @@ describe('admin and shared user pages', () => {
     expect(within(dialog).queryByRole('button', { name: /Edit|Delete/ })).toBeNull()
   })
 
-  it('saves settings across reloads and requires confirmation before demo-data reset', async () => {
+  it('saves settings across reloads with only the supported settings sections', async () => {
     const user = userEvent.setup()
-    const keys = [
-      'pricepilot-admin-products',
-      'pricepilot-admin-categories',
-      'pricepilot-admin-stores',
-      'pricepilot-admin-scraping-jobs',
-      'pricepilot-admin-audit-logs',
-    ]
     window.localStorage.setItem('pricepilot-accounts', 'isolated accounts')
     window.localStorage.setItem('pricepilot-session', 'isolated session')
     window.localStorage.setItem('pricepilot-theme', 'light')
-    keys.forEach((key) => window.localStorage.setItem(key, 'test data'))
 
     const { unmount } = render(<AdminSettingsPage />)
+    expect(screen.queryByText('Alert Settings')).toBeNull()
+    expect(screen.queryByText('Data Management')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Export Demo Data' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Reset Demo Data' })).toBeNull()
+    expect(screen.getByText('Security Settings')).toBeDefined()
+    expect(screen.getByLabelText('Session Timeout (minutes)')).toBeDefined()
+    expect(screen.getByLabelText('Maximum Login Attempts')).toBeDefined()
+    expect(screen.getByLabelText('Password Policy')).toBeDefined()
+
     await user.clear(screen.getByLabelText('Application Name'))
     await user.type(screen.getByLabelText('Application Name'), 'Saved Test Name')
     await user.click(screen.getByRole('button', { name: 'Save Changes' }))
@@ -1714,17 +1727,32 @@ describe('admin and shared user pages', () => {
     render(<AdminSettingsPage />)
     expect((screen.getByLabelText('Application Name') as HTMLInputElement).value)
       .toBe('Saved Test Name')
-    await user.click(screen.getByRole('button', { name: 'Reset Demo Data' }))
-    expect(screen.getByRole('dialog')).toBeDefined()
-    keys.forEach((key) => expect(window.localStorage.getItem(key)).toBe('test data'))
-    await user.click(screen.getByRole('button', { name: 'Reset demo data' }))
-
-    keys.forEach((key) => expect(window.localStorage.getItem(key)).toBeNull())
     expect(window.localStorage.getItem('pricepilot-accounts')).toBe('isolated accounts')
     expect(window.localStorage.getItem('pricepilot-session')).toBe('isolated session')
     expect(window.localStorage.getItem('pricepilot-theme')).toBe('light')
-    expect(JSON.parse(window.localStorage.getItem('pricepilot-admin-settings') ?? '{}').applicationName)
-      .toBe('Saved Test Name')
+  })
+
+  it('sends the security settings to the backend when an admin saves them', async () => {
+    const user = userEvent.setup()
+    render(
+      <SystemSettingsProvider>
+        <AdminSettingsPage />
+      </SystemSettingsProvider>,
+    )
+
+    await user.clear(screen.getByLabelText('Session Timeout (minutes)'))
+    await user.type(screen.getByLabelText('Session Timeout (minutes)'), '45')
+    await user.clear(screen.getByLabelText('Maximum Login Attempts'))
+    await user.type(screen.getByLabelText('Maximum Login Attempts'), '7')
+    await user.selectOptions(screen.getByLabelText('Password Policy'), 'very-strong')
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    await waitFor(() => expect(lastSystemSettingsUpdate).not.toBeNull())
+    expect(lastSystemSettingsUpdate).toMatchObject({
+      sessionTimeoutMinutes: 45,
+      maximumLoginAttempts: 7,
+      passwordPolicy: 'very-strong',
+    })
   })
 
   it('renders the existing User Dashboard route with shared outlet state', async () => {

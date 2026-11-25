@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
+import { takeSessionMessage } from '../api/client'
 import { useAuth } from '../auth/useAuth'
 
 type AuthPageProps = {
@@ -301,7 +302,9 @@ export function AuthPage({ mode }: AuthPageProps) {
       ?.passwordResetSuccess === true
   const [values, setValues] = useState(initialValues)
   const [errors, setErrors] = useState<AuthErrors>({})
-  const [formError, setFormError] = useState('')
+  const [formError, setFormError] = useState(() =>
+    isSignup ? '' : takeSessionMessage(),
+  )
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   function updateValue(field: keyof AuthValues, value: string) {

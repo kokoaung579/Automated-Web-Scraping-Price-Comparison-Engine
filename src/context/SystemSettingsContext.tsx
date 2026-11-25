@@ -7,6 +7,7 @@ import {
 } from 'react'
 import type { ReactNode } from 'react'
 import { api } from '../api/client'
+import type { SystemSettingsUpdate } from '../api/client'
 import { setAppTimeZone } from '../utils/datetime'
 
 type SystemSettingsState = {
@@ -15,10 +16,10 @@ type SystemSettingsState = {
   loading: boolean
   error: string
   refresh: () => Promise<void>
-  update: (settings: {
-    applicationName?: string
-    timeZone?: string
-  }) => Promise<{ applicationName: string; timeZone: string }>
+  update: (settings: SystemSettingsUpdate) => Promise<{
+    applicationName: string
+    timeZone: string
+  }>
 }
 
 const DEFAULTS = {
@@ -66,7 +67,7 @@ export function SystemSettingsProvider({ children }: { children: ReactNode }) {
   }, [apply])
 
   const update = useCallback(
-    async (settings: { applicationName?: string; timeZone?: string }) => {
+    async (settings: SystemSettingsUpdate) => {
       const result = await api.updateSystemSettings(settings)
       apply(result)
       return result

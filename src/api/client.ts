@@ -73,6 +73,7 @@ type ProductRecord = Omit<DemoProduct, 'icon'> & {
 
 export type StoreWithProductCount = AdminStore & {
   product_count: number
+  offer_count: number
 }
 
 export type StoreMutationResponse = {
@@ -170,6 +171,48 @@ export class ApiConnectionError extends Error {
   }
 }
 
+export const SESSION_EXPIRED_MESSAGE =
+  'Your session has expired. Please sign in again.'
+export const SESSION_EXPIRED_EVENT = 'pricepilot:session-expired'
+const SESSION_MESSAGE_KEY = 'pricepilot-session-message'
+
+function announceSessionExpiry(message: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(SESSION_MESSAGE_KEY, message)
+  } catch {
+    // Storage can be unavailable; the event below is still useful.
+  }
+  window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+}
+
+export function takeSessionMessage(): string {
+  if (typeof window === 'undefined') return ''
+  try {
+    const message = window.sessionStorage.getItem(SESSION_MESSAGE_KEY) ?? ''
+    window.sessionStorage.removeItem(SESSION_MESSAGE_KEY)
+    return message
+  } catch {
+    return ''
+  }
+}
+
+export type SystemSettingsResponse = {
+  applicationName: string
+  timeZone: string
+  sessionTimeoutMinutes: number
+  maximumLoginAttempts: number
+  passwordPolicy: 'standard' | 'strong' | 'very-strong'
+}
+
+export type SystemSettingsUpdate = {
+  applicationName?: string
+  timeZone?: string
+  sessionTimeoutMinutes?: number
+  maximumLoginAttempts?: number
+  passwordPolicy?: 'standard' | 'strong' | 'very-strong'
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response
   try {
@@ -210,6 +253,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
               .filter(Boolean)
               .join(' ')
           : ''
+    if (response.status === 401 && message === SESSION_EXPIRED_MESSAGE) {
+      announceSessionExpiry(message)
+    }
     throw new Error(message || `Backend request failed (${response.status})`)
   }
 
@@ -490,9 +536,11 @@ export const api = {
       },
     ),
 
-  deleteAdminStore: (storeId: string) =>
-    request<{ message: string; store_id: string }>(
-      `/admin/stores/${encodeURIComponent(storeId)}`,
+  deleteAdminStore: (storeId: string, deleteLinkedOffers = false) =>
+    request<{ message: string; store_id: string; deleted_offers?: number }>(
+      `/admin/stores/${encodeURIComponent(storeId)}${
+        deleteLinkedOffers ? '?delete_offers=true' : ''
+      }`,
       { method: 'DELETE' },
     ),
 
@@ -679,13 +727,10 @@ export const api = {
     ),
 
   systemSettings: () =>
-    request<{ applicationName: string; timeZone: string }>('/system/settings'),
+    request<SystemSettingsResponse>('/system/settings'),
 
-  updateSystemSettings: (settings: {
-    applicationName?: string
-    timeZone?: string
-  }) =>
-    request<{ applicationName: string; timeZone: string }>('/system/settings', {
+  updateSystemSettings: (settings: SystemSettingsUpdate) =>
+    request<SystemSettingsResponse>('/system/settings', {
       method: 'PUT',
       body: JSON.stringify(settings),
     }),
