@@ -291,6 +291,29 @@ class DashboardEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(category_counts["user_activities"], 1)
         self.assertEqual(category_counts["scraping_activities"], 1)
 
+    async def test_scraping_activity_uses_created_at_when_timestamp_is_missing(self):
+        database = FakeDatabase(
+            scraping_logs=[
+                {
+                    "_id": ObjectId(),
+                    "created_at": "2026-11-17T09:42:00+00:00",
+                    "website": "amazon.com",
+                    "product": "Historical product",
+                    "status": "success",
+                },
+            ],
+        )
+
+        result = await self.call_dashboard(database)
+        scraping_item = next(
+            item
+            for item in result["recent_activity"]["items"]
+            if item["category"] == "scraping_activities"
+        )
+
+        self.assertEqual(scraping_item["timestamp"], "2026-11-17T09:42:00Z")
+        self.assertEqual(scraping_item["sort_timestamp"], "2026-11-17T09:42:00Z")
+
 
 if __name__ == "__main__":
     unittest.main()
