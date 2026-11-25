@@ -2,6 +2,7 @@
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Literal
 
 from app.routers.channel3 import router as channel3_router
 from app.routers.apify import router as apify_router
@@ -22,6 +23,8 @@ from app.routers.audit import (
 from app.routers.dashboard import router as dashboard_router
 from app.routers.categories import router as categories_router
 from app.routers.comparison import router as comparison_router
+from app.routers.manual_offers import router as manual_offers_router
+from app.routers.scraping_jobs import router as scraping_jobs_router
 from app.routers.product_bulk import router as product_bulk_router
 from app.routers.admin_notifications import router as admin_notifications_router
 from app.routers.system_settings import router as system_settings_router
@@ -43,6 +46,11 @@ from pymongo.errors import DuplicateKeyError
 
 from app.database import connect_db
 from app.services.product_catalog import upsert_admin_product_offer
+from app.services.comparison import (
+    build_offer_classification_context,
+    classify_product_offer,
+    resolve_offer_availability,
+)
 from app.services.category_catalog import (
     canonical_category_name,
     ensure_product_categories,
@@ -64,6 +72,14 @@ from app.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _safe_find_all(database, collection_name, *args):
+    collection = getattr(database, collection_name, None)
+    if collection is None:
+        return []
+    return await collection.find(*args).to_list(length=None)
+
 
 ADMIN_PRODUCTS_MIGRATION_ID = "admin-products-to-products-v1"
 PRODUCT_CATEGORY_MIGRATION_ID = "product-categories-shared-source-v1"
@@ -112,6 +128,8 @@ app.include_router(auth_router)
 app.include_router(stores_router)
 app.include_router(categories_router)
 app.include_router(comparison_router)
+app.include_router(manual_offers_router)
+app.include_router(scraping_jobs_router)
 app.include_router(audit_router)
 app.include_router(product_bulk_router)
 app.include_router(admin_notifications_router)
@@ -718,48 +736,110 @@ async def product_channel3_details(product_id: str):
     "/api/products/{product_id}/offers",
     response_model=list[StoreOffer],
 )
-async def product_offers(product_id: str):
+async def product_offers(
+    product_id: str,
+    availability: Literal["in_stock", "all"] = "in_stock",
+):
     product = await require_product(product_id)
+    database = get_database()
 
-    documents = await get_database().offers.find(
-        {"productId": product_id},
-        {"_id": 1, "store": 1, "price": 1},
-    ).to_list(length=None)
+    context = await build_offer_classification_context(database)
+    documents = [
+        offer for offer in context["offer_documents"]
+        if str(offer.get("productId") or "") == product_id
+    ]
+    now = datetime.now(timezone.utc)
 
-    if not isinstance(product.get("adminProduct"), dict):
-        return [
-            {"store": offer["store"], "price": offer["price"]}
-            for offer in documents
-        ]
+    def serialize(offer: dict, price: float, *, store_name_override: str | None = None,
+                  product_availability=None) -> dict:
+        classified = dict(offer)
+        classified["productId"] = product_id
+        classified["price"] = price
+        classified["availability"] = resolve_offer_availability(
+            offer, product_availability=product_availability
+        )
+        if store_name_override is not None:
+            classified["store"] = store_name_override
+        if not classified.get("updatedAt") and classified.get("updated_at"):
+            classified["updatedAt"] = classified["updated_at"]
+        payload, _ = classify_product_offer(classified, context, now=now)
+        return {
+            "store": payload["store_name"] or payload["store_id"] or "",
+            "price": price,
+            "availability": payload["availability"],
+            "source_type": payload["source_type"],
+            "verification_status": payload["verification_status"],
+            "is_test_site": payload["is_test_site"],
+            "product_url": payload["product_url"],
+            "updated_at": payload["last_updated"],
+        }
+
+    raw_admin_product = product.get("adminProduct")
+    has_admin_product = isinstance(raw_admin_product, dict)
+    admin_product = raw_admin_product if has_admin_product else {}
+    product_availability = admin_product.get("availability")
+
+    all_offers = [
+        serialize(
+            offer,
+            offer["price"],
+            product_availability=product_availability,
+        )
+        for offer in documents
+    ]
+
+    if not has_admin_product:
+        if availability == "all":
+            return all_offers
+        return [offer for offer in all_offers if offer["availability"] == "in_stock"]
 
     def normalize_store(value: str) -> str:
         return "".join(
             character
-            for character in value.casefold()
+            for character in str(value or "").casefold()
             if character.isalnum()
         )
 
-    catalog_store = product["store"]
+    catalog_store = str(product.get("store") or "")
+    catalog_store_id = str(admin_product.get("store_id") or "")
     normalized_catalog_store = normalize_store(catalog_store)
+
+    def is_catalog_offer(document):
+        if normalize_store(document.get("store")) == normalized_catalog_store:
+            return True
+        offer_store_id = str(
+            document.get("storeId") or document.get("store_id") or ""
+        )
+        return bool(catalog_store_id) and offer_store_id == catalog_store_id
+
     listed_offer = next(
-        (
-            offer
-            for offer in documents
-            if normalize_store(offer["store"]) == normalized_catalog_store
-        ),
+        (offer for offer in documents if is_catalog_offer(offer)),
         None,
     )
     current_offers = [
-        {"store": offer["store"], "price": offer["price"]}
+        serialize(offer, offer["price"], product_availability=product_availability)
         for offer in documents
         if offer.get("_id") != f"{product_id}:{offer['store']}"
-        and normalize_store(offer["store"]) != normalized_catalog_store
+        and not is_catalog_offer(offer)
     ]
-    current_offers.append({
-        "store": listed_offer["store"] if listed_offer else catalog_store,
-        "price": product["price"],
-    })
-    return current_offers
+    catalog_offer_source = listed_offer or {
+        "store": catalog_store,
+        "storeId": admin_product.get("store_id"),
+        "availability": admin_product.get("availability"),
+        "sourceType": admin_product.get("source_type"),
+        "productUrl": admin_product.get("product_url"),
+        "updatedAt": admin_product.get("updated_at"),
+    }
+    current_offers.append(serialize(
+        catalog_offer_source,
+        product["price"],
+        store_name_override=catalog_store or str(catalog_offer_source.get("store") or ""),
+        product_availability=product_availability,
+    ))
+
+    if availability == "all":
+        return current_offers
+    return [offer for offer in current_offers if offer["availability"] == "in_stock"]
 
 
 @app.get(
@@ -769,10 +849,12 @@ async def product_offers(product_id: str):
 async def product_history(
     product_id: str,
     period: str = Query(pattern="^(7D|30D|90D|1Y)$"),
+    availability: Literal["in_stock", "all"] = "in_stock",
 ):
-    await require_product(product_id)
+    product = await require_product(product_id)
+    database = get_database()
 
-    documents = await get_database().price_history.find(
+    documents = await database.price_history.find(
         {
             "productId": product_id,
             "period": period,
@@ -783,8 +865,65 @@ async def product_history(
             "points": 1,
         },
     ).to_list(length=None)
+    context = await build_offer_classification_context(database)
+    offers = [
+        offer for offer in context["offer_documents"]
+        if str(offer.get("productId") or "") == product_id
+    ]
+    now = datetime.now(timezone.utc)
 
-    return documents
+    def normalize_store(value: str) -> str:
+        return "".join(
+            character
+            for character in str(value or "").casefold()
+            if character.isalnum()
+        )
+
+    admin_product = product.get("adminProduct")
+    if not isinstance(admin_product, dict):
+        admin_product = {}
+
+    enriched = []
+    for document in documents:
+        store_name = str(document.get("store") or "")
+        matching_offer = next(
+            (
+                offer for offer in offers
+                if normalize_store(offer.get("store")) == normalize_store(store_name)
+            ),
+            None,
+        )
+        if matching_offer is None and normalize_store(store_name) == normalize_store(product.get("store")):
+            matching_offer = {
+                "store": store_name,
+                "availability": admin_product.get("availability"),
+                "sourceType": admin_product.get("source_type"),
+                "storeId": admin_product.get("store_id"),
+                "productUrl": admin_product.get("product_url"),
+                "price": product.get("price"),
+                "currency": admin_product.get("currency"),
+                "updatedAt": admin_product.get("updated_at"),
+            }
+        classified = dict(matching_offer or {})
+        classified["productId"] = product_id
+        classified["store"] = store_name
+        classified["availability"] = resolve_offer_availability(
+            matching_offer or {},
+            product_availability=admin_product.get("availability"),
+        )
+        if not classified.get("updatedAt") and classified.get("updated_at"):
+            classified["updatedAt"] = classified["updated_at"]
+        payload, _ = classify_product_offer(classified, context, now=now)
+        enriched.append({
+            **document,
+            "availability": payload["availability"],
+            "verification_status": payload["verification_status"],
+            "is_test_site": payload["is_test_site"],
+        })
+
+    if availability == "all":
+        return enriched
+    return [document for document in enriched if document["availability"] == "in_stock"]
 
 
 # ==========================================

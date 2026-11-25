@@ -14,8 +14,18 @@ from app.models import APIModel
 
 class VerificationStatus(str, Enum):
     VERIFIED_SCRAPED = "verified_scraped"
+    MANUALLY_VERIFIED = "manually_verified"
     MANUAL_ILLUSTRATIVE = "manual_illustrative"
+    TEST_SITE_ILLUSTRATIVE = "test_site_illustrative"
     UNVERIFIED_EXCLUDED = "unverified_excluded"
+
+
+class AvailabilityState(str, Enum):
+    IN_STOCK_OFFERS_AVAILABLE = "in_stock_offers_available"
+    CATALOG_IN_STOCK_NO_VERIFIED_OFFERS = "catalog_in_stock_no_verified_offers"
+    NO_IN_STOCK_OFFERS = "no_in_stock_offers"
+    ONLY_ILLUSTRATIVE_DATA = "only_illustrative_data"
+    NO_OFFERS = "no_offers"
 
 
 class Eligibility(str, Enum):
@@ -72,6 +82,7 @@ class ComparisonIdentity(APIModel):
     evidence: list[IdentityEvidence] = Field(default_factory=list)
     needs_review: bool = False
     review_reason: str | None = None
+    is_test_site: bool = False
 
 
 class StoreOffer(APIModel):
@@ -88,6 +99,7 @@ class StoreOffer(APIModel):
     label: str
     last_updated: str | None = None
     product_url: str | None = None
+    is_test_site: bool = False
     exclusion_reasons: list[str] = Field(default_factory=list)
 
 
@@ -118,7 +130,7 @@ class IllustrativeSummary(APIModel):
     lowest_display_only: PriceExtreme | None = None
     highest_display_only: PriceExtreme | None = None
     message: str = (
-        "Manual illustrative prices are not verified live retailer prices."
+        "Illustrative and test-site prices are not verified live retailer prices."
     )
 
 
@@ -132,6 +144,7 @@ class HistorySeries(APIModel):
     store_name: str
     product_id: str
     verification_status: VerificationStatus
+    is_test_site: bool = False
     points: list[HistoryPoint]
 
 
@@ -161,6 +174,7 @@ class ExcludedOffer(APIModel):
 
 class ProductComparison(APIModel):
     identity: ComparisonIdentity
+    catalog_availability: Availability = Availability.UNKNOWN
     verified: VerifiedSummary
     illustrative: IllustrativeSummary
     offers: list[StoreOffer]
@@ -168,6 +182,7 @@ class ProductComparison(APIModel):
     coverage: StoreCoverage
     excluded_offers: list[ExcludedOffer] = Field(default_factory=list)
     latest_verified_update: str | None = None
+    availability_state: AvailabilityState = AvailabilityState.NO_OFFERS
 
 
 class ComparisonQueryMeta(APIModel):
@@ -194,7 +209,9 @@ class ComparisonDiagnostics(APIModel):
     unmatched_product_count: int
     needs_review_group_count: int
     illustrative_offer_count: int
+    excluded_offers: list[ExcludedOffer] = Field(default_factory=list)
     excluded_orphan_offers: list[ExcludedOffer] = Field(default_factory=list)
+    empty_state_reason: AvailabilityState | None = None
 
 
 class ComparisonMeta(APIModel):

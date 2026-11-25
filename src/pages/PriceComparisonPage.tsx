@@ -20,15 +20,66 @@ import { api } from '../api/client'
 import type { AppOutletContext } from '../context/AppOutletContext'
 import type { AdminStore } from '../data/adminStores'
 import type {
+  AvailabilityState,
   ComparisonPeriod,
   ComparisonResponse,
   ProductComparison,
   StoreOffer,
+  VerificationStatus,
 } from '../types/comparison'
 
 const PERIODS: ComparisonPeriod[] = ['7D', '30D', '90D', '1Y']
 const PAGE_SIZE = 15
 const SEARCH_DEBOUNCE_MS = 300
+
+const HISTORY_STATUS_LABELS: Record<VerificationStatus, string> = {
+  verified_scraped: 'Verified scraped',
+  manually_verified: 'Verified manual',
+  manual_illustrative: 'Manual illustrative',
+  test_site_illustrative: 'Test-site practice data',
+  unverified_excluded: 'Excluded / unavailable',
+}
+
+const EMPTY_STATE_MESSAGES: Record<AvailabilityState, string> = {
+  in_stock_offers_available: 'No In Stock offers match these filters',
+  catalog_in_stock_no_verified_offers: 'No verified In-Stock offers available',
+  no_in_stock_offers: 'No In Stock offers match these filters',
+  only_illustrative_data: 'Only illustrative/test-site data is available',
+  no_offers: 'No offers found',
+}
+
+function emptyStateMessage(
+  reason: AvailabilityState | null | undefined,
+  fallback: AvailabilityState = 'no_offers',
+) {
+  return EMPTY_STATE_MESSAGES[reason ?? fallback]
+}
+
+function retailerEmptyStateMessage(
+  item: ProductComparison,
+  reason: AvailabilityState | null | undefined,
+  availability: AvailabilityFilter,
+) {
+  if (
+    availability === 'in_stock' &&
+    item.catalog_availability === 'in_stock' &&
+    item.verified.status !== 'verified_offers_available'
+  ) {
+    return EMPTY_STATE_MESSAGES.catalog_in_stock_no_verified_offers
+  }
+  return emptyStateMessage(
+    reason,
+    availability === 'all' ? 'no_offers' : 'no_in_stock_offers',
+  )
+}
+
+function availabilityLabel(value: string) {
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'in_stock' || normalized === 'in stock') return 'In Stock'
+  if (normalized === 'out_of_stock' || normalized === 'out of stock') return 'Out of stock'
+  if (normalized === 'preorder') return 'Preorder'
+  return 'Unknown'
+}
 
 type AvailabilityFilter = 'in_stock' | 'all'
 
@@ -118,6 +169,14 @@ function VerificationBadge({ offer }: { offer: StoreOffer }) {
       </span>
     )
   }
+  if (offer.verification_status === 'manually_verified') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-lg border border-sky-400/20 bg-sky-400/[0.08] px-2 py-1 text-[10px] font-semibold text-sky-300">
+        <ShieldCheck aria-hidden="true" size={12} />
+        Verified · Manual
+      </span>
+    )
+  }
   if (offer.verification_status === 'manual_illustrative') {
     return (
       <span className="inline-flex items-center gap-1 rounded-lg border border-amber-400/20 bg-amber-400/[0.08] px-2 py-1 text-[10px] font-semibold text-amber-300">
@@ -126,10 +185,18 @@ function VerificationBadge({ offer }: { offer: StoreOffer }) {
       </span>
     )
   }
+  if (offer.verification_status === 'test_site_illustrative') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-lg border border-violet-400/20 bg-violet-400/[0.08] px-2 py-1 text-[10px] font-semibold text-violet-300">
+        <TriangleAlert aria-hidden="true" size={12} />
+        Test-site practice data
+      </span>
+    )
+  }
   return (
     <span className="inline-flex items-center gap-1 rounded-lg border border-rose-400/20 bg-rose-400/[0.06] px-2 py-1 text-[10px] font-semibold text-rose-300">
       <X aria-hidden="true" size={12} />
-      Excluded
+      Excluded / unavailable
     </span>
   )
 }
@@ -167,6 +234,9 @@ function StoreIdentity({
 }
 
 function SourceLabel({ offer }: { offer: StoreOffer }) {
+  if (offer.is_test_site) {
+    return <span className="text-[11px] text-violet-300">WebScraper.io Test Site</span>
+  }
   return (
     <span className="text-[11px] capitalize text-slate-400">
       {offer.source_type === 'unknown' ? 'Unknown' : offer.source_type}
@@ -224,7 +294,7 @@ function OfferRow({
       </td>
       <td className="px-4 py-4">
         <span className="text-[11px] capitalize text-slate-300">
-          {offer.availability.replaceAll('_', ' ')}
+          {availabilityLabel(offer.availability)}
         </span>
       </td>
       <td className="px-4 py-4">
@@ -277,7 +347,7 @@ function OfferCard({
       <div className="mt-3 flex flex-wrap gap-2">
         <VerificationBadge offer={offer} />
         <span className="rounded-lg border border-white/[0.07] px-2 py-1 text-[10px] capitalize text-slate-400">
-          {offer.availability.replaceAll('_', ' ')}
+          {availabilityLabel(offer.availability)}
         </span>
         <span className="rounded-lg border border-white/[0.07] px-2 py-1 text-[10px] capitalize text-slate-400">
           {offer.source_type}
@@ -287,7 +357,8 @@ function OfferCard({
         Updated {formatDateTime(offer.last_updated)}
       </p>
       <div className="mt-3 border-t border-white/[0.06] pt-3">
-        {offer.verification_status === 'manual_illustrative' && (
+        {(offer.verification_status === 'manual_illustrative' ||
+          offer.verification_status === 'test_site_illustrative') && (
           <p className="mb-2 text-[10px] text-amber-300/80">
             {offer.label}
           </p>
@@ -310,7 +381,7 @@ function PriceSummary({ item }: { item: ProductComparison }) {
           <TriangleAlert aria-hidden="true" size={18} className="mt-0.5 text-amber-300" />
           <div>
             <p className="text-sm font-semibold text-amber-200">
-              No Verified Offers Available
+              No verified In-Stock offers available
             </p>
             <p className="mt-1 text-xs text-amber-200/70">
               {verified.message || 'Illustrative prices are not included in verified comparisons.'}
@@ -319,7 +390,7 @@ function PriceSummary({ item }: { item: ProductComparison }) {
         </div>
         {item.illustrative.offer_count > 0 && (
           <span className="shrink-0 text-[11px] text-amber-200/70">
-            {item.illustrative.offer_count} illustrative offer(s) shown below
+            {item.illustrative.offer_count} illustrative/test-site offer(s) shown below
           </span>
         )}
       </section>
@@ -442,8 +513,22 @@ function HistoryPanel({
       ) : (
         <div className="grid gap-3 lg:grid-cols-2">
           {history.series.map((series) => {
+            const status = series.verification_status
+            const statusLabel = HISTORY_STATUS_LABELS[status]
             const illustrative =
-              series.verification_status === 'manual_illustrative'
+              status === 'manual_illustrative' ||
+              status === 'test_site_illustrative'
+            const excluded = status === 'unverified_excluded'
+            const badgeClass = illustrative
+              ? 'border-amber-400/20 bg-amber-400/[0.08] text-amber-300'
+              : excluded
+                ? 'border-rose-400/20 bg-rose-400/[0.08] text-rose-300'
+                : 'border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-300'
+            const sparklineClass = illustrative
+              ? 'text-amber-300/70'
+              : excluded
+                ? 'text-rose-300/70'
+                : 'text-emerald-300/70'
             const amounts = series.points.map((point) => point.amount)
             return (
               <article
@@ -460,17 +545,13 @@ function HistoryPanel({
                     </p>
                   </div>
                   <span
-                    className={`shrink-0 rounded-lg border px-2 py-1 text-[9px] font-semibold ${
-                      illustrative
-                        ? 'border-amber-400/20 bg-amber-400/[0.08] text-amber-300'
-                        : 'border-emerald-400/20 bg-emerald-400/[0.08] text-emerald-300'
-                    }`}
+                    className={`shrink-0 rounded-lg border px-2 py-1 text-[9px] font-semibold ${badgeClass}`}
                   >
-                    {illustrative ? 'Illustrative' : 'Verified'}
+                    {statusLabel}
                   </span>
                 </div>
                 <div className="mt-3 flex items-center gap-3">
-                  <span className={illustrative ? 'text-amber-300/70' : 'text-emerald-300/70'}>
+                  <span className={sparklineClass}>
                     <Sparkline amounts={amounts} />
                   </span>
                   <span className="text-[10px] text-slate-500">
@@ -686,10 +767,14 @@ export function PriceComparisonPage() {
 
   const sortedOffers = useMemo(
     () =>
-      [...(selected?.offers ?? [])].sort(
-        (first, second) => first.price.amount - second.price.amount,
-      ),
-    [selected],
+      [...(selected?.offers ?? [])]
+        .filter(
+          (offer) =>
+            availability === 'all' ||
+            offer.availability.trim().toLowerCase() === 'in_stock',
+        )
+        .sort((first, second) => first.price.amount - second.price.amount),
+    [selected, availability],
   )
 
   function handleSearchChange(value: string) {
@@ -824,6 +909,11 @@ export function PriceComparisonPage() {
                       <span className="mt-1 block truncate text-[10px] text-slate-500">
                         {identifier}
                       </span>
+                      <span className="mt-1 block truncate text-[10px] text-emerald-300/80">
+                        {item.catalog_availability === 'in_stock'
+                          ? 'Catalog In Stock'
+                          : `Catalog ${availabilityLabel(item.catalog_availability)}`}
+                      </span>
                       <span className="mt-1 block truncate text-[10px] text-slate-600">
                         {item.identity.identity_type === 'asin'
                           ? `ASIN ${item.identity.identity_value}`
@@ -849,7 +939,10 @@ export function PriceComparisonPage() {
           </>
         ) : (
           <p role="status" className="py-4 text-xs text-slate-500">
-            No products match your search.
+            {emptyStateMessage(
+              response?.meta.diagnostics.empty_state_reason,
+              search ? 'no_offers' : 'no_in_stock_offers',
+            )}
           </p>
         )}
       </section>
@@ -889,6 +982,20 @@ export function PriceComparisonPage() {
                       {selected.identity.category && (
                         <span className="rounded-lg border border-white/[0.07] px-2 py-1">
                           {selected.identity.category}
+                        </span>
+                      )}
+                      <span
+                        className={`rounded-lg border px-2 py-1 ${
+                          selected.catalog_availability === 'in_stock'
+                            ? 'border-emerald-400/20 bg-emerald-400/[0.07] text-emerald-300'
+                            : 'border-amber-400/20 bg-amber-400/[0.07] text-amber-200'
+                        }`}
+                      >
+                        Catalog {availabilityLabel(selected.catalog_availability)}
+                      </span>
+                      {selected.identity.is_test_site && (
+                        <span className="rounded-lg border border-violet-400/20 bg-violet-400/[0.07] px-2 py-1 text-violet-300">
+                          Test-site practice data
                         </span>
                       )}
                     </div>
@@ -1004,8 +1111,8 @@ export function PriceComparisonPage() {
                   }
                   className="h-8 rounded-lg border border-white/[0.08] bg-[#090e18] px-2 text-[11px] text-slate-300 outline-none focus:border-blue-400/40"
                 >
-                  <option value="in_stock">In stock</option>
-                  <option value="all">All</option>
+                  <option value="in_stock">In Stock only</option>
+                  <option value="all">All (illustrative/test-site)</option>
                 </select>
               </label>
               <label className="flex cursor-pointer items-center gap-2 text-[11px] text-slate-400">
@@ -1028,15 +1135,17 @@ export function PriceComparisonPage() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-white">Retailer prices</h2>
               <p className="text-[10px] text-slate-500">
-                Manual illustrative prices are never included in verified calculations.
+                Illustrative and test-site prices are never included in verified calculations.
               </p>
             </div>
 
             {sortedOffers.length === 0 ? (
               <div className="rounded-2xl border border-white/[0.07] bg-[#0d1320] px-5 py-10 text-center text-xs text-slate-500">
-                {verifiedOnly
-                  ? 'No verified offers match these filters.'
-                  : 'No current offers match these filters.'}
+                {retailerEmptyStateMessage(
+                  selected,
+                  response?.meta.diagnostics.empty_state_reason,
+                  availability,
+                )}
               </div>
             ) : (
               <>
