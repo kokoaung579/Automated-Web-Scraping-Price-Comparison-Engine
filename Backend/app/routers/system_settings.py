@@ -89,6 +89,7 @@ async def update_system_settings(
     request: Request,
     admin: dict = Depends(require_admin),
 ):
+    _ = admin
     database = get_database(request)
     document = await _get_or_create(database)
 

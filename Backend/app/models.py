@@ -117,7 +117,12 @@ def admin_product_to_catalog_document(
 def catalog_document_to_admin_product(document: dict) -> AdminProduct:
     admin_product = document.get("adminProduct")
     if isinstance(admin_product, dict):
-        return AdminProduct.model_validate(admin_product)
+        known_fields = AdminProduct.model_fields
+        return AdminProduct.model_validate({
+            key: value
+            for key, value in admin_product.items()
+            if key in known_fields
+        })
 
     product_id = str(document.get("_id", document.get("id", "")))
     product = Product.model_validate({

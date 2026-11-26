@@ -4,6 +4,8 @@ import math
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+from pydantic import ValidationError
+
 from app.routers.channel3 import router as channel3_router
 from app.routers.apify import router as apify_router
 from app.routers.auth import (
@@ -180,6 +182,10 @@ async def audit_event(
         logger.warning("Unable to write audit event for %s: %s", action, exc)
 
 
+def _validate_admin_product(document: dict) -> AdminProduct:
+    return catalog_document_to_admin_product({"adminProduct": document})
+
+
 async def migrate_legacy_admin_products(database) -> None:
     migrations = database.app_migrations
     migration_completed = await migrations.find_one(
@@ -190,14 +196,22 @@ async def migrate_legacy_admin_products(database) -> None:
         length=None
     )
     for document in legacy_documents:
-        product = AdminProduct.model_validate({
-            **{
-                key: value
-                for key, value in document.items()
-                if key != "_id"
-            },
-            "product_id": document["_id"],
-        })
+        try:
+            product = _validate_admin_product({
+                **{
+                    key: value
+                    for key, value in document.items()
+                    if key != "_id"
+                },
+                "product_id": document["_id"],
+            })
+        except ValidationError as exc:
+            logger.warning(
+                "Skipping legacy admin product %s with invalid fields: %s",
+                document["_id"],
+                exc,
+            )
+            continue
         existing = await database.products.find_one(
             {"_id": product.product_id}
         )
@@ -235,7 +249,15 @@ async def sync_existing_admin_product_prices(database) -> None:
     for document in documents:
         admin_product = document.get("adminProduct")
         if isinstance(admin_product, dict):
-            product = AdminProduct.model_validate(admin_product)
+            try:
+                product = _validate_admin_product(admin_product)
+            except ValidationError as exc:
+                logger.warning(
+                    "Skipping invalid embedded admin product %s: %s",
+                    document.get("_id"),
+                    exc,
+                )
+                continue
             await upsert_admin_product_offer(database, product)
 
 

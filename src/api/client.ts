@@ -183,9 +183,12 @@ export class ApiConnectionError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), 10_000)
   try {
     response = await fetch(`/api${path}`, {
       ...init,
+      signal: controller.signal,
       credentials: init?.credentials ?? 'include',
       headers: {
         'Content-Type': 'application/json',
@@ -193,12 +196,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     })
   } catch (error) {
+    clearTimeout(timeoutId)
     // Normal HTTP error responses are handled below; only a failed fetch is a
     // real connection loss.
+    if (controller.signal.aborted) {
+      throw new ApiConnectionError(
+        'The backend did not respond within 10 seconds.',
+      )
+    }
     throw new ApiConnectionError(
       error instanceof Error ? error.message : 'Unable to reach the backend.',
     )
   }
+  clearTimeout(timeoutId)
 
   if (!response.ok) {
     const body = await response.json().catch(() => null) as

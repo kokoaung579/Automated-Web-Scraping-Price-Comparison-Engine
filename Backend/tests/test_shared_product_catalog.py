@@ -388,6 +388,40 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(history_prices, [89.99] * 4)
 
+    async def test_sync_ignores_legacy_store_fields_in_embedded_admin_product(self):
+        product = AdminProduct(
+            product_id="legacy-store-fields-product",
+            product_name="Legacy Store Fields Product",
+            category="Audio",
+            store_id="zone",
+            price=89.99,
+            currency="USD",
+            availability="in_stock",
+            source_type="manual",
+            created_at="2026-11-17T00:00:00Z",
+            updated_at="2026-11-17T00:00:00Z",
+        )
+        legacy_admin_product = {
+            **product.model_dump(),
+            "store_name": "Zone",
+            "store_website_url": None,
+        }
+        database = SimpleNamespace(
+            products=MemoryCollection([{
+                "_id": product.product_id,
+                **admin_product_to_catalog_document(product),
+                "adminProduct": legacy_admin_product,
+            }]),
+            offers=MemoryCollection(),
+            price_history=MemoryCollection(),
+        )
+
+        await sync_existing_admin_product_prices(database)
+
+        offer = next(iter(database.offers.documents.values()))
+        self.assertEqual(offer["price"], 89.99)
+        self.assertEqual(offer["store"], "Zone")
+
     async def test_admin_product_comparison_uses_catalog_price_not_seeded_offers(self):
         product_id = "admin-product"
         database = SimpleNamespace(

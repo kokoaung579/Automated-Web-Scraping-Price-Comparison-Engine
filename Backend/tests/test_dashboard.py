@@ -106,6 +106,26 @@ class DashboardEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def call_dashboard(self, database):
         return await get_dashboard(make_request(database))
 
+    async def test_dashboard_accepts_legacy_store_fields_in_admin_product(self):
+        product = product_document(
+            "legacy-product",
+            "legacy-product",
+            "zone",
+            "Audio",
+            29.95,
+            "manual",
+        )
+        product["adminProduct"]["store_name"] = "Zone"
+        product["adminProduct"]["store_website_url"] = None
+        database = FakeDatabase(
+            stores=[store_document("zone", "Zone")],
+            products=[product],
+        )
+
+        result = await self.call_dashboard(database)
+
+        self.assertEqual(result["kpis"]["total_products"], 1)
+
     async def test_kpis_distributions_and_comparison_use_mongodb_records(self):
         database = FakeDatabase(
             stores=[
