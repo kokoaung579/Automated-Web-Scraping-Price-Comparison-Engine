@@ -147,7 +147,7 @@ export function SettingsPage() {
             </legend>
             <PreferenceToggle
               label="Email price alerts"
-              description="Preference only; email delivery is not configured."
+              description="Receive an email when an active price target is reached."
               checked={preferencesDraft.emailPriceAlerts}
               onChange={(checked) =>
                 updatePreference('emailPriceAlerts', checked)

@@ -1,6 +1,7 @@
 
 import { Camera, Ear, Gamepad2, Headphones, Smartphone } from 'lucide-react'
 import type { DemoProduct } from '../data/products'
+import { validHttpUrl } from '../data/adminProducts'
 import type { Product } from '../types/product'
 import type {
   DemoNotification,
@@ -14,6 +15,15 @@ import type { AuditLogsQuery, AuditLogsResponse } from '../data/adminAuditLogs'
 import type { AdminCategory } from '../data/adminCategories'
 import type { AdminStore } from '../data/adminStores'
 import type { DashboardResponse } from '../types/dashboard'
+import type {
+  ComparisonAvailability,
+  ComparisonQuery,
+  ComparisonResponse,
+} from '../types/comparison'
+import type {
+  ManualOfferRecord,
+  ManualOfferVerificationRequest,
+} from '../types/manualOffer'
 
 export type HealthResponse = {
   status: string
@@ -65,10 +75,13 @@ export type AdminConnectionEpisodePayload = {
   restoredAt: string
 }
 
-type ProductRecord = Omit<DemoProduct, 'icon'>
+type ProductRecord = Omit<DemoProduct, 'icon'> & {
+  image_url?: string | null
+}
 
 export type StoreWithProductCount = AdminStore & {
   product_count: number
+  offer_count: number
 }
 
 export type StoreMutationResponse = {
@@ -166,6 +179,48 @@ export class ApiConnectionError extends Error {
   }
 }
 
+export const SESSION_EXPIRED_MESSAGE =
+  'Your session has expired. Please sign in again.'
+export const SESSION_EXPIRED_EVENT = 'pricepilot:session-expired'
+const SESSION_MESSAGE_KEY = 'pricepilot-session-message'
+
+function announceSessionExpiry(message: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(SESSION_MESSAGE_KEY, message)
+  } catch {
+    // Storage can be unavailable; the event below is still useful.
+  }
+  window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+}
+
+export function takeSessionMessage(): string {
+  if (typeof window === 'undefined') return ''
+  try {
+    const message = window.sessionStorage.getItem(SESSION_MESSAGE_KEY) ?? ''
+    window.sessionStorage.removeItem(SESSION_MESSAGE_KEY)
+    return message
+  } catch {
+    return ''
+  }
+}
+
+export type SystemSettingsResponse = {
+  applicationName: string
+  timeZone: string
+  sessionTimeoutMinutes: number
+  maximumLoginAttempts: number
+  passwordPolicy: 'standard' | 'strong' | 'very-strong'
+}
+
+export type SystemSettingsUpdate = {
+  applicationName?: string
+  timeZone?: string
+  sessionTimeoutMinutes?: number
+  maximumLoginAttempts?: number
+  passwordPolicy?: 'standard' | 'strong' | 'very-strong'
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response
   try {
@@ -206,6 +261,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
               .filter(Boolean)
               .join(' ')
           : ''
+    if (response.status === 401 && message === SESSION_EXPIRED_MESSAGE) {
+      announceSessionExpiry(message)
+    }
     throw new Error(message || `Backend request failed (${response.status})`)
   }
 
@@ -229,7 +287,16 @@ function getProductIcon(product: ProductRecord): DemoProduct['icon'] {
 }
 
 export function hydrateProduct(product: ProductRecord): DemoProduct {
-  return { ...product, icon: getProductIcon(product) }
+  const imageUrl =
+    typeof product.image_url === 'string' && validHttpUrl(product.image_url)
+      ? product.image_url
+      : null
+
+  return {
+    ...product,
+    icon: getProductIcon(product),
+    imageUrl,
+  }
 }
 
 export function toChannel3CatalogProduct(
@@ -327,6 +394,29 @@ export const api = {
 
   currentSession: () => request<AuthUser | null>('/auth/session'),
 
+  getUserSettings: () =>
+    request<{ emailPriceAlerts: boolean; inAppPriceAlerts: boolean; theme: string }>(
+      '/auth/settings',
+    ),
+
+  updateUserSettings: (settings: {
+    emailPriceAlerts: boolean
+    inAppPriceAlerts: boolean
+    theme: string
+  }) =>
+    request<{ emailPriceAlerts: boolean; inAppPriceAlerts: boolean; theme: string }>(
+      '/auth/settings',
+      {
+        method: 'PUT',
+        body: JSON.stringify(settings),
+      },
+    ),
+
+  sendPriceAlertEmail: (alertId: string) =>
+    request<{ sent: boolean; reason?: string }>(
+      `/alerts/${alertId}/email`,
+      { method: 'POST' },
+    ),
   logout: () =>
     request<void>('/auth/logout', {
       method: 'POST',
@@ -454,9 +544,11 @@ export const api = {
       },
     ),
 
-  deleteAdminStore: (storeId: string) =>
-    request<{ message: string; store_id: string }>(
-      `/admin/stores/${encodeURIComponent(storeId)}`,
+  deleteAdminStore: (storeId: string, deleteLinkedOffers = false) =>
+    request<{ message: string; store_id: string; deleted_offers?: number }>(
+      `/admin/stores/${encodeURIComponent(storeId)}${
+        deleteLinkedOffers ? '?delete_offers=true' : ''
+      }`,
       { method: 'DELETE' },
     ),
 
@@ -533,6 +625,54 @@ export const api = {
       }),
     }),
 
+  adminManualOffers: (productId?: string) => {
+    const suffix = productId
+      ? `?product_id=${encodeURIComponent(productId)}`
+      : ''
+    return request<ManualOfferRecord[]>(`/admin/manual-offers${suffix}`)
+  },
+
+  verifyManualOffer: (
+    offerId: string,
+    payload: ManualOfferVerificationRequest,
+  ) =>
+    request<ManualOfferRecord>(
+      `/admin/manual-offers/${encodeURIComponent(offerId)}/verify`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    ),
+
+  comparisonProducts: (query: ComparisonQuery = {}) => {
+    const params = new URLSearchParams()
+    const values: Record<string, string | number | boolean | undefined> = {
+      q: query.q?.trim() || undefined,
+      asin: query.asin,
+      brand: query.brand,
+      model: query.model,
+      availability: query.availability,
+      include_illustrative: query.include_illustrative,
+      verified_only: query.verified_only,
+      include_history: query.include_history,
+      period: query.period,
+      max_offer_age_days: query.max_offer_age_days,
+      sort: query.sort,
+      page: query.page,
+      page_size: query.page_size,
+    }
+    Object.entries(values).forEach(([key, value]) => {
+      if (value !== undefined) params.set(key, String(value))
+    })
+    query.store_id?.forEach((storeId) => {
+      if (storeId) params.append('store_id', storeId)
+    })
+    const suffix = params.toString()
+    return request<ComparisonResponse>(
+      `/comparison/products${suffix ? `?${suffix}` : ''}`,
+    )
+  },
+
   // Existing APIs
   products: async () =>
     (await request<ProductRecord[]>('/products')).map(hydrateProduct),
@@ -605,11 +745,29 @@ export const api = {
 
   scrapingLogs: () => request<ScrapingLog[]>('/scraping-logs'),
 
-  offers: (productId: string) =>
-    request<StoreOffer[]>(`/products/${encodeURIComponent(productId)}/offers`),
-
-  priceHistory: (productId: string, period: PriceHistoryPeriod) =>
-    request<StoreHistory[]>(
-      `/products/${encodeURIComponent(productId)}/history?period=${period}`,
+  offers: (
+    productId: string,
+    availability: ComparisonAvailability = 'in_stock',
+  ) =>
+    request<StoreOffer[]>(
+      `/products/${encodeURIComponent(productId)}/offers?availability=${availability}`,
     ),
+
+  priceHistory: (
+    productId: string,
+    period: PriceHistoryPeriod,
+    availability: ComparisonAvailability = 'in_stock',
+  ) =>
+    request<StoreHistory[]>(
+      `/products/${encodeURIComponent(productId)}/history?period=${period}&availability=${availability}`,
+    ),
+
+  systemSettings: () =>
+    request<SystemSettingsResponse>('/system/settings'),
+
+  updateSystemSettings: (settings: SystemSettingsUpdate) =>
+    request<SystemSettingsResponse>('/system/settings', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
 }

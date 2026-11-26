@@ -59,6 +59,7 @@ const actionLabels: Record<AuditActionType, string> = {
   'status-change': 'Status change',
   import: 'Import',
   export: 'Export',
+  'verify-manual-offer': 'Verify manual offer',
   start: 'Start',
   pause: 'Pause',
   resume: 'Resume',

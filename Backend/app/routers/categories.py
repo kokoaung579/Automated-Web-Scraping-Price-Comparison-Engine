@@ -8,6 +8,11 @@ from pymongo.errors import DuplicateKeyError
 
 from app.routers.auth import require_admin
 from app.routers.audit import record_audit_log, request_ip
+from app.services.category_catalog import (
+    canonical_category_name,
+    count_products_using_category,
+    sync_product_category_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,11 +116,9 @@ async def create_category(
 ):
     database = request.app.state.database
     name = category.name.strip()
-    existing = await database.categories.find().to_list(length=None)
-    if any(
-        str(item.get("name") or item.get("_id")).casefold() == name.casefold()
-        for item in existing
-    ):
+    # Case-insensitive and singular/plural variants are the same category.
+    # Creating "Phones" when "Phone" exists would split product references.
+    if await canonical_category_name(database, name) is not None:
         await _audit(
             database,
             request,
@@ -224,10 +227,9 @@ async def update_category(
     if name != category_name:
         await database.categories.insert_one(document)
         await database.categories.delete_one({"_id": category_name})
-        await database.products.update_many(
-            {"category": category_name},
-            {"$set": {"category": name, "updated_at": now}},
-        )
+        # The admin API and dashboard read the embedded adminProduct copy, so
+        # both category fields must move with the renamed record.
+        await sync_product_category_name(database, category_name, name, now)
     else:
         await database.categories.update_one({"_id": category_name}, {"$set": document})
 
@@ -272,9 +274,7 @@ async def delete_category(
             detail="Category not found.",
         )
 
-    product_count = await database.products.count_documents(
-        {"category": category_name}
-    )
+    product_count = await count_products_using_category(database, category_name)
     if product_count > 0:
         await _audit(
             database,

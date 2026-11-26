@@ -1,25 +1,21 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import {
   AlertTriangle,
   Check,
-  Database,
-  Download,
   RotateCcw,
   Save,
   Settings2,
   Shield,
   SlidersHorizontal,
-  BellRing,
-  X,
 } from 'lucide-react'
+import { api } from '../../api/client'
+import { useSystemSettings } from '../../context/SystemSettingsContext'
 import {
   ADMIN_CURRENCIES,
   ADMIN_TIME_ZONES,
   DEFAULT_ADMIN_SETTINGS,
-  loadAdminDemoDataExport,
   loadAdminSettings,
-  resetAdminDemoData,
   resetAdminSettings,
   saveAdminSettings,
   validateAdminSettings,
@@ -36,27 +32,6 @@ const fieldClassName =
   'h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none transition focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10'
 const labelClassName = 'mb-1.5 block text-[11px] font-medium text-slate-300'
 const helpClassName = 'mt-1.5 text-[10px] leading-4 text-slate-600'
-const notificationFields: {
-  key: keyof AdminSettings['notificationPreferences']
-  label: string
-  description: string
-}[] = [
-  {
-    key: 'emailPriceAlerts',
-    label: 'Email price alerts',
-    description: 'Demo preference only; no email is sent.',
-  },
-  {
-    key: 'inAppAlerts',
-    label: 'In-app price alerts',
-    description: 'Show alerts in the local demo interface.',
-  },
-  {
-    key: 'systemUpdates',
-    label: 'System updates',
-    description: 'Demo preference for informational updates.',
-  },
-]
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'An unexpected settings error occurred.'
@@ -120,86 +95,49 @@ function SettingField({
   )
 }
 
-function DemoResetDialog({
-  onCancel,
-  onConfirm,
-}: {
-  onCancel: () => void
-  onConfirm: () => void
-}) {
-  return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm">
-      <button
-        type="button"
-        aria-label="Close reset confirmation"
-        onClick={onCancel}
-        className="absolute inset-0 cursor-default"
-      />
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="reset-demo-title"
-        className="relative z-10 w-full max-w-lg overflow-hidden rounded-2xl border border-amber-300/10 bg-[#0d1320] shadow-2xl shadow-black/50"
-      >
-        <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4">
-          <div className="flex items-start gap-3">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-amber-300/10 bg-amber-400/[0.06] text-amber-200">
-              <AlertTriangle aria-hidden="true" size={17} />
-            </span>
-            <div>
-              <h2 id="reset-demo-title" className="text-sm font-semibold text-white">
-                Reset demo management data?
-              </h2>
-              <p className="mt-1 text-[10px] leading-4 text-slate-500">
-                This removes your browser’s saved management changes.
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            aria-label="Close reset confirmation"
-            onClick={onCancel}
-            className="rounded-lg p-2 text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-200"
-          >
-            <X aria-hidden="true" size={15} />
-          </button>
-        </div>
-        <div className="space-y-3 px-5 py-4">
-          <p className="text-[11px] leading-5 text-slate-300">
-            The saved product, category, store, scraping job, and audit log data will be cleared. Default demo records may appear again when those pages load.
-          </p>
-          <p className="rounded-lg border border-emerald-300/10 bg-emerald-400/[0.04] px-3 py-2.5 text-[10px] leading-4 text-emerald-100/80">
-            Accounts, your active login, user preferences, and these settings will not be changed.
-          </p>
-        </div>
-        <div className="flex flex-col-reverse justify-end gap-2 border-t border-white/[0.06] px-5 py-3.5 sm:flex-row">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-xl border border-white/[0.08] px-4 py-2.5 text-xs font-medium text-slate-300 transition hover:bg-white/[0.04]"
-          >
-            Keep demo data
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className="rounded-xl border border-rose-300/10 bg-rose-400/[0.08] px-4 py-2.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-400/[0.14]"
-          >
-            Reset demo data
-          </button>
-        </div>
-      </section>
-    </div>
-  )
-}
-
 export function AdminSettingsPage() {
+  const systemSettings = useSystemSettings()
   const [pageState, setPageState] = useState(loadSettingsState)
   const [draft, setDraft] = useState(pageState.settings)
   const [validationErrors, setValidationErrors] = useState<string[]>([])
   const [feedback, setFeedback] = useState('')
-  const [showResetDialog, setShowResetDialog] = useState(false)
   const hasChanges = JSON.stringify(draft) !== JSON.stringify(pageState.settings)
+
+  useEffect(() => {
+    let active = true
+    api
+      .systemSettings()
+      .then((result) => {
+        if (!active || !result) return
+        setDraft((current) => ({
+          ...current,
+          applicationName: result.applicationName ?? current.applicationName,
+          timeZone: result.timeZone ?? current.timeZone,
+          sessionTimeoutMinutes:
+            result.sessionTimeoutMinutes ?? current.sessionTimeoutMinutes,
+          maximumLoginAttempts:
+            result.maximumLoginAttempts ?? current.maximumLoginAttempts,
+          passwordPolicy: result.passwordPolicy ?? current.passwordPolicy,
+        }))
+        setPageState((current) => ({
+          ...current,
+          settings: {
+            ...current.settings,
+            applicationName: result.applicationName ?? current.settings.applicationName,
+            timeZone: result.timeZone ?? current.settings.timeZone,
+            sessionTimeoutMinutes:
+              result.sessionTimeoutMinutes ?? current.settings.sessionTimeoutMinutes,
+            maximumLoginAttempts:
+              result.maximumLoginAttempts ?? current.settings.maximumLoginAttempts,
+            passwordPolicy: result.passwordPolicy ?? current.settings.passwordPolicy,
+          },
+        }))
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
 
   function updateSetting<Key extends keyof AdminSettings>(
     key: Key,
@@ -210,22 +148,7 @@ export function AdminSettingsPage() {
     setFeedback('')
   }
 
-  function updateNotification(
-    key: keyof AdminSettings['notificationPreferences'],
-    checked: boolean,
-  ) {
-    setDraft((current) => ({
-      ...current,
-      notificationPreferences: {
-        ...current.notificationPreferences,
-        [key]: checked,
-      },
-    }))
-    setValidationErrors([])
-    setFeedback('')
-  }
-
-  function handleSave(event: FormEvent<HTMLFormElement>) {
+  async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const errors = validateAdminSettings(draft)
     setValidationErrors(errors)
@@ -234,14 +157,29 @@ export function AdminSettingsPage() {
       return
     }
 
+    const saved = { ...draft, applicationName: draft.applicationName.trim() }
     try {
-      const saved = { ...draft, applicationName: draft.applicationName.trim() }
       saveAdminSettings(saved)
-      setDraft(saved)
-      setPageState({ settings: saved, error: '' })
-      setFeedback('Demo settings saved in this browser.')
     } catch (error) {
       setFeedback(`Could not save settings: ${getErrorMessage(error)}`)
+      return
+    }
+
+    try {
+      await systemSettings.update({
+        applicationName: saved.applicationName,
+        timeZone: saved.timeZone,
+        sessionTimeoutMinutes: saved.sessionTimeoutMinutes,
+        maximumLoginAttempts: saved.maximumLoginAttempts,
+        passwordPolicy: saved.passwordPolicy,
+      })
+      setDraft(saved)
+      setPageState({ settings: saved, error: '' })
+      setFeedback('System settings saved.')
+    } catch (error) {
+      setDraft(saved)
+      setPageState({ settings: saved, error: '' })
+      setFeedback(`Could not save system settings: ${getErrorMessage(error)}`)
     }
   }
 
@@ -254,37 +192,6 @@ export function AdminSettingsPage() {
       setFeedback('Settings were reset to defaults and saved in this browser.')
     } catch (error) {
       setFeedback(`Could not reset settings: ${getErrorMessage(error)}`)
-    }
-  }
-
-  function handleExportDemoData() {
-    try {
-      const bundle = loadAdminDemoDataExport()
-      const blob = new Blob([JSON.stringify(bundle, null, 2)], {
-        type: 'application/json',
-      })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `pricepilot-demo-data-${new Date().toISOString().slice(0, 10)}.json`
-      document.body.append(link)
-      link.click()
-      link.remove()
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-      setFeedback('Demo data export downloaded as JSON. Account credentials and settings are not included.')
-    } catch (error) {
-      setFeedback(`Could not export demo data: ${getErrorMessage(error)}`)
-    }
-  }
-
-  function handleResetDemoData() {
-    try {
-      resetAdminDemoData()
-      setShowResetDialog(false)
-      setFeedback('Saved management demo data was cleared. Default demo records may return when their pages load.')
-    } catch (error) {
-      setShowResetDialog(false)
-      setFeedback(`Could not fully reset demo data: ${getErrorMessage(error)}`)
     }
   }
 
@@ -310,21 +217,16 @@ export function AdminSettingsPage() {
             System Settings
           </h2>
           <p className="mt-1.5 max-w-2xl text-xs leading-5 text-slate-500 sm:text-[13px]">
-            Manage local demo preferences for the PricePilot admin workspace.
+            Manage application preferences and backend-enforced security settings.
           </p>
         </div>
         <span className="inline-flex items-center gap-2 self-start rounded-xl border border-amber-300/10 bg-amber-400/[0.05] px-3 py-2 text-[10px] font-medium text-amber-100">
           <AlertTriangle aria-hidden="true" size={14} />
-          Demo settings · No backend effect
+           Backend security
         </span>
       </section>
 
-      <div className="flex items-start gap-3 rounded-xl border border-amber-300/10 bg-amber-400/[0.04] px-4 py-3">
-        <Shield aria-hidden="true" size={15} className="mt-0.5 shrink-0 text-amber-200" />
-        <p className="text-[10px] leading-5 text-slate-400">
-          These values are saved in this browser for demonstration only. Scraping, alerts, environment, session, and password options do not configure real services or provide backend security.
-        </p>
-      </div>
+      
 
       {pageState.error && (
         <div role="alert" className="flex flex-col gap-3 rounded-xl border border-rose-300/10 bg-rose-400/[0.05] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -358,7 +260,7 @@ export function AdminSettingsPage() {
           description="Display and regional defaults for this local admin workspace."
           icon={Settings2}
         >
-          <SettingField label="Application Name" description="Name displayed by the demo application.">
+          <SettingField label="Application Name" description="Name displayed by the application.">
             <input
               type="text"
               maxLength={80}
@@ -405,7 +307,7 @@ export function AdminSettingsPage() {
 
         <SectionCard
           title="Scraping Settings"
-          description="Demo defaults for simulated scraping-job controls; no real jobs are launched."
+          description="Manage scraping configuration, scheduling, and product data collection settings."
           icon={SlidersHorizontal}
         >
           <SettingField label="Default Scraping Interval (minutes)" description="Allowed range: 1–10,080 minutes.">
@@ -420,7 +322,7 @@ export function AdminSettingsPage() {
               className={fieldClassName}
             />
           </SettingField>
-          <SettingField label="Request Timeout (seconds)" description="Allowed range: 1–300 seconds. Demo value only.">
+          <SettingField label="Request Timeout (seconds)" description="Allowed range: 1–300 seconds.">
             <input
               type="number"
               min={1}
@@ -444,7 +346,7 @@ export function AdminSettingsPage() {
               className={fieldClassName}
             />
           </SettingField>
-          <SettingField label="Concurrent Jobs" description="Allowed range: 1–20 demo jobs.">
+          <SettingField label="Concurrent Jobs" description="Allowed range: 1–20 concurrent jobs.">
             <input
               type="number"
               min={1}
@@ -459,49 +361,11 @@ export function AdminSettingsPage() {
         </SectionCard>
 
         <SectionCard
-          title="Alert Settings"
-          description="Local notification preferences and a default threshold for demo price alerts."
-          icon={BellRing}
-        >
-          <SettingField label="Default Price Drop Threshold (%)" description="Allowed range: 1–100 percent.">
-            <input
-              type="number"
-              min={1}
-              max={100}
-              step={1}
-              required
-              value={draft.priceDropThresholdPercent}
-              onChange={(event) => updateSetting('priceDropThresholdPercent', Number(event.currentTarget.value))}
-              className={fieldClassName}
-            />
-          </SettingField>
-          <fieldset className="space-y-2.5">
-            <legend className={labelClassName}>Notification Preferences</legend>
-            {notificationFields.map(({ key, label, description }) => (
-              <label key={key} className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-white/[0.05] bg-white/[0.015] px-3 py-2.5">
-                <input
-                  type="checkbox"
-                  checked={draft.notificationPreferences[key]}
-                  onChange={(event) =>
-                    updateNotification(key, event.currentTarget.checked)
-                  }
-                  className="mt-0.5 size-3.5 accent-blue-500"
-                />
-                <span>
-                  <span className="block text-[10px] font-medium text-slate-300">{label}</span>
-                  <span className="mt-0.5 block text-[9px] text-slate-600">{description}</span>
-                </span>
-              </label>
-            ))}
-          </fieldset>
-        </SectionCard>
-
-        <SectionCard
           title="Security Settings"
-          description="Illustrative security preferences only; they do not enforce authentication or account protection."
+          description="Backend-enforced controls for sign-in sessions, failed attempts, and password validation."
           icon={Shield}
         >
-          <SettingField label="Session Timeout (minutes)" description="Allowed range: 5–1,440 minutes. Does not expire the local session.">
+          <SettingField label="Session Timeout (minutes)" description="Allowed range: 5–1,440 minutes. Applied to backend sessions.">
             <input
               type="number"
               min={5}
@@ -513,7 +377,7 @@ export function AdminSettingsPage() {
               className={fieldClassName}
             />
           </SettingField>
-          <SettingField label="Maximum Login Attempts" description="Allowed range: 1–20. Not enforced by demo authentication.">
+          <SettingField label="Maximum Login Attempts" description="Allowed range: 1–20. Failed sign-ins are limited by the backend.">
             <input
               type="number"
               min={1}
@@ -525,7 +389,7 @@ export function AdminSettingsPage() {
               className={fieldClassName}
             />
           </SettingField>
-          <SettingField label="Password Policy" description="Display-only policy; local sign-in rules are unchanged.">
+          <SettingField label="Password Policy" description="Enforced during registration and password reset.">
             <select
               value={draft.passwordPolicy}
               onChange={(event) => updateSetting('passwordPolicy', event.currentTarget.value as AdminPasswordPolicy)}
@@ -538,49 +402,6 @@ export function AdminSettingsPage() {
           </SettingField>
         </SectionCard>
       </form>
-
-      <SectionCard
-        title="Data Management"
-        description="Export or reset browser-local demo management data. Accounts and login credentials are excluded."
-        icon={Database}
-      >
-        <div className="sm:col-span-2">
-          <div className="flex flex-col justify-between gap-4 rounded-xl border border-white/[0.06] bg-[#090e18]/70 p-4 sm:flex-row sm:items-center">
-            <div>
-              <h4 className="text-xs font-medium text-slate-200">Export Demo Data</h4>
-              <p className="mt-1 max-w-2xl text-[10px] leading-4 text-slate-500">
-                Download products, categories, scraping jobs, and audit logs as a JSON file. Stores are managed in MongoDB; account credentials and settings are not included.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={handleExportDemoData}
-              className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-blue-300/10 bg-blue-400/[0.07] px-4 text-[10px] font-semibold text-blue-100 transition hover:bg-blue-400/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Download aria-hidden="true" size={14} />
-              Export Demo Data
-            </button>
-          </div>
-        </div>
-        <div className="sm:col-span-2">
-          <div className="flex flex-col justify-between gap-4 rounded-xl border border-rose-300/[0.08] bg-rose-400/[0.025] p-4 sm:flex-row sm:items-center">
-            <div>
-              <h4 className="text-xs font-medium text-slate-200">Reset Demo Data</h4>
-              <p className="mt-1 max-w-2xl text-[10px] leading-4 text-slate-500">
-                Clear saved product, category, store, scraping, and audit demo changes. Accounts, session, preferences, and settings are preserved.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowResetDialog(true)}
-              className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-rose-300/10 bg-rose-400/[0.06] px-4 text-[10px] font-semibold text-rose-100 transition hover:bg-rose-400/[0.12]"
-            >
-              <RotateCcw aria-hidden="true" size={14} />
-              Reset Demo Data
-            </button>
-          </div>
-        </div>
-      </SectionCard>
 
       {validationErrors.length > 0 && (
         <div role="alert" className="rounded-xl border border-rose-300/10 bg-rose-400/[0.05] px-4 py-3">
@@ -615,13 +436,6 @@ export function AdminSettingsPage() {
           </button>
         </div>
       </div>
-
-      {showResetDialog && (
-        <DemoResetDialog
-          onCancel={() => setShowResetDialog(false)}
-          onConfirm={handleResetDemoData}
-        />
-      )}
     </div>
   )
 }

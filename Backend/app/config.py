@@ -193,3 +193,12 @@ def get_gmail_smtp_port() -> int:
         return int(os.getenv("GMAIL_SMTP_PORT", "587").strip())
     except ValueError:
         return 587
+
+
+def is_member2_worker_enabled() -> bool:
+    return os.getenv("ENABLE_MEMBER2_WORKER", "true").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }

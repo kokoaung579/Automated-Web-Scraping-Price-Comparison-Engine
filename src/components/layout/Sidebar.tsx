@@ -12,11 +12,12 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
+import { useSystemSettings } from '../../context/SystemSettingsContext'
 
 const navigation: { label: string; to: string; icon: LucideIcon }[] = [
   { label: 'Dashboard', to: '/', icon: LayoutDashboard },
   { label: 'Products', to: '/products', icon: Boxes },
-  { label: 'Price comparison', to: '/comparison', icon: ChartNoAxesCombined },
+  { label: 'Price comparison', to: '/price-comparison', icon: ChartNoAxesCombined },
   { label: 'Price history', to: '/price-history', icon: History },
   { label: 'Watchlist', to: '/watchlist', icon: Activity },
   { label: 'Alerts', to: '/alerts', icon: BellRing },
@@ -43,6 +44,7 @@ export function Sidebar({
   alertsCount,
   unreadNotificationCount,
 }: SidebarProps) {
+  const { applicationName } = useSystemSettings()
   return (
     <aside
       className={`fixed inset-y-0 left-0 z-50 flex w-[250px] flex-col border-r border-white/[0.07] bg-[#0b101b] px-4 py-5 transition-[width,transform] duration-300 ease-out ${
@@ -60,7 +62,7 @@ export function Sidebar({
           className={`flex items-center gap-3 ${
             isCollapsed ? 'lg:w-full lg:justify-center lg:gap-0' : ''
           }`}
-          aria-label="PricePilot dashboard"
+          aria-label={`${applicationName} dashboard`}
         >
           <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/15">
             <Radar size={22} strokeWidth={2.3} />
@@ -73,7 +75,7 @@ export function Sidebar({
             }`}
           >
             <span className="block text-[15px] font-semibold tracking-tight text-white">
-              PricePilot
+              {applicationName}
             </span>
             <span className="mt-0.5 block text-[10px] font-medium uppercase tracking-[0.17em] text-slate-500">
               Price intelligence

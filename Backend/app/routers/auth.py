@@ -27,6 +27,7 @@ from pydantic import (
 )
 from pymongo.errors import DuplicateKeyError
 
+from app.models import UserSettings
 from app.services.notifications import create_notification
 
 router = APIRouter(prefix="/api")
@@ -68,6 +69,18 @@ async def write_audit(
 
 SESSION_COOKIE = "pricepilot_session"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 14
+SESSION_EXPIRED_DETAIL = "Your session has expired. Please sign in again."
+LOGIN_LOCKOUT_SECONDS = 15 * 60
+PASSWORD_POLICY_MIN_LENGTHS = {
+    "standard": 8,
+    "strong": 12,
+    "very-strong": 14,
+}
+PASSWORD_POLICY_LABELS = {
+    "standard": "Standard",
+    "strong": "Strong",
+    "very-strong": "Very strong",
+}
 PASSWORD_RESET_OTP_COOLDOWN_SECONDS = 60
 PASSWORD_RESET_OTP_WINDOW_SECONDS = 15 * 60
 PASSWORD_RESET_MAX_OTP_REQUESTS = 5
@@ -391,15 +404,60 @@ async def ensure_bootstrap_admin(database) -> None:
         ) from error
 
 
+async def _security_settings(database) -> dict:
+    """Read saved security settings without creating an import cycle."""
+    from app.routers.system_settings import get_security_settings
+
+    return await get_security_settings(database)
+
+
+async def _validate_password_policy(database, password: str) -> None:
+    settings = await _security_settings(database)
+    policy = settings["passwordPolicy"]
+    minimum = PASSWORD_POLICY_MIN_LENGTHS.get(policy, 8)
+    if len(password) < minimum:
+        label = PASSWORD_POLICY_LABELS.get(policy, "Standard")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Password must be at least {minimum} characters under the "
+                f"{label} policy."
+            ),
+        )
+
+
+async def _refresh_session_expiry(database, session_id: str, max_age: int) -> None:
+    """Extend a valid session using the current configured timeout."""
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=max_age)
+    sessions = getattr(database, "sessions", None)
+    update_one = getattr(sessions, "update_one", None)
+    if callable(update_one):
+        await update_one(
+            {"_id": session_id},
+            {"$set": {"expiresAt": expires_at}},
+        )
+        return
+
+    # Keep compatibility with lightweight in-memory test collections that
+    # expose their backing store but do not implement update_one.
+    documents = getattr(sessions, "documents", None)
+    if isinstance(documents, dict) and session_id in documents:
+        documents[session_id]["expiresAt"] = expires_at
+
+
 def _cookie_is_secure() -> bool:
     return os.getenv("APP_ENV", "production").strip().casefold() != "development"
 
 
-def _set_session_cookie(response: Response, token: str) -> None:
+def _set_session_cookie(
+    response: Response,
+    token: str,
+    max_age: int = SESSION_TTL_SECONDS,
+) -> None:
     response.set_cookie(
         key=SESSION_COOKIE,
         value=token,
-        max_age=SESSION_TTL_SECONDS,
+        max_age=max_age,
         httponly=True,
         secure=_cookie_is_secure(),
         samesite="lax",
@@ -408,15 +466,18 @@ def _set_session_cookie(response: Response, token: str) -> None:
 
 
 async def _create_session(database, user: dict, response: Response) -> None:
+    settings = await _security_settings(database)
+    max_age = int(settings["sessionTimeoutMinutes"]) * 60
     token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(
-        seconds=SESSION_TTL_SECONDS
-    )
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=max_age)
     await database.sessions.insert_one({
         "_id": hashlib.sha256(token.encode("ascii")).hexdigest(),
         "userId": user["_id"],
         "expiresAt": expires_at,
     })
+    # The cookie remains valid long enough for the client to keep calling the
+    # API; the server-side deadline above is the authoritative timeout and is
+    # refreshed from the saved setting on every authenticated request.
     _set_session_cookie(response, token)
 
 
@@ -437,17 +498,26 @@ async def get_request_user(request: Request, database) -> dict | None:
     expires_at = session.get("expiresAt")
     if not isinstance(expires_at, datetime):
         await database.sessions.delete_one({"_id": session_id})
+        request.state.session_expired = True
         return None
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at <= datetime.now(timezone.utc):
         await database.sessions.delete_one({"_id": session_id})
+        request.state.session_expired = True
         return None
 
     user = await database.users.find_one({"_id": session["userId"]})
     if user is None or user.get("status") != "Active":
         await database.sessions.delete_one({"_id": session_id})
         return None
+
+    # Sliding expiration: every authenticated request refreshes the session
+    # deadline using the currently saved timeout, so admin changes apply
+    # without a server restart and without invalidating active sessions.
+    settings = await _security_settings(database)
+    max_age = int(settings["sessionTimeoutMinutes"]) * 60
+    await _refresh_session_expiry(database, session_id, max_age)
     return user
 
 
@@ -457,9 +527,10 @@ async def require_user(
 ) -> dict:
     user = await get_request_user(request, database)
     if user is None:
+        expired = getattr(request.state, "session_expired", False)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Sign in to continue.",
+            detail=SESSION_EXPIRED_DETAIL if expired else "Sign in to continue.",
         )
     return user
 
@@ -482,6 +553,7 @@ async def register(
     payload: RegisterRequest,
     database=Depends(get_database),
 ):
+    await _validate_password_policy(database, payload.password)
     duplicate = await database.users.find_one({
         "$or": [
             {"email": payload.email},
@@ -546,7 +618,42 @@ async def login(
             {"usernameKey": identifier},
         ]
     })
+    settings = await _security_settings(database)
+    max_attempts = int(settings["maximumLoginAttempts"])
+    now = datetime.now(timezone.utc)
+
+    locked_until = _parse_datetime(user.get("loginLockedUntil")) if user else None
+    if locked_until is not None:
+        if locked_until > now:
+            retry_after = max(1, int((locked_until - now).total_seconds()))
+            minutes = max(1, (retry_after + 59) // 60)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    "Too many failed sign-in attempts. Try again in "
+                    f"{minutes} minute{'s' if minutes != 1 else ''}."
+                ),
+                headers={"Retry-After": str(retry_after)},
+            )
+        await database.users.update_one(
+            {"_id": user["_id"]},
+            {"$set": {"failedLoginCount": 0, "loginLockedUntil": None}},
+        )
+        user["failedLoginCount"] = 0
+        user["loginLockedUntil"] = None
+
     if not _verify_password(payload.password, user):
+        if user is not None:
+            failed = int(user.get("failedLoginCount") or 0) + 1
+            updates = {"failedLoginCount": failed}
+            if failed >= max_attempts:
+                updates["loginLockedUntil"] = now + timedelta(
+                    seconds=LOGIN_LOCKOUT_SECONDS
+                )
+            await database.users.update_one(
+                {"_id": user["_id"]},
+                {"$set": updates},
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email or username and password do not match.",
@@ -565,6 +672,11 @@ async def login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This account is inactive. Contact an administrator.",
         )
+
+    await database.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {"failedLoginCount": 0, "loginLockedUntil": None}},
+    )
 
     if int(user.get("passwordIterations", 0)) < PASSWORD_ITERATIONS:
         await database.users.update_one(
@@ -961,7 +1073,7 @@ def _parse_datetime(value) -> datetime | None:
     return None
 
 
-def _send_otp_email(recipient: str, otp: str) -> None:
+def _send_email(recipient: str, subject: str, body: str) -> None:
     sender = get_gmail_smtp_email()
     password = get_gmail_app_password()
     if not sender or not password:
@@ -973,13 +1085,10 @@ def _send_otp_email(recipient: str, otp: str) -> None:
     host = get_gmail_smtp_host()
     port = get_gmail_smtp_port()
     message = EmailMessage()
-    message["Subject"] = "Your PricePilot verification code"
+    message["Subject"] = subject
     message["From"] = sender
     message["To"] = recipient
-    message.set_content(
-        f"Your PricePilot verification code is {otp}. "
-        "It expires in 5 minutes."
-    )
+    message.set_content(body)
 
     try:
         if port == 465:
@@ -994,8 +1103,16 @@ def _send_otp_email(recipient: str, otp: str) -> None:
     except Exception as error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Could not send the verification email.",
+            detail="Could not send the email.",
         ) from error
+
+
+def _send_otp_email(recipient: str, otp: str) -> None:
+    _send_email(
+        recipient,
+        "Your PricePilot verification code",
+        f"Your PricePilot verification code is {otp}. It expires in 5 minutes.",
+    )
 
 
 def _generate_otp() -> str:
@@ -1008,6 +1125,33 @@ def _hash_otp(otp: str) -> str:
 
 def _hash_reset_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+@router.get("/auth/settings", response_model=UserSettings)
+async def get_user_settings(request: Request, database=Depends(get_database)):
+    user = await get_request_user(request, database)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    preferences = user.get("preferences") or {}
+    return UserSettings(
+        emailPriceAlerts=bool(preferences.get("emailPriceAlerts", True)),
+        inAppPriceAlerts=bool(preferences.get("inAppPriceAlerts", True)),
+        theme=str(preferences.get("theme", "dark")),
+    )
+
+
+@router.put("/auth/settings", response_model=UserSettings)
+async def update_user_settings(
+    payload: UserSettings,
+    request: Request,
+    database=Depends(get_database),
+):
+    user = await get_request_user(request, database)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    preferences = payload.model_dump()
+    await database.users.update_one({"_id": user["_id"]}, {"$set": {"preferences": preferences}})
+    return UserSettings(**preferences)
 
 
 async def _issue_password_reset_otp(database, user: dict) -> None:
@@ -1460,6 +1604,7 @@ async def reset_password(
     payload: ResetPasswordRequest,
     database=Depends(get_database),
 ):
+    await _validate_password_policy(database, payload.new_password)
     token_hash = _hash_reset_token(payload.reset_token)
     user = await database.users.find_one(
         {"passwordResetTokenHash": token_hash}

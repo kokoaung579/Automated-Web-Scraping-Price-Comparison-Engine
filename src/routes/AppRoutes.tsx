@@ -166,7 +166,7 @@ function ProtectedAppLayout() {
     return <Navigate to="/admin" replace />
   }
 
-  return <AppLayout currentUser={user} />
+  return <AppLayout key={user.id} currentUser={user} />
 }
 
 function ProtectedAdminLayout() {
@@ -293,7 +293,11 @@ export function AppRoutes() {
           path="products/:id"
           element={<ProductDetailRoute />}
         />
-        <Route path="comparison" element={<PriceComparisonPage />} />
+        <Route
+          path="comparison"
+          element={<Navigate to="/price-comparison" replace />}
+        />
+        <Route path="price-comparison" element={<PriceComparisonPage />} />
         <Route path="price-history" element={<PriceHistoryPage />} />
         <Route path="watchlist" element={<WatchlistPage />} />
         <Route path="alerts" element={<AlertsPage />} />

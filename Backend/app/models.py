@@ -1,10 +1,21 @@
 ﻿from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.services.scraping_schedule import parse_utc_timestamp
+
+
+LEGACY_ADMIN_PRODUCT_STORE_FIELDS = ("store_name", "store_website_url")
 
 
 class APIModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class UserSettings(APIModel):
+    emailPriceAlerts: bool = True
+    inAppPriceAlerts: bool = True
+    theme: str = "dark"
 
 
 class Specification(APIModel):
@@ -26,6 +37,12 @@ class Product(APIModel):
     tone: str
 
 
+class PublicProduct(Product):
+    """Read-only catalog response with the Admin product's real image URL."""
+
+    image_url: str | None = None
+
+
 class AdminProduct(APIModel):
     product_id: str = Field(min_length=1)
     product_name: str = Field(min_length=1)
@@ -36,6 +53,10 @@ class AdminProduct(APIModel):
     image_url: str | None = None
     product_url: str | None = None
     store_id: str | None = None
+    # Legacy denormalized labels are accepted for older MongoDB documents but
+    # are resolved to store_id and never exposed through API payloads.
+    store_name: str | None = Field(default=None, exclude=True)
+    store_website_url: str | None = Field(default=None, exclude=True)
     price: float = Field(gt=0)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     availability: Literal[
@@ -49,6 +70,23 @@ class AdminProduct(APIModel):
     updated_at: str = Field(min_length=1)
     sku: str | None = None
     shipping_fee: float | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_store_fields(cls, values):
+        """Accept old denormalized store fields without exposing them.
+
+        ``store_id`` is the canonical product/store relationship. Some legacy
+        MongoDB documents also carry display-only ``store_name`` and
+        ``store_website_url`` values; those are resolved against the Store
+        collection before validation and remain untouched in MongoDB.
+        """
+        if not isinstance(values, dict):
+            return values
+        normalized = dict(values)
+        for field in LEGACY_ADMIN_PRODUCT_STORE_FIELDS:
+            normalized.pop(field, None)
+        return normalized
 
 
 def admin_product_to_catalog_document(
@@ -149,21 +187,33 @@ def catalog_document_to_public_product(document: dict) -> dict:
         return {
             "id": str(document.get("_id", product.product_id)),
             **public_fields,
+            "image_url": product.image_url,
         }
 
-    return Product.model_validate({
+    public_product = Product.model_validate({
         **{
             key: value
             for key, value in document.items()
-            if key not in {"_id", "adminProduct"}
+            if key not in {"_id", "adminProduct", "image_url"}
         },
         "id": str(document.get("_id", document.get("id", ""))),
     }).model_dump()
+    image_url = document.get("image_url")
+    public_product["image_url"] = (
+        image_url if isinstance(image_url, str) else None
+    )
+    return public_product
 
 
 class StoreOffer(APIModel):
     store: str
     price: float = Field(ge=0)
+    availability: str | None = None
+    source_type: str | None = None
+    verification_status: str | None = None
+    is_test_site: bool = False
+    product_url: str | None = None
+    updated_at: str | None = None
 
 
 class PriceHistoryPoint(APIModel):
@@ -174,6 +224,9 @@ class PriceHistoryPoint(APIModel):
 class StoreHistory(APIModel):
     store: str
     points: list[PriceHistoryPoint]
+    availability: str | None = None
+    verification_status: str | None = None
+    is_test_site: bool = False
 
 
 class PriceAlert(APIModel):
@@ -184,6 +237,8 @@ class PriceAlert(APIModel):
     targetPrice: float = Field(gt=0)
     status: Literal["active", "triggered"]
     createdAt: str = Field(min_length=1)
+    user_id: str | None = None
+    emailNotifiedPrice: float | None = None
 
 
 class WatchlistEntry(APIModel):
@@ -214,6 +269,110 @@ class ScrapingLog(APIModel):
     status: Literal["success", "failure"]
     error: str
 
+
+class ScrapingJobConfiguration(APIModel):
+    interval_minutes: int = Field(ge=1, le=10080)
+    scheduled_at: str = Field(min_length=1)
+    request_timeout_seconds: int = Field(ge=1, le=300)
+    retry_attempts: int = Field(ge=0, le=10)
+    product_limit: int = Field(default=10, ge=1, le=15)
+    # Legacy MongoDB jobs may carry this scheduler metadata. It is optional
+    # and accepted explicitly instead of weakening extra="forbid".
+    recurring: bool | None = None
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def validate_scheduled_at(cls, value: str) -> str:
+        parse_utc_timestamp(value, "scheduled_at")
+        return value
+
+
+class CreateScrapingJobInput(APIModel):
+    store_id: str = Field(min_length=1)
+    interval_minutes: int = Field(ge=1, le=10080)
+    scheduled_at: str = Field(min_length=1)
+    request_timeout_seconds: int = Field(ge=1, le=300)
+    retry_attempts: int = Field(ge=0, le=10)
+    product_limit: int = Field(default=10, ge=1, le=15)
+    recurring: bool = True
+    allow_past_schedule: bool = False
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def validate_scheduled_at(cls, value: str) -> str:
+        parse_utc_timestamp(value, "scheduled_at")
+        return value
+
+
+ScrapingStatus = Literal[
+    "pending",
+    "scheduled",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "queued",
+    "paused",
+]
+
+
+class ScrapingExecution(APIModel):
+    id: str
+    job_id: str
+    started_at: str
+    finished_at: str | None = None
+    status: ScrapingStatus
+    products_found: int = Field(ge=0)
+    success_count: int = Field(ge=0)
+    failure_count: int = Field(ge=0)
+    products_created: int = Field(ge=0)
+    products_refreshed: int = Field(ge=0)
+    success_rate: float = Field(ge=0, le=100)
+    duration_seconds: float = Field(ge=0)
+    errors: list[str]
+    logs: list[str]
+    target_url: str
+    product_limit: int = Field(default=10, ge=1, le=15)
+    run_token: str | None = None
+    trigger: Literal["manual", "scheduled", "recovery"] | None = None
+    attempts: int = Field(default=0, ge=0)
+    cancelled_at: str | None = None
+
+
+class ScrapingJob(APIModel):
+    id: str
+    store_id: str
+    store_name: str
+    website_url: str
+    configuration: ScrapingJobConfiguration
+    status: ScrapingStatus
+    last_run: str | None = None
+    next_run: str | None = None
+    products_found: int = Field(ge=0)
+    success_rate: float = Field(ge=0, le=100)
+    executions: list[ScrapingExecution]
+    updated_at: str
+    cancel_requested: bool = False
+    active_execution_id: str | None = None
+    lease_expires_at: str | None = None
+    last_error: str | None = None
+    duration_seconds: float | None = Field(default=None, ge=0)
+    attempts: int = Field(default=0, ge=0)
+    trigger: Literal["manual", "scheduled", "recovery"] | None = None
+
+
+class ScrapingTarget(APIModel):
+    store_id: str
+    store_name: str
+    website_url: str
+    logo_url: str | None = None
+    status: Literal["Active", "Inactive"]
+    created_at: str
+    updated_at: str
+    target_url: str
+    default_product_limit: int
+    max_product_limit: int
+
 class Store(APIModel):
     store_id: str = Field(
         min_length=1,
@@ -231,6 +390,62 @@ class Store(APIModel):
 class StoreOffer(APIModel):
     store: str
     price: float = Field(ge=0)
+    availability: str | None = None
+    source_type: str | None = None
+    verification_status: str | None = None
+    is_test_site: bool = False
+    product_url: str | None = None
+    updated_at: str | None = None
+
+
+class ManualOfferVerificationRequest(APIModel):
+    availability: Literal[
+        "in_stock",
+        "out_of_stock",
+        "preorder",
+        "unknown",
+    ]
+    evidence_type: Literal[
+        "product_url",
+        "offline_document",
+        "store_website_url",
+    ] | None = None
+    evidence_url: str | None = None
+    product_url: str | None = None
+    store_website_url: str | None = None
+    offline_description: str | None = Field(default=None, max_length=1000)
+    offline_reference: str | None = Field(default=None, max_length=250)
+    match_confirmed: bool = False
+    verification_note: str | None = Field(default=None, max_length=1000)
+
+
+class ManualOfferRecord(APIModel):
+    offer_id: str
+    product_id: str
+    store: str
+    store_id: str | None = None
+    store_name: str | None = None
+    price: float = Field(ge=0)
+    currency: str | None = None
+    product_url: str | None = None
+    availability: str
+    catalog_availability: str | None = None
+    source_type: str
+    verification_status: str
+    verified: bool = False
+    verified_by: str | None = None
+    verified_at: str | None = None
+    evidence_url: str | None = None
+    evidence_type: str | None = None
+    product_url_evidence: str | None = None
+    store_website_url: str | None = None
+    offline_description: str | None = None
+    offline_reference: str | None = None
+    match_confirmed: bool = False
+    verification_note: str | None = None
+    last_checked_at: str | None = None
+    updated_at: str | None = None
+    is_test_site: bool = False
 
 
 class PriceHistoryPoint(APIModel):
@@ -241,6 +456,9 @@ class PriceHistoryPoint(APIModel):
 class StoreHistory(APIModel):
     store: str
     points: list[PriceHistoryPoint]
+    availability: str | None = None
+    verification_status: str | None = None
+    is_test_site: bool = False
 
 
 class PriceAlert(APIModel):
@@ -251,6 +469,8 @@ class PriceAlert(APIModel):
     targetPrice: float = Field(gt=0)
     status: Literal["active", "triggered"]
     createdAt: str = Field(min_length=1)
+    user_id: str | None = None
+    emailNotifiedPrice: float | None = None
 
 
 class WatchlistEntry(APIModel):

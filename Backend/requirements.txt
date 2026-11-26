@@ -18,5 +18,6 @@ starlette==1.10.0
 typing-inspection==0.4.5
 typing_extensions==4.16.0
 truststore==0.10.5
+tzdata==2026.6
 uvicorn==0.54.0
 httpx==0.28.1
