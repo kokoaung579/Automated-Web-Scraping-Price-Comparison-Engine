@@ -157,4 +157,106 @@ describe('scraping API client', () => {
 
     await expect(client.getExecutionHistory('job-1')).resolves.toEqual([execution])
   })
+
+  it('normalizes legacy backend statuses', async () => {
+    const legacyJob = {
+      ...job,
+      status: 'queued',
+      next_run: '2026-11-20T04:00:00.000Z',
+    }
+    const cancelledJob = {
+      ...job,
+      status: 'cancelled',
+      next_run: '2026-11-20T04:00:00.000Z',
+    }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(jsonResponse([legacyJob]))
+      .mockResolvedValueOnce(jsonResponse([cancelledJob]))
+    const client = createBackendScrapingApiClient(
+      fetcher as unknown as typeof fetch,
+    )
+
+    await expect(client.getJobs()).resolves.toEqual([
+      { ...legacyJob, status: 'pending' },
+    ])
+    await expect(client.getJobs()).resolves.toEqual([
+      { ...cancelledJob, next_run: null },
+    ])
+  })
+
+  it('keeps valid records when one item in a backend list is malformed', async () => {
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse([job, { id: 'bad' }]))
+    const client = createBackendScrapingApiClient(
+      fetcher as unknown as typeof fetch,
+    )
+
+    await expect(client.getJobs()).resolves.toEqual([job])
+  })
+
+  it('flattens FastAPI validation error details', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          detail: [
+            {
+              loc: ['body', 'scheduled_at'],
+              msg: 'Value error, first run must be in the future',
+              type: 'value_error',
+            },
+          ],
+        },
+        false,
+        422,
+      ),
+    )
+    const client = createBackendScrapingApiClient(
+      fetcher as unknown as typeof fetch,
+    )
+
+    await expect(
+      client.createJob({
+        store_id: target.store_id,
+        interval_minutes: 60,
+        scheduled_at: '2020-01-01T00:00:00.000Z',
+        request_timeout_seconds: 30,
+        retry_attempts: 0,
+        product_limit: 10,
+        recurring: true,
+      }),
+    ).rejects.toThrow(
+      'body.scheduled_at: Value error, first run must be in the future',
+    )
+  })
+
+  it('uses the backend create, pause, resume, and cancel endpoints', async () => {
+    const fetcher = vi.fn().mockImplementation(async () => jsonResponse(job))
+    const client = createBackendScrapingApiClient(
+      fetcher as unknown as typeof fetch,
+    )
+    const input = {
+      store_id: target.store_id,
+      interval_minutes: 30,
+      scheduled_at: '2026-12-20T04:00:00.000Z',
+      request_timeout_seconds: 20,
+      retry_attempts: 2,
+      product_limit: 10,
+      recurring: false,
+    }
+
+    await expect(client.createJob(input)).resolves.toEqual(job)
+    await expect(client.pauseJob('job-1')).resolves.toEqual(job)
+    await expect(client.resumeJob('job-1')).resolves.toEqual(job)
+    await expect(client.cancelJob('job-1')).resolves.toEqual(job)
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/admin/scraping/jobs',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(input) }),
+    )
+    for (const action of ['pause', 'resume', 'cancel']) {
+      expect(fetcher).toHaveBeenCalledWith(
+        `/api/admin/scraping/jobs/job-1/${action}`,
+        expect.objectContaining({ method: 'POST' }),
+      )
+    }
+  })
 })

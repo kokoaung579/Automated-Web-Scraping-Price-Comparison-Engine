@@ -2,6 +2,8 @@ import {
   isScrapingExecution,
   isScrapingJob,
   isScrapingTarget,
+  normalizeScrapingExecution,
+  normalizeScrapingJob,
 } from '../data/adminScraping'
 import type {
   CreateScrapingJobInput,
@@ -109,7 +111,7 @@ export function createScrapingApiClient(
       )
     }
 
-    let body: unknown = null
+    let body: unknown
     try {
       body = await response.json()
     } catch {
@@ -117,13 +119,28 @@ export function createScrapingApiClient(
     }
 
     if (!response.ok) {
+      const detailValue =
+        typeof body === 'object' && body !== null && 'detail' in body
+          ? (body as { detail?: unknown }).detail
+          : undefined
       const detail =
-        typeof body === 'object' &&
-        body !== null &&
-        'detail' in body &&
-        typeof (body as { detail?: unknown }).detail === 'string'
-          ? (body as { detail: string }).detail
-          : `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`
+        typeof detailValue === 'string'
+          ? detailValue
+          : Array.isArray(detailValue)
+            ? detailValue
+                .map((item: unknown) => {
+                  if (typeof item !== 'object' || item === null) {
+                    return String(item)
+                  }
+                  const field = item as Record<string, unknown>
+                  if (typeof field.msg !== 'string') return JSON.stringify(field)
+                  const location = Array.isArray(field.loc)
+                    ? `${field.loc.join('.')}: `
+                    : ''
+                  return `${location}${field.msg}`
+                })
+                .join('; ')
+            : `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`
       throw new Error(detail)
     }
 
@@ -137,7 +154,7 @@ export function createScrapingApiClient(
     operation: ScrapingApiOperation,
     options: { jobId?: string; body?: unknown } = {},
   ): Promise<ScrapingJob> {
-    const value = await request(operation, options)
+    const value = normalizeScrapingJob(await request(operation, options))
     if (!isScrapingJob(value)) {
       throw new Error(`Scraping API ${operation} returned an invalid job record.`)
     }
@@ -155,10 +172,14 @@ export function createScrapingApiClient(
     createJob: (input) => readJob('createJob', { body: input }),
     async getJobs() {
       const value = await request('getJobs')
-      if (!Array.isArray(value) || !value.every(isScrapingJob)) {
+      if (!Array.isArray(value)) {
         throw new Error('Scraping API getJobs returned an invalid job list.')
       }
-      return value
+      const jobs = value.map(normalizeScrapingJob).filter(isScrapingJob)
+      if (value.length > 0 && jobs.length === 0) {
+        throw new Error('Scraping API getJobs returned an invalid job list.')
+      }
+      return jobs
     },
     getJobDetails: (jobId) => readJob('getJobDetails', { jobId }),
     startJob: (jobId) => readJob('startJob', { jobId }),
@@ -167,12 +188,20 @@ export function createScrapingApiClient(
     cancelJob: (jobId) => readJob('cancelJob', { jobId }),
     async getExecutionHistory(jobId) {
       const value = await request('getExecutionHistory', { jobId })
-      if (!Array.isArray(value) || !value.every(isScrapingExecution)) {
+      if (!Array.isArray(value)) {
         throw new Error(
           'Scraping API getExecutionHistory returned an invalid execution history.',
         )
       }
-      return value
+      const executions = value
+        .map(normalizeScrapingExecution)
+        .filter(isScrapingExecution)
+      if (value.length > 0 && executions.length === 0) {
+        throw new Error(
+          'Scraping API getExecutionHistory returned an invalid execution history.',
+        )
+      }
+      return executions
     },
   }
 }

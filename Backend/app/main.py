@@ -32,6 +32,10 @@ from app.services.channel3_services import (
     find_matching_channel3_product,
     search_channel3_products,
 )
+from app.services.scraping_scheduler import (
+    start_scraping_scheduler,
+    stop_scraping_scheduler,
+)
 from app.services.notifications import (
     create_notification as emit_notification,
     create_user_notification,
@@ -98,8 +102,10 @@ async def lifespan(application: FastAPI):
         await migrate_legacy_admin_products(database)
         await sync_existing_admin_product_prices(database)
         await migrate_product_categories(database)
+        await start_scraping_scheduler(database)
         yield
     finally:
+        await stop_scraping_scheduler()
         await client.close()
 
 

@@ -13,6 +13,8 @@ export const PRODUCT_SCHEMA_FIELDS = [
   'image_url',
   'product_url',
   'store_id',
+  'store_name',
+  'store_website_url',
   'price',
   'currency',
   'availability',
@@ -66,8 +68,13 @@ function hasUniqueProductIds(products: Product[]): boolean {
 
 export function isProduct(value: unknown): value is Product {
   if (!isRecord(value)) return false
-  const keys = Object.keys(value).sort()
-  const expectedKeys = [...PRODUCT_SCHEMA_FIELDS].sort()
+  const optionalSchemaFields = new Set(['store_name', 'store_website_url'])
+  const schemaFields = PRODUCT_SCHEMA_FIELDS as readonly string[]
+  const keys = Object.keys(value)
+  const hasUnexpectedKey = keys.some((key) => !schemaFields.includes(key))
+  const hasRequiredKeys = schemaFields
+    .filter((key) => !optionalSchemaFields.has(key))
+    .every((key) => Object.prototype.hasOwnProperty.call(value, key))
   const optionalTextFields = [
     value.brand,
     value.model,
@@ -75,10 +82,16 @@ export function isProduct(value: unknown): value is Product {
     value.image_url,
     value.product_url,
     value.store_id,
+    ...(Object.prototype.hasOwnProperty.call(value, 'store_name')
+      ? [value.store_name]
+      : []),
+    ...(Object.prototype.hasOwnProperty.call(value, 'store_website_url')
+      ? [value.store_website_url]
+      : []),
   ]
   return (
-    keys.length === expectedKeys.length &&
-    keys.every((key, index) => key === expectedKeys[index]) &&
+    !hasUnexpectedKey &&
+    hasRequiredKeys &&
     typeof value.product_id === 'string' &&
     value.product_id.trim().length > 0 &&
     value.product_id === value.product_id.trim() &&
@@ -111,7 +124,11 @@ export function isProduct(value: unknown): value is Product {
     (value.image_url === null ||
       (typeof value.image_url === 'string' && validHttpUrl(value.image_url))) &&
     (value.product_url === null ||
-      (typeof value.product_url === 'string' && validHttpUrl(value.product_url)))
+      (typeof value.product_url === 'string' && validHttpUrl(value.product_url))) &&
+    (value.store_website_url === undefined ||
+      value.store_website_url === null ||
+      (typeof value.store_website_url === 'string' &&
+        validHttpUrl(value.store_website_url)))
   )
 }
 
@@ -135,6 +152,8 @@ export function getSeedAdminProducts(): Product[] {
       image_url: null,
       product_url: null,
       store_id: getStoreIdFromName(product.store),
+      store_name: product.store,
+      store_website_url: null,
       price: product.price,
       currency: 'USD',
       availability: 'in_stock',
@@ -279,6 +298,13 @@ export function validateProductImportRows(
     )
     const imageUrl = readText(values.image_url, 'image_url', errors, false)
     const productUrl = readText(values.product_url, 'product_url', errors, false)
+    const storeName = readText(values.store_name, 'store_name', errors, false)
+    const storeWebsiteUrl = readText(
+      values.store_website_url,
+      'store_website_url',
+      errors,
+      false,
+    )
     const rawStoreId = readText(values.store_id, 'store_id', errors, false)
     const storeId = rawStoreId
       ? storeIds
@@ -337,6 +363,9 @@ export function validateProductImportRows(
     if (productUrl && !validHttpUrl(productUrl)) {
       errors.push('product_url must be a valid HTTP or HTTPS URL.')
     }
+    if (storeWebsiteUrl && !validHttpUrl(storeWebsiteUrl)) {
+      errors.push('store_website_url must be a valid HTTP or HTTPS URL.')
+    }
     if (storeIds && storeId && !storeIds.has(storeId)) {
       errors.push('store_id must match a store in Store Management.')
     }
@@ -382,6 +411,8 @@ export function validateProductImportRows(
             image_url: imageUrl,
             product_url: productUrl,
             store_id: storeId,
+            store_name: storeName,
+            store_website_url: storeWebsiteUrl,
             price,
             currency: currency.toUpperCase(),
             availability,

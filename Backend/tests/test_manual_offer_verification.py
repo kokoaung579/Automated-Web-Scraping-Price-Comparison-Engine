@@ -13,7 +13,7 @@ from app.main import product_history, product_offers
 from app.models import AdminProduct
 from app.routers.auth import SESSION_COOKIE, router as auth_router
 from app.routers.manual_offers import router as manual_offers_router
-from app.services.comparison import build_comparison_response
+from app.services.comparison import build_comparison_detail, build_comparison_response
 from app.services.product_catalog import upsert_admin_product_offer
 
 UPDATED = "2026-11-20T04:00:00Z"
@@ -652,3 +652,660 @@ class ManualOfferVerificationApiTests(unittest.TestCase):
         self.assertIs(offer["verified"], True)
         self.assertEqual(offer["verifiedBy"], "admin@example.test")
         self.assertEqual(offer["evidenceUrl"], EVIDENCE_URL)
+
+    def _verify_with_payload(self, client=None, **payload):
+        return (client or self.admin_client).post(
+            "/api/admin/manual-offers/manual-offer-1/verify",
+            json=payload,
+        )
+
+    def _verify_offline(self, client=None, **overrides):
+        payload = {
+            "availability": "in_stock",
+            "evidence_type": "offline_document",
+            "offline_description": "Printed retailer invoice showing the listed price.",
+            "offline_reference": "INV-2026-OFFLINE",
+            "match_confirmed": True,
+        }
+        payload.update(overrides)
+        return self._verify_with_payload(client=client, **payload)
+
+    def _set_manual_product_url(self, url):
+        self.database.offers.documents["manual-offer-1"]["productUrl"] = url
+        self.database.products.documents["manual-1"]["adminProduct"][
+            "product_url"
+        ] = url
+
+    def _comparison_item(self, product_id="manual-1"):
+        comparison = asyncio.run(
+            build_comparison_response(
+                self.database,
+                availability="all",
+                now=datetime.now(timezone.utc),
+            )
+        )
+        return next(
+            entry for entry in comparison.items
+            if entry.identity.canonical_key == f"product:{product_id}"
+        )
+
+    def _manual_offer_statuses(self):
+        comparison = asyncio.run(
+            build_comparison_response(
+                self.database,
+                availability="all",
+                now=datetime.now(timezone.utc),
+            )
+        )
+        item = next(
+            entry for entry in comparison.items
+            if entry.identity.canonical_key == "product:manual-1"
+        )
+        return (
+            [offer.verification_status.value for offer in item.offers],
+            item.verified.status,
+        )
+
+    def test_product_url_evidence_verifies_and_keeps_store_url_separate(self):
+        response = self._verify_with_payload(
+            availability="in_stock",
+            evidence_type="product_url",
+            product_url="https://www.zone.example/manual-1",
+            store_website_url="https://www.zone.example",
+            match_confirmed=True,
+            verification_note="Checked the exact retailer product page.",
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["verification_status"], "manually_verified")
+        self.assertTrue(body["verified"])
+        self.assertEqual(body["evidence_type"], "product_url")
+        self.assertEqual(
+            body["evidence_url"], "https://www.zone.example/manual-1"
+        )
+        self.assertEqual(
+            body["product_url_evidence"], "https://www.zone.example/manual-1"
+        )
+        self.assertEqual(
+            body["store_website_url"], "https://www.zone.example"
+        )
+        self.assertTrue(body["match_confirmed"])
+        self.assertEqual(body["verified_by"], "admin@example.test")
+
+        offer = self.database.offers.documents["manual-offer-1"]
+        self.assertEqual(offer["evidenceType"], "product_url")
+        self.assertEqual(offer["productUrlEvidence"], offer["productUrl"])
+        self.assertEqual(offer["storeWebsiteUrl"], "https://www.zone.example")
+        self.assertIs(offer["matchConfirmed"], True)
+        self.assertEqual(
+            self._manual_offer_statuses()[0], ["manually_verified"]
+        )
+
+    def test_product_url_evidence_must_match_the_offer_product_url(self):
+        response = self._verify_with_payload(
+            availability="in_stock",
+            evidence_type="product_url",
+            product_url="https://www.other.example/manual-1",
+            match_confirmed=True,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("match", response.json()["detail"].lower())
+        self.assertEqual(
+            self.database.offers.documents["manual-offer-1"],
+            self.original_manual_offer,
+        )
+        self.assertEqual(list(self.database.audit_logs.documents.values()), [])
+
+    def test_offline_document_evidence_verifies_without_url_proof(self):
+        response = self._verify_with_payload(
+            availability="in_stock",
+            evidence_type="offline_document",
+            offline_description="Retailer invoice showing the listed price.",
+            offline_reference="INV-2026-001",
+            store_website_url="https://www.zone.example",
+            match_confirmed=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["evidence_type"], "offline_document")
+        self.assertIsNone(body["evidence_url"])
+        self.assertEqual(
+            body["offline_description"],
+            "Retailer invoice showing the listed price.",
+        )
+        self.assertEqual(body["offline_reference"], "INV-2026-001")
+        self.assertTrue(body["verified"])
+        self.assertEqual(body["verification_status"], "manually_verified")
+
+        offer = self.database.offers.documents["manual-offer-1"]
+        self.assertIsNone(offer["evidenceUrl"])
+        self.assertEqual(offer["offlineReference"], "INV-2026-001")
+        self.assertEqual(self._manual_offer_statuses()[0], ["manually_verified"])
+
+    def test_offline_document_evidence_requires_description_and_reference(self):
+        for label, payload in (
+            (
+                "missing description",
+                {
+                    "availability": "in_stock",
+                    "evidence_type": "offline_document",
+                    "offline_reference": "INV-2026-001",
+                    "match_confirmed": True,
+                },
+            ),
+            (
+                "missing reference",
+                {
+                    "availability": "in_stock",
+                    "evidence_type": "offline_document",
+                    "offline_description": "Retailer price list.",
+                    "match_confirmed": True,
+                },
+            ),
+        ):
+            with self.subTest(label):
+                self._reset_manual_offer()
+                self.database.audit_logs.documents.clear()
+                response = self._verify_with_payload(**payload)
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("offline", response.json()["detail"].lower())
+                self.assertEqual(
+                    self.database.offers.documents["manual-offer-1"],
+                    self.original_manual_offer,
+                )
+                self.assertEqual(
+                    list(self.database.audit_logs.documents.values()), []
+                )
+
+    def test_store_website_url_is_not_product_level_evidence(self):
+        response = self._verify_with_payload(
+            availability="in_stock",
+            evidence_type="store_website_url",
+            store_website_url="https://www.zone.example",
+            match_confirmed=True,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not sufficient", response.json()["detail"].lower())
+        self.assertEqual(
+            self.database.offers.documents["manual-offer-1"],
+            self.original_manual_offer,
+        )
+
+        self._reset_manual_offer()
+        legacy_store_url = self._verify_with_payload(
+            availability="in_stock",
+            evidence_url="https://www.zone.example",
+        )
+        self.assertEqual(legacy_store_url.status_code, 400)
+        self.assertIn("not sufficient", legacy_store_url.json()["detail"].lower())
+
+    def test_invalid_localhost_private_and_admin_urls_are_rejected(self):
+        urls = (
+            "ftp://zone.example/manual-1",
+            "http://localhost:5173/admin/products",
+            "http://127.0.0.1/manual-1",
+            "http://10.0.0.5/manual-1",
+            "https://admin.example.test/manual-1",
+            "https://dev.zone.example/manual-1",
+        )
+        for url in urls:
+            with self.subTest(url=url):
+                self._reset_manual_offer()
+                self.database.audit_logs.documents.clear()
+                response = self._verify_with_payload(
+                    availability="in_stock",
+                    evidence_type="product_url",
+                    product_url=url,
+                    match_confirmed=True,
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("http", response.json()["detail"].lower())
+                self.assertEqual(
+                    self.database.offers.documents["manual-offer-1"],
+                    self.original_manual_offer,
+                )
+                self.assertEqual(
+                    list(self.database.audit_logs.documents.values()), []
+                )
+
+    def test_missing_evidence_and_confirmation_are_rejected(self):
+        scenarios = (
+            (
+                "missing product URL",
+                {
+                    "availability": "in_stock",
+                    "evidence_type": "product_url",
+                    "match_confirmed": True,
+                },
+                "product url evidence",
+            ),
+            (
+                "missing confirmation",
+                {
+                    "availability": "in_stock",
+                    "evidence_type": "product_url",
+                    "product_url": "https://www.zone.example/manual-1",
+                },
+                "confirm",
+            ),
+            (
+                "missing all evidence",
+                {
+                    "availability": "in_stock",
+                    "evidence_type": "offline_document",
+                    "match_confirmed": True,
+                },
+                "offline",
+            ),
+        )
+        for label, payload, expected_detail in scenarios:
+            with self.subTest(label):
+                self._reset_manual_offer()
+                self.database.audit_logs.documents.clear()
+                response = self._verify_with_payload(**payload)
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(
+                    expected_detail, response.json()["detail"].lower()
+                )
+                self.assertEqual(
+                    self.database.offers.documents["manual-offer-1"],
+                    self.original_manual_offer,
+                )
+
+    def test_non_in_stock_availability_stays_unverified_with_new_evidence(self):
+        for availability in ("out_of_stock", "preorder", "unknown"):
+            with self.subTest(availability=availability):
+                self._reset_manual_offer()
+                response = self._verify_with_payload(
+                    availability=availability,
+                    evidence_type="offline_document",
+                    offline_description="Retailer price list.",
+                    offline_reference=f"LIST-{availability}",
+                    match_confirmed=True,
+                )
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["availability"], availability)
+                self.assertEqual(
+                    body["verification_status"], "unverified_excluded"
+                )
+                self.assertFalse(body["verified"])
+                self.assertIsNone(body["verified_by"])
+                self.assertIsNone(body["verified_at"])
+                statuses, verified_status = self._manual_offer_statuses()
+                self.assertNotIn("manually_verified", statuses)
+                self.assertEqual(verified_status, "no_verified_offers")
+
+    def test_non_in_stock_allows_product_url_evidence_type_without_url(self):
+        self._reset_manual_offer()
+        response = self._verify_with_payload(
+            availability="out_of_stock",
+            evidence_type="product_url",
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["availability"], "out_of_stock")
+        self.assertIsNone(body["product_url_evidence"])
+        self.assertEqual(body["verification_status"], "unverified_excluded")
+        self.assertFalse(body["verified"])
+
+    def test_new_evidence_types_require_admin_authentication(self):
+        payload = {
+            "availability": "in_stock",
+            "evidence_type": "offline_document",
+            "offline_description": "Retailer invoice.",
+            "offline_reference": "INV-2026-002",
+            "match_confirmed": True,
+        }
+        member = self._verify_with_payload(client=self.member_client, **payload)
+        anonymous = self._verify_with_payload(
+            client=self.anonymous_client, **payload
+        )
+        self.assertEqual(member.status_code, 403)
+        self.assertEqual(anonymous.status_code, 401)
+        self.assertEqual(
+            self.database.offers.documents["manual-offer-1"],
+            self.original_manual_offer,
+        )
+        self.assertEqual(list(self.database.audit_logs.documents.values()), [])
+
+    def test_legacy_manual_verification_payload_remains_compatible(self):
+        response = self._verify()
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["verified"])
+        self.assertEqual(body["verification_status"], "manually_verified")
+        self.assertEqual(body["evidence_url"], EVIDENCE_URL)
+        self.assertIsNone(body["evidence_type"])
+        self.assertEqual(self._manual_offer_statuses()[0], ["manually_verified"])
+
+    def test_offline_document_without_product_url_verifies_and_is_consistent_everywhere(self):
+        self._reset_manual_offer()
+        self._set_manual_product_url(None)
+
+        response = self._verify_offline()
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["evidence_type"], "offline_document")
+        self.assertEqual(body["verification_status"], "manually_verified")
+        self.assertTrue(body["verified"])
+        self.assertEqual(body["verified_by"], "admin@example.test")
+        self.assertTrue(body["verified_at"])
+
+        offer = self.database.offers.documents["manual-offer-1"]
+        self.assertIsNone(offer["productUrl"])
+        self.assertEqual(offer["evidenceType"], "offline_document")
+        self.assertIs(offer["matchConfirmed"], True)
+        self.assertEqual(offer["verificationStatus"], "manually_verified")
+        self.assertIs(offer["verified"], True)
+
+        item = self._comparison_item()
+        self.assertEqual(
+            [entry.verification_status.value for entry in item.offers],
+            ["manually_verified"],
+        )
+        self.assertEqual(item.offers[0].eligibility.value, "verified_comparison")
+        self.assertTrue(item.offers[0].verified)
+        self.assertIsNone(item.offers[0].product_url)
+        self.assertEqual(item.verified.status, "verified_offers_available")
+        self.assertEqual(item.verified.lowest.amount, 120.0)
+        self.assertEqual(
+            item.history.series[0].verification_status.value, "manually_verified"
+        )
+        self.assertEqual(item.history.currency, "USD")
+
+        detail = asyncio.run(
+            build_comparison_detail(
+                self.database,
+                item.identity.canonical_key,
+                availability="all",
+                now=datetime.now(timezone.utc),
+            )
+        )
+        self.assertEqual(
+            [entry.verification_status.value for entry in detail.offers],
+            ["manually_verified"],
+        )
+        self.assertTrue(detail.offers[0].verified)
+
+        offer_statuses, history_statuses = self._product_detail_statuses()
+        self.assertEqual(list(offer_statuses.values()), ["manually_verified"])
+        self.assertEqual(list(history_statuses.values()), ["manually_verified"])
+
+    def test_offline_document_without_product_url_requires_complete_evidence(self):
+        scenarios = (
+            (
+                "missing description",
+                {
+                    "availability": "in_stock",
+                    "evidence_type": "offline_document",
+                    "offline_reference": "INV-2026-OFFLINE",
+                    "match_confirmed": True,
+                },
+                "offline",
+            ),
+            (
+                "missing reference",
+                {
+                    "availability": "in_stock",
+                    "evidence_type": "offline_document",
+                    "offline_description": "Printed retailer invoice.",
+                    "match_confirmed": True,
+                },
+                "offline",
+            ),
+            (
+                "missing confirmation",
+                {
+                    "availability": "in_stock",
+                    "evidence_type": "offline_document",
+                    "offline_description": "Printed retailer invoice.",
+                    "offline_reference": "INV-2026-OFFLINE",
+                    "match_confirmed": False,
+                },
+                "confirm",
+            ),
+        )
+        for label, payload, expected_detail in scenarios:
+            with self.subTest(label):
+                self._reset_manual_offer()
+                self._set_manual_product_url(None)
+                self.database.audit_logs.documents.clear()
+                baseline = dict(self.database.offers.documents["manual-offer-1"])
+
+                response = self._verify_with_payload(**payload)
+                self.assertEqual(response.status_code, 400)
+                self.assertIn(
+                    expected_detail, response.json()["detail"].lower()
+                )
+                self.assertEqual(
+                    self.database.offers.documents["manual-offer-1"], baseline
+                )
+                self.assertEqual(
+                    list(self.database.audit_logs.documents.values()), []
+                )
+
+    def test_offline_document_without_product_url_non_in_stock_stays_ineligible(self):
+        for availability in ("out_of_stock", "preorder", "unknown"):
+            with self.subTest(availability=availability):
+                self._reset_manual_offer()
+                self._set_manual_product_url(None)
+                self.database.audit_logs.documents.clear()
+
+                response = self._verify_offline(availability=availability)
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["availability"], availability)
+                self.assertEqual(
+                    body["verification_status"], "unverified_excluded"
+                )
+                self.assertFalse(body["verified"])
+                self.assertIsNone(body["verified_by"])
+                self.assertIsNone(body["verified_at"])
+
+                statuses, verified_status = self._manual_offer_statuses()
+                self.assertNotIn("manually_verified", statuses)
+                self.assertEqual(verified_status, "no_verified_offers")
+
+    def test_offline_document_with_matching_product_url_verifies(self):
+        self._reset_manual_offer()
+        response = self._verify_offline(
+            store_website_url="https://www.zone.example"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["verified"])
+        self.assertEqual(
+            self.database.offers.documents["manual-offer-1"]["productUrl"],
+            "https://www.zone.example/manual-1",
+        )
+        statuses, verified_status = self._manual_offer_statuses()
+        self.assertEqual(statuses, ["manually_verified"])
+        self.assertEqual(verified_status, "verified_offers_available")
+
+    def test_offline_document_with_foreign_product_url_is_rejected_and_excluded(self):
+        self._reset_manual_offer()
+        self._set_manual_product_url("https://www.other.example/manual-1")
+        baseline = dict(self.database.offers.documents["manual-offer-1"])
+
+        response = self._verify_offline()
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(
+            "registered store website", response.json()["detail"].lower()
+        )
+        self.assertEqual(
+            self.database.offers.documents["manual-offer-1"], baseline
+        )
+        self.assertEqual(list(self.database.audit_logs.documents.values()), [])
+
+        self.database.offers.documents["manual-offer-1"].update({
+            "evidenceType": "offline_document",
+            "offlineDescription": "Printed retailer invoice.",
+            "offlineReference": "INV-2026-FOREIGN",
+            "matchConfirmed": True,
+            "verificationStatus": "manually_verified",
+            "verified": True,
+            "availability": "in_stock",
+        })
+        statuses, verified_status = self._manual_offer_statuses()
+        self.assertEqual(statuses, ["manual_illustrative"])
+        self.assertEqual(verified_status, "no_verified_offers")
+
+    def test_product_url_evidence_with_matching_retailer_url_is_preserved(self):
+        self._reset_manual_offer()
+        response = self._verify_with_payload(
+            availability="in_stock",
+            evidence_type="product_url",
+            product_url="https://www.zone.example/manual-1",
+            store_website_url="https://www.zone.example",
+            match_confirmed=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["verified"])
+        statuses, verified_status = self._manual_offer_statuses()
+        self.assertEqual(statuses, ["manually_verified"])
+        self.assertEqual(verified_status, "verified_offers_available")
+
+    def test_product_url_evidence_with_foreign_retailer_url_is_rejected(self):
+        self._reset_manual_offer()
+        self._set_manual_product_url("https://www.other.example/manual-1")
+        baseline = dict(self.database.offers.documents["manual-offer-1"])
+
+        response = self._verify_with_payload(
+            availability="in_stock",
+            evidence_type="product_url",
+            product_url="https://www.other.example/manual-1",
+            match_confirmed=True,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(
+            "registered store website", response.json()["detail"].lower()
+        )
+        self.assertEqual(
+            self.database.offers.documents["manual-offer-1"], baseline
+        )
+        self.assertEqual(list(self.database.audit_logs.documents.values()), [])
+
+    def test_store_homepage_alone_is_not_product_url_evidence(self):
+        self._reset_manual_offer()
+        self._set_manual_product_url("https://www.zone.example")
+
+        response = self._verify_with_payload(
+            availability="in_stock",
+            evidence_type="product_url",
+            product_url="https://www.zone.example",
+            match_confirmed=True,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not sufficient", response.json()["detail"].lower())
+        self.assertEqual(list(self.database.audit_logs.documents.values()), [])
+
+    def test_amazon_scraped_offers_remain_verified_scraped(self):
+        self.database.stores.documents["amazon"] = {
+            "_id": "amazon",
+            "store_id": "amazon",
+            "store_name": "Amazon",
+            "status": "Active",
+            "website_url": "https://www.amazon.com",
+        }
+        self.database.products.documents["amazon-scraped-1"] = product_document(
+            "amazon-scraped-1",
+            "amazon",
+            "in_stock",
+            "scraped",
+            "https://www.amazon.com/dp/B0TEST1234",
+        )
+        self.database.offers.documents["amazon-scraped-offer"] = offer_document(
+            "amazon-scraped-1",
+            "amazon",
+            "Amazon",
+            88.0,
+            "https://www.amazon.com/dp/B0TEST1234",
+            availability="in_stock",
+            source_type="scraped",
+            offer_id="amazon-scraped-offer",
+        )
+        self.database.price_history.documents["amazon-scraped-1-30d"] = {
+            "_id": "amazon-scraped-1-30d",
+            "productId": "amazon-scraped-1",
+            "store": "Amazon",
+            "period": "30D",
+            "points": [{"date": "2026-11-19", "price": 88.0}],
+        }
+
+        comparison = asyncio.run(
+            build_comparison_response(
+                self.database, now=datetime.now(timezone.utc)
+            )
+        )
+        item = next(
+            entry for entry in comparison.items
+            if any(
+                offer.product_id == "amazon-scraped-1" for offer in entry.offers
+            )
+        )
+        self.assertEqual(
+            [offer.verification_status.value for offer in item.offers],
+            ["verified_scraped"],
+        )
+        self.assertTrue(all(offer.verified for offer in item.offers))
+        self.assertEqual(item.verified.status, "verified_offers_available")
+
+        offer_statuses, history_statuses = self._product_detail_statuses(
+            "amazon-scraped-1"
+        )
+        self.assertEqual(set(offer_statuses.values()), {"verified_scraped"})
+        self.assertEqual(set(history_statuses.values()), {"verified_scraped"})
+
+    def test_web_scraper_io_stays_illustrative_and_excluded_everywhere(self):
+        self.database.price_history.documents["test-site-manual-1-30d"] = {
+            "_id": "test-site-manual-1-30d",
+            "productId": "test-site-manual-1",
+            "store": "WebScraper.io Test Site",
+            "period": "30D",
+            "points": [{"date": "2026-11-19", "price": 12.0}],
+        }
+
+        comparison = asyncio.run(
+            build_comparison_response(
+                self.database,
+                availability="all",
+                now=datetime.now(timezone.utc),
+            )
+        )
+        item = next(
+            entry for entry in comparison.items
+            if any(
+                offer.product_id == "test-site-manual-1"
+                for offer in entry.offers
+            )
+        )
+        self.assertEqual(
+            [offer.verification_status.value for offer in item.offers],
+            ["test_site_illustrative"],
+        )
+        self.assertTrue(all(not offer.verified for offer in item.offers))
+        self.assertEqual(item.verified.status, "no_verified_offers")
+
+        detail = asyncio.run(
+            build_comparison_detail(
+                self.database,
+                item.identity.canonical_key,
+                availability="all",
+                now=datetime.now(timezone.utc),
+            )
+        )
+        self.assertEqual(
+            [offer.verification_status.value for offer in detail.offers],
+            ["test_site_illustrative"],
+        )
+        self.assertFalse(detail.offers[0].verified)
+
+        offer_statuses, history_statuses = self._product_detail_statuses(
+            "test-site-manual-1"
+        )
+        self.assertEqual(
+            set(offer_statuses.values()), {"test_site_illustrative"}
+        )
+        self.assertEqual(
+            set(history_statuses.values()), {"test_site_illustrative"}
+        )
