@@ -147,7 +147,7 @@ export function ResetPasswordPage() {
         <p className="mt-6 text-center text-[13px] text-slate-400">
           <Link
             to="/login"
-            className="font-semibold text-blue-300 transition hover:text-cyan-200"
+            className="inline-flex min-h-10 items-center font-semibold text-blue-300 transition hover:text-cyan-200 sm:min-h-0"
           >
             Back to sign in
           </Link>

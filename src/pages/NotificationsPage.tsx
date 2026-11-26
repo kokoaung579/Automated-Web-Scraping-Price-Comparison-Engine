@@ -134,7 +134,7 @@ function NotificationCard({
               type="button"
               onClick={onMarkRead}
               aria-label={`Mark ${title} notification as read`}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.07] px-2.5 py-2 text-[10px] font-medium text-slate-400 transition hover:border-blue-400/20 hover:bg-blue-400/[0.06] hover:text-blue-200"
+              className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-white/[0.07] px-2.5 py-2 text-[10px] font-medium text-slate-400 transition hover:border-blue-400/20 hover:bg-blue-400/[0.06] hover:text-blue-200 sm:min-h-0"
             >
               <Check aria-hidden="true" size={13} />
               Mark as Read
@@ -144,7 +144,7 @@ function NotificationCard({
             type="button"
             onClick={onDelete}
             aria-label={`Delete ${title} notification`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.07] px-2.5 py-2 text-[10px] font-medium text-slate-400 transition hover:border-rose-400/20 hover:bg-rose-400/[0.06] hover:text-rose-200"
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-white/[0.07] px-2.5 py-2 text-[10px] font-medium text-slate-400 transition hover:border-rose-400/20 hover:bg-rose-400/[0.06] hover:text-rose-200 sm:min-h-0"
           >
             <Trash2 aria-hidden="true" size={13} />
             Delete
@@ -252,7 +252,7 @@ export function NotificationsPage() {
 
       <section
         aria-label="Filter notifications"
-        className="grid gap-3 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-3 lg:grid-cols-[minmax(220px,1fr)_auto] lg:items-center"
+        className="grid grid-cols-1 gap-3 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-3 lg:grid-cols-[minmax(220px,1fr)_auto] lg:items-center"
       >
         <label className="relative block">
           <Search

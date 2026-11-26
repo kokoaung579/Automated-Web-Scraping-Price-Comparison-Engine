@@ -104,7 +104,7 @@ export function ResetPasswordOtpPage() {
           </h1>
           <p className="mt-2 text-[13px] leading-5 text-slate-400">
             If an account exists for{' '}
-            <span className="font-medium text-slate-200">{email}</span>, a
+            <span className="break-all font-medium text-slate-200 [overflow-wrap:anywhere]">{email}</span>, a
             6-digit reset code was sent.
           </p>
         </div>
@@ -186,13 +186,13 @@ export function ResetPasswordOtpPage() {
             type="button"
             onClick={() => void handleResend()}
             disabled={cooldown > 0 || isSubmitting}
-            className="text-sm font-semibold text-blue-300 transition hover:text-cyan-200 disabled:cursor-not-allowed disabled:text-slate-500"
+            className="inline-flex min-h-10 items-center text-sm font-semibold text-blue-300 transition hover:text-cyan-200 disabled:cursor-not-allowed disabled:text-slate-500 sm:min-h-0"
           >
             {cooldown > 0 ? `Resend OTP in ${cooldown}s` : 'Resend OTP'}
           </button>
           <Link
             to="/forgot-password"
-            className="text-sm font-medium text-slate-400 transition hover:text-slate-200"
+            className="inline-flex min-h-10 items-center text-sm font-medium text-slate-400 transition hover:text-slate-200 sm:min-h-0"
           >
             Back
           </Link>

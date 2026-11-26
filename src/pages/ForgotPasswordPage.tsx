@@ -131,7 +131,7 @@ export function ForgotPasswordPage() {
           Remembered your password?{' '}
           <Link
             to="/login"
-            className="font-semibold text-blue-300 transition hover:text-cyan-200"
+            className="inline-flex min-h-10 items-center font-semibold text-blue-300 transition hover:text-cyan-200 sm:min-h-0"
           >
             Sign in
           </Link>

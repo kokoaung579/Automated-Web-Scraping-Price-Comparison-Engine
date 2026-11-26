@@ -76,7 +76,7 @@ export function DashboardPage() {
         <>
           <section
             aria-label="Price tracking summary"
-            className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
+            className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
           >
             <StatCard
               label="Total Products"
@@ -112,7 +112,7 @@ export function DashboardPage() {
             />
           </section>
 
-          <section className="grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,1fr)]">
+          <section className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,1fr)]">
             <PriceTrendChart
               products={products}
               loading={dataSource === 'loading'}

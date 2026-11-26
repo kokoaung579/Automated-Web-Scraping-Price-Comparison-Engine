@@ -108,7 +108,7 @@ export function SettingsPage() {
           title="Preferences"
           description="Choose how PricePilot handles appearance and notifications."
         />
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <fieldset>
             <legend className="mb-2 text-[10px] font-medium text-slate-400">
               Interface theme

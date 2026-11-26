@@ -267,7 +267,7 @@ function ProductSelector({
             aria-label="Clear selected product"
             onMouseDown={(event) => event.preventDefault()}
             onClick={clearSelection}
-            className="absolute right-2 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition hover:bg-white/[0.06] hover:text-slate-300"
+            className="absolute right-2 top-1/2 flex size-10 -translate-y-1/2 items-center justify-center rounded-md text-slate-500 transition hover:bg-white/[0.06] hover:text-slate-300 sm:size-7"
           >
             <X aria-hidden="true" size={13} />
           </button>
@@ -350,7 +350,7 @@ function HistoryStats({
   return (
     <section
       aria-label="Price statistics"
-      className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
+      className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4"
     >
       {stats.map((stat) => (
         <div
@@ -606,7 +606,7 @@ export function PriceHistoryPage() {
 
       <section
         aria-label="Select price history"
-        className="grid gap-3 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 sm:grid-cols-2"
+        className="grid grid-cols-1 gap-3 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 sm:grid-cols-2"
       >
         <ProductSelector
           products={products}
@@ -654,7 +654,7 @@ export function PriceHistoryPage() {
               type="button"
               aria-pressed={period === range}
               onClick={() => setPeriod(range)}
-              className={`rounded-lg px-3 py-1.5 text-[10px] font-medium transition ${
+              className={`min-h-10 rounded-lg px-3 py-1.5 text-[10px] font-medium transition sm:min-h-0 ${
                 period === range
                   ? 'bg-blue-400/10 text-blue-200'
                   : 'text-slate-500 hover:text-slate-300'

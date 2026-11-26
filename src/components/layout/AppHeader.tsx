@@ -70,18 +70,18 @@ export function AppHeader({
 
   return (
     <header className="sticky top-0 z-30 border-b border-white/[0.07] bg-[#090e18]/90 backdrop-blur-xl">
-      <div className="flex h-[72px] items-center gap-2 px-3 sm:gap-3 sm:px-6 lg:px-8">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2 sm:h-[72px] sm:flex-nowrap sm:gap-3 sm:px-6 sm:py-0 lg:px-8">
         <button
           type="button"
           onClick={onMenuClick}
           aria-label="Toggle navigation menu"
-          className="rounded-xl border border-white/[0.08] p-2.5 text-slate-300 transition hover:bg-white/[0.05]"
+          className="flex size-11 items-center justify-center rounded-xl border border-white/[0.08] text-slate-300 transition hover:bg-white/[0.05] sm:size-auto sm:p-2.5"
         >
           <Menu size={19} />
         </button>
 
         {isDashboard && (
-          <label className="relative block min-w-0 w-full max-w-[430px]">
+          <label className="relative order-3 block min-w-0 w-full max-w-[430px] sm:order-none">
             <Search
               aria-hidden="true"
               size={17}
@@ -92,7 +92,7 @@ export function AppHeader({
               placeholder="Search products, stores..."
               aria-label="Search products and stores"
               onChange={(event) => onSearchChange(event.currentTarget.value)}
-              className="h-10 w-full rounded-xl border border-white/[0.08] bg-white/[0.025] pl-10 pr-16 text-[13px] text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:bg-white/[0.04] focus:ring-2 focus:ring-blue-400/10"
+              className="h-10 w-full rounded-xl border border-white/[0.08] bg-white/[0.025] pl-10 pr-4 text-[13px] text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:bg-white/[0.04] focus:ring-2 focus:ring-blue-400/10 sm:pr-16"
             />
             <kbd className="absolute right-3 top-1/2 hidden -translate-y-1/2 rounded-md border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5 text-[10px] text-slate-500 sm:block">
               /
@@ -105,11 +105,11 @@ export function AppHeader({
             to="/settings"
             aria-label="Settings"
             title="Settings"
-            className="rounded-xl p-2 text-slate-400 transition hover:bg-white/[0.05] hover:text-slate-100 sm:p-2.5"
+            className="flex size-11 items-center justify-center rounded-xl text-slate-400 transition hover:bg-white/[0.05] hover:text-slate-100 sm:size-auto sm:p-2.5"
           >
             <Settings2 size={18} />
           </Link>
-          <div className="relative">
+          <div className="static sm:relative">
             <button
               type="button"
               aria-label={
@@ -122,7 +122,7 @@ export function AppHeader({
                 notificationsOpen ? 'notification-menu' : undefined
               }
               onClick={() => setNotificationsOpen((open) => !open)}
-              className="relative rounded-xl border border-white/[0.08] p-2.5 text-slate-300 transition hover:bg-white/[0.05] hover:text-white"
+              className="relative flex size-11 items-center justify-center rounded-xl border border-white/[0.08] text-slate-300 transition hover:bg-white/[0.05] hover:text-white sm:size-auto sm:p-2.5"
             >
               <Bell size={18} />
               {unreadNotificationCount > 0 && (
@@ -133,7 +133,7 @@ export function AppHeader({
               <section
                 id="notification-menu"
                 aria-label="Notifications"
-                className="absolute right-0 top-full z-50 mt-3 w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0d1320] shadow-2xl shadow-black/40"
+                className="absolute left-1/2 top-full z-50 mt-3 w-[calc(100vw-1.5rem)] max-w-[360px] -translate-x-1/2 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0d1320] shadow-2xl shadow-black/40 sm:left-auto sm:right-0 sm:w-[min(360px,calc(100vw-2rem))] sm:translate-x-0"
               >
                 <div className="flex items-center justify-between border-b border-white/[0.06] px-4 py-3">
                   <div>
@@ -148,7 +148,7 @@ export function AppHeader({
                     type="button"
                     aria-label="Close notifications"
                     onClick={() => setNotificationsOpen(false)}
-                    className="rounded-lg p-1.5 text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-200"
+                    className="flex size-11 items-center justify-center rounded-lg text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-200 sm:size-9"
                   >
                     <X size={15} />
                   </button>

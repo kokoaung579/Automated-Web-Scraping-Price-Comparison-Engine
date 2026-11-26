@@ -32,6 +32,21 @@ const PERIODS: ComparisonPeriod[] = ['7D', '30D', '90D', '1Y']
 const PAGE_SIZE = 15
 const SEARCH_DEBOUNCE_MS = 300
 
+function getPageItems(currentPage: number, totalPages: number) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1)
+  }
+
+  const pages: (number | 'ellipsis')[] = [1]
+  const start = Math.max(2, currentPage - 1)
+  const end = Math.min(totalPages - 1, currentPage + 1)
+  if (start > 2) pages.push('ellipsis')
+  for (let page = start; page <= end; page += 1) pages.push(page)
+  if (end < totalPages - 1) pages.push('ellipsis')
+  pages.push(totalPages)
+  return pages
+}
+
 const HISTORY_STATUS_LABELS: Record<VerificationStatus, string> = {
   verified_scraped: 'Verified scraped',
   manually_verified: 'Verified manual',
@@ -491,7 +506,7 @@ function HistoryPanel({
               type="button"
               aria-pressed={period === value}
               onClick={() => onPeriodChange(value)}
-              className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition ${
+              className={`min-h-10 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium transition sm:min-h-0 ${
                 period === value
                   ? 'border-blue-400/30 bg-blue-400/10 text-blue-200'
                   : 'border-white/[0.07] text-slate-400 hover:border-white/[0.14]'
@@ -511,7 +526,7 @@ function HistoryPanel({
           </p>
         </div>
       ) : (
-        <div className="grid gap-3 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
           {history.series.map((series) => {
             const status = series.verification_status
             const statusLabel = HISTORY_STATUS_LABELS[status]
@@ -596,45 +611,55 @@ function Pagination({
   const pageCount = Math.max(1, Math.ceil(totalGroups / pageSize))
   const start = totalGroups === 0 ? 0 : (page - 1) * pageSize + 1
   const end = Math.min(page * pageSize, totalGroups)
-  const pages = Array.from({ length: pageCount }, (_, index) => index + 1)
+  const pages = getPageItems(page, pageCount)
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] pt-4">
       <p className="text-[11px] text-slate-500">
         Showing {start}–{end} of {totalGroups} result{totalGroups === 1 ? '' : 's'}
       </p>
-      <div className="flex items-center gap-1.5" role="group" aria-label="Search result pages">
+      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Search result pages">
         <button
           type="button"
           aria-label="Previous page"
           disabled={page <= 1}
           onClick={() => onPageChange(page - 1)}
-          className="rounded-lg border border-white/[0.07] p-2 text-slate-300 transition hover:border-white/[0.16] disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-white/[0.07] p-2 text-slate-300 transition hover:border-white/[0.16] disabled:cursor-not-allowed disabled:opacity-40 sm:min-h-0 sm:min-w-0"
         >
           <ArrowLeft size={14} />
         </button>
-        {pages.map((value) => (
-          <button
-            key={value}
-            type="button"
-            aria-label={`Page ${value}`}
-            aria-current={value === page ? 'page' : undefined}
-            onClick={() => onPageChange(value)}
-            className={`min-w-8 rounded-lg border px-2 py-1.5 text-[11px] font-medium transition ${
-              value === page
-                ? 'border-blue-400/30 bg-blue-400/10 text-blue-200'
-                : 'border-white/[0.07] text-slate-400 hover:border-white/[0.16]'
-            }`}
-          >
-            {value}
-          </button>
-        ))}
+        {pages.map((value, index) =>
+          value === 'ellipsis' ? (
+            <span
+              key={`ellipsis-${index}`}
+              aria-hidden="true"
+              className="px-1 text-[11px] text-slate-600"
+            >
+              …
+            </span>
+          ) : (
+            <button
+              key={value}
+              type="button"
+              aria-label={`Page ${value}`}
+              aria-current={value === page ? 'page' : undefined}
+              onClick={() => onPageChange(value)}
+              className={`flex min-h-10 min-w-10 items-center justify-center rounded-lg border px-2 py-1.5 text-[11px] font-medium transition sm:min-h-0 sm:min-w-8 ${
+                value === page
+                  ? 'border-blue-400/30 bg-blue-400/10 text-blue-200'
+                  : 'border-white/[0.07] text-slate-400 hover:border-white/[0.16]'
+              }`}
+            >
+              {value}
+            </button>
+          ),
+        )}
         <button
           type="button"
           aria-label="Next page"
           disabled={page >= pageCount}
           onClick={() => onPageChange(page + 1)}
-          className="rounded-lg border border-white/[0.07] p-2 text-slate-300 transition hover:border-white/[0.16] disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex min-h-10 min-w-10 items-center justify-center rounded-lg border border-white/[0.07] p-2 text-slate-300 transition hover:border-white/[0.16] disabled:cursor-not-allowed disabled:opacity-40 sm:min-h-0 sm:min-w-0"
         >
           <ArrowRight size={14} />
         </button>
@@ -846,7 +871,7 @@ export function PriceComparisonPage() {
               type="button"
               aria-label="Clear search"
               onClick={() => handleSearchChange('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-300"
+              className="absolute right-2 top-1/2 flex size-10 -translate-y-1/2 items-center justify-center rounded-lg text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-300 sm:size-7"
             >
               <X size={14} />
             </button>
@@ -873,7 +898,7 @@ export function PriceComparisonPage() {
           </p>
         ) : items.length > 0 ? (
           <>
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {items.map((item) => {
                 const isSelected =
                   selected?.identity.canonical_key === item.identity.canonical_key
@@ -1042,13 +1067,13 @@ export function PriceComparisonPage() {
                         step="0.01"
                         value={alertPrice}
                         onChange={(event) => setAlertPrice(event.currentTarget.value)}
-                        className="mt-1 block h-9 w-28 rounded-lg border border-white/[0.1] bg-[#0d1320] px-2 text-xs text-slate-200 outline-none focus:border-blue-400/40"
+                        className="mt-1 block h-11 w-full rounded-lg border border-white/[0.1] bg-[#0d1320] px-2 text-xs text-slate-200 outline-none focus:border-blue-400/40 sm:h-9 sm:w-28"
                       />
                     </label>
                     <button
                       type="button"
                       onClick={handleSaveAlert}
-                      className="h-9 rounded-lg bg-blue-500/15 px-3 text-[11px] font-medium text-blue-200 transition hover:bg-blue-500/25"
+                      className="h-11 rounded-lg bg-blue-500/15 px-3 text-[11px] font-medium text-blue-200 transition hover:bg-blue-500/25 sm:h-9"
                     >
                       Save alert
                     </button>
@@ -1077,7 +1102,7 @@ export function PriceComparisonPage() {
                 type="button"
                 aria-pressed={storeFilter === 'all'}
                 onClick={() => setStoreFilter('all')}
-                className={`rounded-lg border px-2.5 py-1.5 text-[11px] transition ${
+                className={`min-h-10 rounded-lg border px-2.5 py-1.5 text-[11px] transition sm:min-h-0 ${
                   storeFilter === 'all'
                     ? 'border-blue-400/30 bg-blue-400/10 text-blue-200'
                     : 'border-white/[0.07] text-slate-400 hover:border-white/[0.16]'
@@ -1091,7 +1116,7 @@ export function PriceComparisonPage() {
                   type="button"
                   aria-pressed={storeFilter === store.store_id}
                   onClick={() => setStoreFilter(store.store_id)}
-                  className={`rounded-lg border px-2.5 py-1.5 text-[11px] transition ${
+                  className={`min-h-10 rounded-lg border px-2.5 py-1.5 text-[11px] transition sm:min-h-0 ${
                     storeFilter === store.store_id
                       ? 'border-blue-400/30 bg-blue-400/10 text-blue-200'
                       : 'border-white/[0.07] text-slate-400 hover:border-white/[0.16]'
@@ -1109,7 +1134,7 @@ export function PriceComparisonPage() {
                   onChange={(event) =>
                     setAvailability(event.currentTarget.value as AvailabilityFilter)
                   }
-                  className="h-8 rounded-lg border border-white/[0.08] bg-[#090e18] px-2 text-[11px] text-slate-300 outline-none focus:border-blue-400/40"
+                  className="h-10 rounded-lg border border-white/[0.08] bg-[#090e18] px-2 text-[11px] text-slate-300 outline-none focus:border-blue-400/40 sm:h-8"
                 >
                   <option value="in_stock">In Stock only</option>
                   <option value="all">All (illustrative/test-site)</option>
@@ -1120,7 +1145,7 @@ export function PriceComparisonPage() {
                   type="checkbox"
                   checked={verifiedOnly}
                   onChange={(event) => setVerifiedOnly(event.currentTarget.checked)}
-                  className="size-3.5 accent-blue-400"
+                  className="size-4 accent-blue-400 sm:size-3.5"
                 />
                 Verified only
               </label>
@@ -1205,7 +1230,9 @@ export function PriceComparisonPage() {
                       className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500"
                     >
                       <span className="text-slate-300">{offer.store_name ?? offer.store_id}</span>
-                      <span>{offer.reasons.join(', ')}</span>
+                      <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+                        {offer.reasons.join(', ')}
+                      </span>
                     </li>
                   ))}
                 </ul>

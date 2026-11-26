@@ -207,9 +207,13 @@ describe('user dashboard data integrity', () => {
     expect(screen.getByLabelText('Total Stores: 2')).toBeDefined()
     expect(screen.getByLabelText('Price Drops: 1')).toBeDefined()
     expect(screen.getByLabelText('Watchlist: 0')).toBeDefined()
+    expect(screen.getByLabelText('Price tracking summary').className).toContain('grid-cols-1')
     expect(screen.getAllByText('Database Laptop').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Database Headphones').length).toBeGreaterThan(0)
     expect(await screen.findByText('MongoDB records')).toBeDefined()
+    expect(
+      screen.getByRole('combobox', { name: /Select product/ }).className,
+    ).toContain('min-w-0')
     expect(screen.getAllByText('N/A')).toHaveLength(4)
     expect(screen.queryByText('+12')).toBeNull()
     expect(screen.queryByText('+3')).toBeNull()

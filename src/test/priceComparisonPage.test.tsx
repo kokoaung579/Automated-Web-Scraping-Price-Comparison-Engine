@@ -775,6 +775,14 @@ describe('Price Comparison page', () => {
       expect(search.className).toContain('w-full')
       expect(search.className).toContain('pl-9')
 
+      const pagination = screen.getByRole('group', {
+        name: 'Search result pages',
+      })
+      expect(pagination.className).toContain('flex-wrap')
+      expect(
+        within(pagination).getByRole('button', { name: 'Previous page' }).className,
+      ).toContain('min-h-10')
+
       const summary = screen.getByLabelText('Verified price summary')
       expect(summary.className).toContain('grid-cols-2')
       if (width >= 1024) {
@@ -793,6 +801,20 @@ describe('Price Comparison page', () => {
       }
     },
   )
+
+  it('limits the page strip for large result sets', async () => {
+    renderPage({ groupCount: 200 })
+    await screen.findByRole('button', { name: /JBL Tune 530BT/ })
+
+    const pagination = screen.getByRole('group', {
+      name: 'Search result pages',
+    })
+    expect(within(pagination).getByRole('button', { name: 'Page 1' })).toBeDefined()
+    expect(within(pagination).getByRole('button', { name: 'Page 2' })).toBeDefined()
+    expect(within(pagination).getByRole('button', { name: 'Page 14' })).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Page 3' })).toBeNull()
+    expect(pagination.textContent).toContain('…')
+  })
 
   it('integrates user-specific watchlist and alerts when supported', async () => {
     const context = {

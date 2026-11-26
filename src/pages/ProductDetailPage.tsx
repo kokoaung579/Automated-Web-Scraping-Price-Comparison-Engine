@@ -419,7 +419,7 @@ function AlertDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="create-product-alert-title"
-        className="w-full max-w-md overflow-hidden rounded-[26px] border border-white/[0.09] bg-[#0b1220] shadow-2xl shadow-black/60"
+        className="max-h-[calc(100vh-2rem)] w-full max-w-md overflow-x-hidden overflow-y-auto rounded-[26px] border border-white/[0.09] bg-[#0b1220] shadow-2xl shadow-black/60"
       >
         <div className="relative border-b border-white/[0.06] p-5 sm:p-6">
           <div
@@ -1066,7 +1066,7 @@ export function ProductDetailPage() {
 
         <div className="min-w-0 p-4 sm:p-6">
           {isLoadingPriceData ? (
-            <div role="status" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div role="status" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {Array.from({ length: 3 }, (_, index) => (
                 <div
                   key={index}
@@ -1093,7 +1093,7 @@ export function ProductDetailPage() {
               </div>
             </div>
           ) : sortedOffers.length > 0 ? (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {sortedOffers.map((offer) => {
                 const cheapest = Boolean(
                   cheapestOffer &&
