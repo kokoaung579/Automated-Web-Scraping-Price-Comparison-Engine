@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from '../auth/AuthProvider'
@@ -119,5 +119,67 @@ describe('shared catalog price flow', () => {
       productId: product.id,
       price: product.price,
     })
+  })
+
+  it('keeps alert cards and controls usable on narrow screens', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), 'http://localhost')
+        const method = init?.method ?? 'GET'
+
+        if (url.pathname === '/api/products') return jsonResponse([product])
+        if (url.pathname === '/api/alerts' && method === 'GET') {
+          return jsonResponse([alert])
+        }
+        if (url.pathname === '/api/watchlist') return jsonResponse([])
+        if (url.pathname === '/api/notifications' && method === 'GET') {
+          return jsonResponse([])
+        }
+
+        return jsonResponse([])
+      }),
+    )
+
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <AuthProvider>
+          <Routes>
+            <Route
+              path="/"
+              element={
+                <AppLayout
+                  currentUser={{
+                    id: 'user-1',
+                    email: 'user@example.test',
+                    username: 'Test User',
+                    role: 'User',
+                    status: 'Active',
+                    registeredAt: '2026-01-01T00:00:00.000Z',
+                  }}
+                />
+              }
+            >
+              <Route path="alerts" element={<AlertsPage />} />
+            </Route>
+          </Routes>
+        </AuthProvider>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('Current price · Amazon')).toBeDefined()
+    })
+
+    expect(
+      screen.getByRole('button', { name: 'Create Alert' }).className,
+    ).toContain('min-h-11')
+
+    const card = screen.getByRole('article')
+    expect(card.firstElementChild?.className).toContain('grid-cols-1')
+    expect(card.firstElementChild?.className).toContain('xl:grid-cols-')
+    expect(
+      within(card).getByRole('button', { name: /Edit alert for/ }).className,
+    ).toContain('min-h-10')
   })
 })

@@ -109,7 +109,7 @@ export function OtpVerificationPage() {
             </h1>
             <p className="mt-2 text-[13px] leading-5 text-slate-400">
               We sent a 6-digit verification code to{' '}
-              <span className="font-medium text-slate-200">{email}</span>.
+              <span className="break-all font-medium text-slate-200 [overflow-wrap:anywhere]">{email}</span>.
             </p>
           </div>
 
@@ -192,7 +192,7 @@ export function OtpVerificationPage() {
               type="button"
               onClick={handleResend}
               disabled={cooldown > 0 || isSubmitting}
-              className="text-sm font-semibold text-blue-300 transition hover:text-cyan-200 disabled:cursor-not-allowed disabled:text-slate-500"
+              className="inline-flex min-h-10 items-center text-sm font-semibold text-blue-300 transition hover:text-cyan-200 disabled:cursor-not-allowed disabled:text-slate-500 sm:min-h-0"
             >
               {cooldown > 0
                 ? `Resend code in ${cooldown}s`
@@ -200,7 +200,7 @@ export function OtpVerificationPage() {
             </button>
             <Link
               to="/login"
-              className="text-sm font-medium text-slate-400 transition hover:text-slate-200"
+              className="inline-flex min-h-10 items-center text-sm font-medium text-slate-400 transition hover:text-slate-200 sm:min-h-0"
             >
               Back to sign in
             </Link>

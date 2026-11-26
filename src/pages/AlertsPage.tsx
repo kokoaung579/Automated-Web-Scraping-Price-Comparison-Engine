@@ -110,12 +110,12 @@ function AlertForm({
           type="button"
           onClick={onCancel}
           aria-label="Close alert form"
-          className="rounded-lg p-1.5 text-slate-500 transition hover:bg-white/[0.05] hover:text-white"
+          className="flex size-10 items-center justify-center rounded-lg text-slate-500 transition hover:bg-white/[0.05] hover:text-white sm:size-8"
         >
           <X aria-hidden="true" size={16} />
         </button>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="text-[10px] font-medium text-slate-400">
           Product
           <select
@@ -194,13 +194,13 @@ function AlertForm({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-xl border border-white/[0.08] px-3 py-2 text-xs font-medium text-slate-400 transition hover:bg-white/[0.04] hover:text-white"
+          className="min-h-10 rounded-xl border border-white/[0.08] px-3 py-2 text-xs font-medium text-slate-400 transition hover:bg-white/[0.04] hover:text-white sm:min-h-0"
         >
           Cancel
         </button>
         <button
           type="submit"
-          className="inline-flex items-center gap-1.5 rounded-xl bg-blue-500/15 px-3 py-2 text-xs font-semibold text-blue-200 ring-1 ring-inset ring-blue-400/20 transition hover:bg-blue-500/25"
+          className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-blue-500/15 px-3 py-2 text-xs font-semibold text-blue-200 ring-1 ring-inset ring-blue-400/20 transition hover:bg-blue-500/25 sm:min-h-0"
         >
           {alert ? 'Save changes' : 'Create alert'}
         </button>
@@ -243,7 +243,7 @@ function AlertCard({
 
   return (
     <article className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 transition-colors hover:border-blue-400/15 hover:bg-[#101827] sm:p-5">
-      <div className="grid gap-4 lg:grid-cols-[minmax(180px,1.4fr)_repeat(3,minmax(100px,0.8fr))_auto] lg:items-center">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(180px,1.4fr)_repeat(3,minmax(100px,0.8fr))_auto] xl:items-center">
         <div className="flex min-w-0 items-start gap-3">
           <ProductThumbnail product={product} />
           <div className="min-w-0 flex-1">
@@ -261,7 +261,7 @@ function AlertCard({
             </div>
           </div>
         </div>
-        <div className="flex items-center justify-between gap-2 border-t border-white/[0.05] pt-3 lg:block lg:border-0 lg:pt-0">
+        <div className="flex items-center justify-between gap-2 border-t border-white/[0.05] pt-3 xl:block xl:border-0 xl:pt-0">
           <span className="text-[10px] text-slate-500 lg:block">
             Current price · {product.store}
           </span>
@@ -269,13 +269,13 @@ function AlertCard({
             {formatPrice(product.price)}
           </span>
         </div>
-        <div className="flex items-center justify-between gap-2 border-t border-white/[0.05] pt-3 lg:block lg:border-0 lg:pt-0">
+        <div className="flex items-center justify-between gap-2 border-t border-white/[0.05] pt-3 xl:block xl:border-0 xl:pt-0">
           <span className="text-[10px] text-slate-500 lg:block">Target price</span>
           <span className="text-xs font-semibold text-slate-200">
             {formatPrice(alert.targetPrice)}
           </span>
         </div>
-        <div className="flex items-center justify-between gap-2 border-t border-white/[0.05] pt-3 lg:block lg:border-0 lg:pt-0">
+        <div className="flex items-center justify-between gap-2 border-t border-white/[0.05] pt-3 xl:block xl:border-0 xl:pt-0">
           <span className="text-[10px] text-slate-500 lg:block">Price change</span>
           <span
             className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-semibold ${
@@ -287,12 +287,12 @@ function AlertCard({
             {dropped ? '↓' : '↑'} {Math.abs(change).toFixed(1)}%
           </span>
         </div>
-        <div className="flex justify-end gap-2 border-t border-white/[0.05] pt-3 lg:border-0 lg:pt-0">
+        <div className="flex justify-end gap-2 border-t border-white/[0.05] pt-3 xl:border-0 xl:pt-0">
           <button
             type="button"
             onClick={onEdit}
             aria-label={`Edit alert for ${product.name}`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.07] px-2.5 py-2 text-[10px] font-medium text-slate-400 transition hover:border-blue-400/20 hover:bg-blue-400/[0.06] hover:text-blue-200"
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-white/[0.07] px-2.5 py-2 text-[10px] font-medium text-slate-400 transition hover:border-blue-400/20 hover:bg-blue-400/[0.06] hover:text-blue-200 sm:min-h-0"
           >
             <Pencil aria-hidden="true" size={13} />
             Edit
@@ -301,7 +301,7 @@ function AlertCard({
             type="button"
             onClick={onDelete}
             aria-label={`Delete alert for ${product.name}`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.07] px-2.5 py-2 text-[10px] font-medium text-slate-400 transition hover:border-rose-400/20 hover:bg-rose-400/[0.06] hover:text-rose-200"
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-white/[0.07] px-2.5 py-2 text-[10px] font-medium text-slate-400 transition hover:border-rose-400/20 hover:bg-rose-400/[0.06] hover:text-rose-200 sm:min-h-0"
           >
             <Trash2 aria-hidden="true" size={13} />
             Delete
@@ -369,7 +369,7 @@ export function AlertsPage() {
             setEditingAlertId(null)
             setShowCreateForm((open) => !open)
           }}
-          className="inline-flex items-center gap-2 rounded-xl border border-blue-400/15 bg-blue-500/10 px-3 py-2.5 text-xs font-semibold text-blue-200 transition hover:bg-blue-500/20"
+          className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-blue-400/15 bg-blue-500/10 px-3 py-2.5 text-xs font-semibold text-blue-200 transition hover:bg-blue-500/20 sm:min-h-0"
         >
           {showCreateForm ? (
             <X aria-hidden="true" size={14} />
@@ -400,7 +400,7 @@ export function AlertsPage() {
             type="button"
             aria-pressed={filter === status}
             onClick={() => setFilter(status)}
-            className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-[11px] font-medium transition ${
+            className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-3 py-2 text-[11px] font-medium transition sm:min-h-0 ${
               filter === status
                 ? 'bg-blue-500/12 text-blue-200 ring-1 ring-inset ring-blue-400/15'
                 : 'text-slate-500 hover:bg-white/[0.04] hover:text-slate-200'
@@ -456,7 +456,7 @@ export function AlertsPage() {
             <button
               type="button"
               onClick={() => setShowCreateForm(true)}
-              className="mt-4 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-xs font-medium text-slate-300 transition hover:bg-white/[0.07] hover:text-white"
+              className="mt-4 min-h-10 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-xs font-medium text-slate-300 transition hover:bg-white/[0.07] hover:text-white sm:min-h-0"
             >
               Create your first alert
             </button>

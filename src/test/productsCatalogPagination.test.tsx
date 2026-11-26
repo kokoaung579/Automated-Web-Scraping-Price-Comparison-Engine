@@ -445,9 +445,16 @@ describe('Product Catalog pagination', () => {
     await waitForCatalog()
 
     const cards = screen.getByRole('region', { name: 'Products' })
+    expect(cards.className).toContain('grid-cols-1')
     expect(cards.className).toContain('sm:grid-cols-2')
     expect(cards.className).toContain('xl:grid-cols-3')
     expect(screen.getAllByText(/Nov \d+, 2026/).length).toBeGreaterThan(0)
+
+    const toolbar = screen.getByRole('region', { name: 'Filter products' })
+    const toolbarRow = toolbar.firstElementChild
+    expect(toolbarRow?.className).toContain('flex-col')
+    expect(toolbarRow?.className).toContain('xl:flex-row')
+    expect(screen.getByRole('searchbox', { name: 'Search products or stores' }).className).toContain('h-12')
 
     const watchlistButton = screen.getAllByRole('button', {
       name: 'Add Product 1 to Watchlist',

@@ -453,7 +453,7 @@ function CatalogToolbar({
       aria-label="Filter products"
       className="rounded-[26px] border border-white/[0.06] bg-[#0b1220]/95 p-3 shadow-xl shadow-black/10 backdrop-blur-md sm:p-4"
     >
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
         <label className="relative block flex-1">
           <span className="pointer-events-none absolute left-2 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-xl bg-blue-400/10 text-blue-300">
             <Search aria-hidden="true" size={16} />
@@ -468,7 +468,7 @@ function CatalogToolbar({
           />
         </label>
 
-        <div className="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-3 lg:max-w-2xl">
+        <div className="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-3 xl:max-w-2xl">
           <div className="relative">
             <label className="sr-only" htmlFor="product-category">
               Category
@@ -568,7 +568,7 @@ function CatalogLoadingState() {
       role="status"
       aria-label="Loading products"
       aria-busy="true"
-      className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+      className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
     >
       {Array.from({ length: 8 }, (_, index) => (
         <div
@@ -913,7 +913,7 @@ function WatchlistCard({
         <button
           type="button"
           onClick={() => onRemove(product)}
-          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[10px] font-medium text-slate-400 transition hover:bg-rose-400/[0.08] hover:text-rose-300"
+          className="inline-flex min-h-10 items-center gap-1.5 rounded-lg px-2 py-1.5 text-[10px] font-medium text-slate-400 transition hover:bg-rose-400/[0.08] hover:text-rose-300 sm:min-h-0"
         >
           <Bookmark aria-hidden="true" size={13} />
           Remove from Watchlist
@@ -1125,7 +1125,7 @@ export function ProductsPage() {
           {visibleProducts.length > 0 ? (
             <section
               aria-label="Products"
-              className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
+              className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4"
             >
               {visibleProducts.map((product) => (
                 <ProductCard
@@ -1194,7 +1194,7 @@ export function WatchlistPage() {
       {watchlistedProducts.length > 0 ? (
         <section
           aria-label="Watchlisted products"
-          className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"
+          className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3"
         >
           {watchlistedProducts.map(({ product, entry }) => (
             <WatchlistCard

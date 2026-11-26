@@ -123,10 +123,10 @@ export function ScrapingLogsPage() {
             return (
               <article
                 key={`${log.website}-${log.product}`}
-                className="grid gap-3 px-5 py-4 transition-colors hover:bg-white/[0.02] lg:grid-cols-[1.1fr_1.45fr_1.35fr_0.85fr_1.8fr] lg:items-center lg:gap-4"
+                className="grid grid-cols-1 gap-3 px-5 py-4 transition-colors hover:bg-white/[0.02] lg:grid-cols-[1.1fr_1.45fr_1.35fr_0.85fr_1.8fr] lg:items-center lg:gap-4"
               >
                 <LogField label="Website">
-                  <span className="inline-flex items-center gap-2 text-xs font-medium text-slate-300">
+                  <span className="inline-flex min-w-0 items-center gap-2 break-all text-xs font-medium text-slate-300 [overflow-wrap:anywhere]">
                     <Globe
                       aria-hidden="true"
                       size={14}

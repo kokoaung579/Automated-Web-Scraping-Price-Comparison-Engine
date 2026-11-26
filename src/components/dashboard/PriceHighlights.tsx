@@ -146,7 +146,7 @@ export function PriceHighlights({
   }
 
   return (
-    <div className="grid gap-5 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
       <section
         aria-labelledby="recent-price-drops-title"
         className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6"

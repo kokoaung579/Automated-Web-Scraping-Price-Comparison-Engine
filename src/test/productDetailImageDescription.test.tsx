@@ -556,6 +556,11 @@ describe('Product Detail image and description layout', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Create Price Alert' }))
     const dialog = screen.getByRole('dialog', { name: 'Create alert' })
+    expect(dialog.className).toContain('max-h-[calc(100vh-2rem)]')
+    expect(dialog.className).toContain('overflow-y-auto')
+    expect(
+      within(dialog).getByRole('button', { name: 'Close create alert dialog' }).className,
+    ).toContain('size-11')
     const threshold = within(dialog).getByLabelText(/Target price/)
     fireEvent.change(threshold, { target: { value: '250' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create alert' }))

@@ -86,7 +86,7 @@ export function Sidebar({
           type="button"
           onClick={onNavigate}
           aria-label="Close navigation menu"
-          className="rounded-lg p-2 text-slate-400 transition hover:bg-white/5 hover:text-white lg:hidden"
+          className="flex size-11 items-center justify-center rounded-lg text-slate-400 transition hover:bg-white/5 hover:text-white lg:hidden"
         >
           <X size={19} />
         </button>

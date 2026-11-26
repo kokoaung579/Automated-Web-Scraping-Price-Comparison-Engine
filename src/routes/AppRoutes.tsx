@@ -119,13 +119,13 @@ function ProductDetailLoading() {
       className="mx-auto max-w-6xl space-y-6"
     >
       <span className="sr-only">Loading product details…</span>
-      <div className="grid animate-pulse gap-6 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 sm:p-6 lg:grid-cols-[minmax(230px,0.8fr)_minmax(0,1.2fr)] lg:p-8">
+      <div className="grid grid-cols-1 animate-pulse gap-6 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 sm:p-6 lg:grid-cols-[minmax(230px,0.8fr)_minmax(0,1.2fr)] lg:p-8">
         <div className="aspect-square w-full rounded-2xl bg-white/[0.04] sm:max-w-[360px]" />
         <div className="flex flex-col justify-center gap-4">
           <div className="h-4 w-28 rounded bg-white/[0.05]" />
           <div className="h-8 w-3/4 rounded bg-white/[0.05]" />
           <div className="h-4 w-1/2 rounded bg-white/[0.04]" />
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <div className="h-24 rounded-xl bg-white/[0.04]" />
             <div className="h-24 rounded-xl bg-white/[0.04]" />
           </div>

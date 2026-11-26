@@ -89,7 +89,7 @@ function PasswordField({
           type="button"
           aria-label={visible ? 'Hide password' : 'Show password'}
           onClick={() => setVisible((current) => !current)}
-          className="rounded-md p-1 text-slate-500 transition hover:text-slate-200 focus-visible:outline-2 focus-visible:outline-blue-400"
+          className="flex size-10 items-center justify-center rounded-md text-slate-500 transition hover:text-slate-200 focus-visible:outline-2 focus-visible:outline-blue-400 sm:size-8"
         >
           {visible ? (
             <EyeOff aria-hidden="true" size={17} />
@@ -500,7 +500,7 @@ export function AuthPage({ mode }: AuthPageProps) {
                 <div className="-mt-1 flex justify-end">
                   <Link
                     to="/forgot-password"
-                    className="text-xs font-semibold text-blue-300 transition hover:text-cyan-200"
+                    className="inline-flex min-h-10 items-center px-1 text-xs font-semibold text-blue-300 transition hover:text-cyan-200 sm:min-h-0"
                   >
                     Forgot Password?
                   </Link>

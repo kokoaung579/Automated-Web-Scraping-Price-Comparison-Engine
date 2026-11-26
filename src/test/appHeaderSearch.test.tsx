@@ -107,11 +107,38 @@ describe('AppHeader global search visibility', () => {
     expect(globalSearch()).not.toBeNull()
     expect(screen.getByPlaceholderText('Search products, stores...')).toBeDefined()
     expectRemainingHeaderControls()
+    expect(
+      screen.getByRole('button', { name: 'Toggle navigation menu' }).className,
+    ).toContain('size-11')
+
+    const search = screen.getByRole('searchbox', {
+      name: 'Search products and stores',
+    })
+    const headerRow = search.closest('header')?.firstElementChild
+    expect(headerRow?.className).toContain('flex-wrap')
+    expect(headerRow?.className).toContain('sm:h-[72px]')
+    expect(headerRow?.className).toContain('sm:flex-nowrap')
+    expect(search.className).toContain('pr-4')
+    expect(search.className).toContain('sm:pr-16')
 
     fireEvent.change(screen.getByRole('searchbox', {
       name: 'Search products and stores',
     }), { target: { value: 'headphones' } })
     expect(onSearchChange).toHaveBeenCalledWith('headphones')
+  })
+
+  it('keeps the notification panel inside phone-width viewports', () => {
+    renderHeader('/')
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /Open notifications/ }),
+    )
+
+    const panel = screen.getByRole('region', { name: 'Notifications' })
+    expect(panel.className).toContain('left-1/2')
+    expect(panel.className).toContain('w-[calc(100vw-1.5rem)]')
+    expect(panel.className).toContain('-translate-x-1/2')
+    expect(panel.className).toContain('sm:right-0')
   })
 
   it.each(nonDashboardPaths)(

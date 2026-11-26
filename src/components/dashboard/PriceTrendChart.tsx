@@ -210,19 +210,19 @@ export function PriceTrendChart({
   return (
     <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-sm font-semibold text-white">Price trend</h2>
             <span className="rounded-md border border-blue-400/10 bg-blue-400/[0.07] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-blue-300">
               MongoDB records
             </span>
           </div>
-          <label className="mt-2 block">
+          <label className="mt-2 block min-w-0">
             <span className="sr-only">Select product</span>
             <select
               value={product.id}
               onChange={(event) => setSelectedProductId(event.target.value)}
-              className="max-w-full cursor-pointer rounded-lg border border-white/[0.08] bg-[#090e18] px-2.5 py-1.5 text-xs text-slate-300 outline-none transition focus:border-blue-400/40"
+              className="w-full min-w-0 max-w-full cursor-pointer rounded-lg border border-white/[0.08] bg-[#090e18] px-2.5 py-1.5 text-xs text-slate-300 outline-none transition focus:border-blue-400/40 sm:w-auto sm:max-w-[260px]"
             >
               {matchingProducts.map((item) => (
                 <option key={item.id} value={item.id}>
@@ -242,7 +242,7 @@ export function PriceTrendChart({
               type="button"
               aria-pressed={period === range}
               onClick={() => setPeriod(range)}
-              className={`rounded-lg px-2.5 py-1.5 text-[10px] font-medium transition sm:px-3 ${
+              className={`min-h-10 rounded-lg px-2.5 py-1.5 text-[10px] font-medium transition sm:min-h-0 sm:px-3 ${
                 period === range
                   ? 'bg-blue-400/10 text-blue-200'
                   : 'text-slate-500 hover:text-slate-300'
@@ -363,11 +363,13 @@ export function PriceTrendChart({
         </ResponsiveContainer>
       </div>
       <div className="mt-2 flex items-center justify-between border-t border-white/[0.06] pt-4 text-[10px] text-slate-500">
-        <span>
+        <span className="min-w-0 break-words pr-3 [overflow-wrap:anywhere]">
           Stored price history for {product.name}
           {currentHistory?.store ? ` from ${currentHistory.store}` : ''}
         </span>
-        <span>{period === '1Y' ? 'Past year' : `Past ${period.toLowerCase()}`}</span>
+        <span className="shrink-0">
+          {period === '1Y' ? 'Past year' : `Past ${period.toLowerCase()}`}
+        </span>
       </div>
     </section>
   )
