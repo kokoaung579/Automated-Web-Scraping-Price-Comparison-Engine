@@ -684,6 +684,71 @@ class ScrapingJobApiTests(unittest.TestCase):
         invalid = self.admin_client.post(f"/api/admin/scraping/jobs/{job_id}/resume")
         self.assertEqual(invalid.status_code, 409)
 
+    def test_list_and_detail_accept_legacy_recurring_configuration(self):
+        job_id = self._create_job().json()["id"]
+        self.database.scraping_jobs.documents[job_id]["configuration"][
+            "recurring"
+        ] = True
+
+        listing = self.admin_client.get("/api/admin/scraping/jobs")
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(len(listing.json()), 1)
+        self.assertIs(listing.json()[0]["configuration"]["recurring"], True)
+
+        detail = self.admin_client.get(f"/api/admin/scraping/jobs/{job_id}")
+        self.assertEqual(detail.status_code, 200)
+        self.assertIs(detail.json()["configuration"]["recurring"], True)
+
+    def test_create_job_preserves_recurring_metadata(self):
+        created = self._create_job(recurring=True)
+
+        self.assertEqual(created.status_code, 201)
+        self.assertIs(created.json()["configuration"]["recurring"], True)
+        stored = next(iter(self.database.scraping_jobs.documents.values()))
+        self.assertIs(stored["configuration"]["recurring"], True)
+
+    def test_datetime_fields_are_serialized_as_iso_strings(self):
+        job_id = self._create_job().json()["id"]
+        moment = datetime.now(timezone.utc)
+        job = self.database.scraping_jobs.documents[job_id]
+        job["configuration"]["scheduled_at"] = moment
+        job["last_run"] = moment
+        job["next_run"] = moment
+        job["updated_at"] = moment
+        asyncio.run(self.database.scraping_executions.insert_one({
+            "_id": "execution-datetime",
+            "job_id": job_id,
+            "started_at": moment,
+            "finished_at": moment,
+            "status": "completed",
+            "products_found": 1,
+            "success_count": 1,
+            "failure_count": 0,
+            "products_created": 1,
+            "products_refreshed": 0,
+            "success_rate": 100.0,
+            "duration_seconds": 1.0,
+            "errors": [],
+            "logs": [],
+            "target_url": TARGET_URL,
+            "product_limit": 10,
+        }))
+
+        listing = self.admin_client.get("/api/admin/scraping/jobs")
+        self.assertEqual(listing.status_code, 200)
+        serialized_job = listing.json()[0]
+        self.assertEqual(serialized_job["configuration"]["scheduled_at"], moment.isoformat())
+        self.assertEqual(serialized_job["last_run"], moment.isoformat())
+        self.assertEqual(serialized_job["next_run"], moment.isoformat())
+        self.assertEqual(serialized_job["updated_at"], moment.isoformat())
+
+        history = self.admin_client.get(
+            f"/api/admin/scraping/jobs/{job_id}/executions"
+        )
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.json()[0]["started_at"], moment.isoformat())
+        self.assertEqual(history.json()[0]["finished_at"], moment.isoformat())
+
 
 if __name__ == "__main__":
     unittest.main()

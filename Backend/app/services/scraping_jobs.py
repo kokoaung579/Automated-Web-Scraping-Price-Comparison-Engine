@@ -22,6 +22,11 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _iso_string(value):
+    """Serialize BSON datetime values without changing legacy strings."""
+    return value.isoformat() if isinstance(value, datetime) else value
+
+
 @dataclass
 class PersistenceResult:
     created: int = 0
@@ -159,8 +164,8 @@ def serialize_execution(document: dict) -> dict:
     return {
         "id": str(document.get("_id", document.get("id", ""))),
         "job_id": str(document.get("job_id", "")),
-        "started_at": document["started_at"],
-        "finished_at": document.get("finished_at"),
+        "started_at": _iso_string(document["started_at"]),
+        "finished_at": _iso_string(document.get("finished_at")),
         "status": document["status"],
         "products_found": int(document.get("products_found", 0)),
         "success_count": int(document.get("success_count", 0)),
@@ -178,17 +183,20 @@ def serialize_execution(document: dict) -> dict:
 
 def serialize_job(document: dict) -> dict:
     latest = document.get("latest_execution")
+    configuration = dict(document.get("configuration") or {})
+    if "scheduled_at" in configuration:
+        configuration["scheduled_at"] = _iso_string(configuration["scheduled_at"])
     return {
         "id": str(document.get("_id", document.get("id", ""))),
         "store_id": document["store_id"],
         "store_name": document["store_name"],
         "website_url": document["website_url"],
-        "configuration": dict(document.get("configuration") or {}),
+        "configuration": configuration,
         "status": document["status"],
-        "last_run": document.get("last_run"),
-        "next_run": document.get("next_run"),
+        "last_run": _iso_string(document.get("last_run")),
+        "next_run": _iso_string(document.get("next_run")),
         "products_found": int(document.get("products_found", 0)),
         "success_rate": float(document.get("success_rate", 0.0)),
         "executions": [serialize_execution(latest)] if latest else [],
-        "updated_at": document["updated_at"],
+        "updated_at": _iso_string(document["updated_at"]),
     }

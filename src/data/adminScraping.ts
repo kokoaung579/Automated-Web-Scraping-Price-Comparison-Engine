@@ -33,9 +33,13 @@ export type ScrapingJobConfiguration = {
   request_timeout_seconds: number
   retry_attempts: number
   product_limit?: number
+  recurring?: boolean | null
 }
 
-export type CreateScrapingJobInput = ScrapingJobConfiguration & {
+export type CreateScrapingJobInput = Omit<
+  ScrapingJobConfiguration,
+  'recurring'
+> & {
   store_id: string
 }
 
@@ -122,7 +126,10 @@ function isScrapingJobConfiguration(
     (configuration.product_limit === undefined ||
       (Number.isInteger(configuration.product_limit) &&
         Number(configuration.product_limit) >= 1 &&
-        Number(configuration.product_limit) <= 15))
+        Number(configuration.product_limit) <= 15)) &&
+    (configuration.recurring === undefined ||
+      configuration.recurring === null ||
+      typeof configuration.recurring === 'boolean')
   )
 }
 

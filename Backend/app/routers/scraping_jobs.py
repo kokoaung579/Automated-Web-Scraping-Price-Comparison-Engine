@@ -125,6 +125,7 @@ async def create_scraping_job(
             "request_timeout_seconds": payload.request_timeout_seconds,
             "retry_attempts": payload.retry_attempts,
             "product_limit": payload.product_limit,
+            "recurring": payload.recurring,
         },
         "status": "queued",
         "last_run": None,

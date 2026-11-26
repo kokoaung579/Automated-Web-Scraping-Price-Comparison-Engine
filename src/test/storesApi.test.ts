@@ -27,13 +27,16 @@ afterEach(() => {
 describe('store API session handling', () => {
   it('uses the same-origin /api client and sends session credentials', async () => {
     const fetchMock = vi.fn(
-      (_input: RequestInfo | URL, _init?: RequestInit) =>
-        Promise.resolve(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        void input
+        void init
+        return Promise.resolve(
           jsonResponse(
             { message: 'Store created successfully.', store: bestBuy },
             201,
           ),
-        ),
+        )
+      },
     )
     vi.stubGlobal('fetch', fetchMock)
 
@@ -50,8 +53,11 @@ describe('store API session handling', () => {
 
   it('loads stores through the same authenticated client', async () => {
     const fetchMock = vi.fn(
-      (_input: RequestInfo | URL, _init?: RequestInit) =>
-        Promise.resolve(jsonResponse([])),
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        void input
+        void init
+        return Promise.resolve(jsonResponse([]))
+      },
     )
     vi.stubGlobal('fetch', fetchMock)
 

@@ -1,6 +1,9 @@
 ﻿from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+LEGACY_ADMIN_PRODUCT_STORE_FIELDS = ("store_name", "store_website_url")
 
 
 class APIModel(BaseModel):
@@ -61,6 +64,23 @@ class AdminProduct(APIModel):
     updated_at: str = Field(min_length=1)
     sku: str | None = None
     shipping_fee: float | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_store_fields(cls, values):
+        """Accept old denormalized store fields without exposing them.
+
+        ``store_id`` is the canonical product/store relationship. Some legacy
+        MongoDB documents also carry display-only ``store_name`` and
+        ``store_website_url`` values; those are resolved against the Store
+        collection before validation and remain untouched in MongoDB.
+        """
+        if not isinstance(values, dict):
+            return values
+        normalized = dict(values)
+        for field in LEGACY_ADMIN_PRODUCT_STORE_FIELDS:
+            normalized.pop(field, None)
+        return normalized
 
 
 def admin_product_to_catalog_document(
@@ -250,6 +270,9 @@ class ScrapingJobConfiguration(APIModel):
     request_timeout_seconds: int = Field(ge=1, le=300)
     retry_attempts: int = Field(ge=0, le=10)
     product_limit: int = Field(default=10, ge=1, le=15)
+    # Legacy MongoDB jobs may carry this scheduler metadata. It is optional
+    # and accepted explicitly instead of weakening extra="forbid".
+    recurring: bool | None = None
 
 
 class CreateScrapingJobInput(APIModel):
@@ -259,6 +282,7 @@ class CreateScrapingJobInput(APIModel):
     request_timeout_seconds: int = Field(ge=1, le=300)
     retry_attempts: int = Field(ge=0, le=10)
     product_limit: int = Field(default=10, ge=1, le=15)
+    recurring: bool | None = None
 
 
 class ScrapingExecution(APIModel):
