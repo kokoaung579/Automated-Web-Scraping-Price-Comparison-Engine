@@ -1,9 +1,11 @@
 ﻿from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.services.manual_offer_verification import valid_public_http_url
 from app.services.scraping_schedule import parse_utc_timestamp
+
+
+LEGACY_ADMIN_PRODUCT_STORE_FIELDS = ("store_name", "store_website_url")
 
 
 class APIModel(BaseModel):
@@ -51,8 +53,10 @@ class AdminProduct(APIModel):
     image_url: str | None = None
     product_url: str | None = None
     store_id: str | None = None
-    store_name: str | None = None
-    store_website_url: str | None = None
+    # Legacy denormalized labels are accepted for older MongoDB documents but
+    # are resolved to store_id and never exposed through API payloads.
+    store_name: str | None = Field(default=None, exclude=True)
+    store_website_url: str | None = Field(default=None, exclude=True)
     price: float = Field(gt=0)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     availability: Literal[
@@ -67,25 +71,22 @@ class AdminProduct(APIModel):
     sku: str | None = None
     shipping_fee: float | None = None
 
-    @field_validator("store_name")
+    @model_validator(mode="before")
     @classmethod
-    def normalize_store_name(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        text = value.strip()
-        return text or None
+    def normalize_legacy_store_fields(cls, values):
+        """Accept old denormalized store fields without exposing them.
 
-    @field_validator("store_website_url")
-    @classmethod
-    def validate_store_website_url(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        text = value.strip()
-        if valid_public_http_url(text) is None:
-            raise ValueError(
-                "store_website_url must be a valid public HTTP or HTTPS URL."
-            )
-        return text
+        ``store_id`` is the canonical product/store relationship. Some legacy
+        MongoDB documents also carry display-only ``store_name`` and
+        ``store_website_url`` values; those are resolved against the Store
+        collection before validation and remain untouched in MongoDB.
+        """
+        if not isinstance(values, dict):
+            return values
+        normalized = dict(values)
+        for field in LEGACY_ADMIN_PRODUCT_STORE_FIELDS:
+            normalized.pop(field, None)
+        return normalized
 
 
 def admin_product_to_catalog_document(
@@ -275,7 +276,9 @@ class ScrapingJobConfiguration(APIModel):
     request_timeout_seconds: int = Field(ge=1, le=300)
     retry_attempts: int = Field(ge=0, le=10)
     product_limit: int = Field(default=10, ge=1, le=15)
-    recurring: bool = True
+    # Legacy MongoDB jobs may carry this scheduler metadata. It is optional
+    # and accepted explicitly instead of weakening extra="forbid".
+    recurring: bool | None = None
 
     @field_validator("scheduled_at")
     @classmethod

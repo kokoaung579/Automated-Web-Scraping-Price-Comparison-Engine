@@ -106,26 +106,6 @@ class DashboardEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def call_dashboard(self, database):
         return await get_dashboard(make_request(database))
 
-    async def test_dashboard_accepts_legacy_store_fields_in_admin_product(self):
-        product = product_document(
-            "legacy-product",
-            "legacy-product",
-            "zone",
-            "Audio",
-            29.95,
-            "manual",
-        )
-        product["adminProduct"]["store_name"] = "Zone"
-        product["adminProduct"]["store_website_url"] = None
-        database = FakeDatabase(
-            stores=[store_document("zone", "Zone")],
-            products=[product],
-        )
-
-        result = await self.call_dashboard(database)
-
-        self.assertEqual(result["kpis"]["total_products"], 1)
-
     async def test_kpis_distributions_and_comparison_use_mongodb_records(self):
         database = FakeDatabase(
             stores=[
@@ -310,29 +290,6 @@ class DashboardEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(category_counts["store_changes"], 1)
         self.assertEqual(category_counts["user_activities"], 1)
         self.assertEqual(category_counts["scraping_activities"], 1)
-
-    async def test_scraping_activity_uses_created_at_when_timestamp_is_missing(self):
-        database = FakeDatabase(
-            scraping_logs=[
-                {
-                    "_id": ObjectId(),
-                    "created_at": "2026-11-17T09:42:00+00:00",
-                    "website": "amazon.com",
-                    "product": "Historical product",
-                    "status": "success",
-                },
-            ],
-        )
-
-        result = await self.call_dashboard(database)
-        scraping_item = next(
-            item
-            for item in result["recent_activity"]["items"]
-            if item["category"] == "scraping_activities"
-        )
-
-        self.assertEqual(scraping_item["timestamp"], "2026-11-17T09:42:00Z")
-        self.assertEqual(scraping_item["sort_timestamp"], "2026-11-17T09:42:00Z")
 
 
 if __name__ == "__main__":

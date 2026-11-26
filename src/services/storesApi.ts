@@ -18,6 +18,6 @@ export function updateStore(storeId: string, store: AdminStore) {
   return api.updateAdminStore(storeId, store)
 }
 
-export function deleteStore(storeId: string) {
-  return api.deleteAdminStore(storeId)
+export function deleteStore(storeId: string, deleteLinkedOffers = false) {
+  return api.deleteAdminStore(storeId, deleteLinkedOffers)
 }

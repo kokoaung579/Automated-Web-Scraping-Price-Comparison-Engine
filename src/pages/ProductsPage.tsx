@@ -24,7 +24,6 @@ import type { AppOutletContext } from '../context/AppOutletContext'
 import { validHttpUrl } from '../data/adminProducts'
 import { mergeCatalogProducts } from '../data/catalogProducts'
 import type { DemoProduct } from '../data/products'
-import { isValidStoreOffer } from '../data/storeOffers'
 import type { StoreOffer } from '../data/storeOffers'
 
 type PriceRange = 'all' | 'under-200' | '200-400' | 'over-400'
@@ -815,7 +814,7 @@ function BestOfferSection({ product }: { product: DemoProduct | null }) {
 
   const offers =
     product && offerState?.productId === product.id ? offerState.offers : []
-  const validOffers = offers.filter(isValidStoreOffer)
+  const validOffers = offers.filter((offer) => offer.price > 0)
   const prices = validOffers.map((offer) => offer.price)
   const lowest = prices.length ? Math.min(...prices) : 0
   const highest = prices.length ? Math.max(...prices) : 0
@@ -857,11 +856,7 @@ function BestOfferSection({ product }: { product: DemoProduct | null }) {
           </div>
         </div>
         <Link
-          to="/comparison"
-          state={{
-            productId: product?.id ?? null,
-            productName: product?.name ?? null,
-          }}
+          to="/price-comparison"
           className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-500 to-blue-500 px-5 text-xs font-semibold text-white shadow-lg shadow-violet-950/30 transition hover:from-violet-400 hover:to-blue-400"
         >
           Compare Prices

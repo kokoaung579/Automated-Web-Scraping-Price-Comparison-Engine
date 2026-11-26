@@ -3,6 +3,7 @@
 import inspect
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from dataclasses import dataclass, field
 from pydantic import ValidationError
 from pymongo.errors import DuplicateKeyError, PyMongoError
@@ -328,6 +329,11 @@ def utc_now() -> str:
     return utc_now_iso()
 
 
+def _iso_string(value):
+    """Serialize BSON datetime values without changing legacy strings."""
+    return value.isoformat() if isinstance(value, datetime) else value
+
+
 @dataclass
 class PersistenceResult:
     created: int = 0
@@ -553,8 +559,8 @@ def serialize_execution(document: dict) -> dict:
     return {
         "id": str(document.get("_id", document.get("id", ""))),
         "job_id": str(document.get("job_id", "")),
-        "started_at": document["started_at"],
-        "finished_at": document.get("finished_at"),
+        "started_at": _iso_string(document["started_at"]),
+        "finished_at": _iso_string(document.get("finished_at")),
         "status": normalize_status(document["status"]),
         "products_found": int(document.get("products_found", 0)),
         "success_count": int(document.get("success_count", 0)),
@@ -576,6 +582,9 @@ def serialize_execution(document: dict) -> dict:
 
 def serialize_job(document: dict) -> dict:
     latest = document.get("latest_execution")
+    configuration = dict(document.get("configuration") or {})
+    if "scheduled_at" in configuration:
+        configuration["scheduled_at"] = _iso_string(configuration["scheduled_at"])
     status = normalize_status(document["status"])
     running = status == "running"
     return {
@@ -583,14 +592,18 @@ def serialize_job(document: dict) -> dict:
         "store_id": document["store_id"],
         "store_name": document["store_name"],
         "website_url": document["website_url"],
-        "configuration": dict(document.get("configuration") or {}),
+        "configuration": configuration,
         "status": status,
-        "last_run": None if running else document.get("last_run"),
-        "next_run": None if status == "cancelled" else document.get("next_run"),
+        "last_run": None if running else _iso_string(document.get("last_run")),
+        "next_run": (
+            None
+            if status == "cancelled"
+            else _iso_string(document.get("next_run"))
+        ),
         "products_found": 0 if running else int(document.get("products_found", 0)),
         "success_rate": 0.0 if running else float(document.get("success_rate", 0.0)),
         "executions": [] if running or not latest else [serialize_execution(latest)],
-        "updated_at": document["updated_at"],
+        "updated_at": _iso_string(document["updated_at"]),
         "cancel_requested": bool(document.get("cancel_requested", False)),
         "active_execution_id": document.get("active_execution_id"),
         "lease_expires_at": document.get("lease_expires_at"),

@@ -6,7 +6,11 @@ import {
 } from '../services/scrapingApi'
 import type { ScrapingApiEndpoints } from '../services/scrapingApi'
 import type { AdminStore } from '../data/adminStores'
-import type { ScrapingJob, ScrapingTarget } from '../data/adminScraping'
+import type {
+  ScrapingJob,
+  ScrapingJobConfiguration,
+  ScrapingTarget,
+} from '../data/adminScraping'
 
 const adminStore: AdminStore = {
   store_id: 'amazon',
@@ -40,18 +44,20 @@ const endpoints: ScrapingApiEndpoints = {
   getExecutionHistory: { path: '/jobs/{jobId}/executions', method: 'GET' },
 }
 
+const configuration: ScrapingJobConfiguration = {
+  interval_minutes: 60,
+  scheduled_at: '2026-11-20T04:00:00.000Z',
+  request_timeout_seconds: 30,
+  retry_attempts: 3,
+  product_limit: 10,
+}
+
 const job: ScrapingJob = {
   id: 'job-1',
   store_id: 'webscraper-io',
   store_name: 'WebScraper.io Test Site',
   website_url: 'https://webscraper.io',
-  configuration: {
-    interval_minutes: 60,
-    scheduled_at: '2026-11-20T04:00:00.000Z',
-    request_timeout_seconds: 30,
-    retry_attempts: 3,
-    product_limit: 10,
-  },
+  configuration,
   status: 'completed',
   last_run: '2026-11-20T03:00:00.000Z',
   next_run: '2026-11-20T04:00:00.000Z',
@@ -124,6 +130,32 @@ describe('scraping API client', () => {
 
   it('rejects malformed job records', async () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse({ id: 'job-1' }))
+    const client = createBackendScrapingApiClient(
+      fetcher as unknown as typeof fetch,
+    )
+
+    await expect(client.getJobs()).rejects.toThrow('invalid job list')
+  })
+
+  it('accepts legacy recurring configuration from MongoDB jobs', async () => {
+    const legacyJob: ScrapingJob = {
+      ...job,
+      configuration: { ...configuration, recurring: true },
+    }
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse([legacyJob]))
+    const client = createBackendScrapingApiClient(
+      fetcher as unknown as typeof fetch,
+    )
+
+    await expect(client.getJobs()).resolves.toEqual([legacyJob])
+  })
+
+  it('rejects invalid recurring configuration instead of hiding it', async () => {
+    const invalidJob = {
+      ...job,
+      configuration: { ...configuration, recurring: 'yes' },
+    }
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse([invalidJob]))
     const client = createBackendScrapingApiClient(
       fetcher as unknown as typeof fetch,
     )

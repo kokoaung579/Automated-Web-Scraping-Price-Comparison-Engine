@@ -5,6 +5,7 @@ import {
 } from 'react'
 import type { ReactNode } from 'react'
 import { api } from '../api/client'
+import { SESSION_EXPIRED_EVENT } from '../api/client'
 import type { AuthUser } from '../types/auth'
 import { AuthContext } from './useAuth'
 import type { AuthState } from './useAuth'
@@ -41,6 +42,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       active = false
     }
   }, [retryCount])
+
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      setState({ loading: false, user: null, error: '' })
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired)
+    return () => {
+      window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired)
+    }
+  }, [])
 
   const setUser = useCallback((user: AuthUser) => {
     setState({ loading: false, user, error: '' })

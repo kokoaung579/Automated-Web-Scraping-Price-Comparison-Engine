@@ -359,7 +359,7 @@ def _build_recent_activity(
                 "scraping_activities",
                 title,
                 f"{product} on {website}",
-                document.get("timestamp") or document.get("created_at"),
+                document.get("timestamp"),
                 "scraping_logs",
                 status or None,
             )

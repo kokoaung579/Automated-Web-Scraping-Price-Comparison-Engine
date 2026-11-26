@@ -53,7 +53,7 @@ function HistorySkeleton() {
     <section
       aria-label="Loading price trend"
       aria-busy="true"
-      className="min-w-0 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6"
+      className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6"
     >
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-3">
@@ -156,7 +156,7 @@ export function PriceTrendChart({
 
   if (empty || !product) {
     return (
-      <section className="min-w-0 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
+      <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
         <h2 className="text-sm font-semibold text-white">Price trend</h2>
         <DashboardEmptyState
           title="No price history available"
@@ -169,7 +169,7 @@ export function PriceTrendChart({
 
   if (matchingProducts.length === 0) {
     return (
-      <section className="min-w-0 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
+      <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
         <h2 className="text-sm font-semibold text-white">Price trend</h2>
         <DashboardEmptyState
           title="No matching products"
@@ -182,7 +182,7 @@ export function PriceTrendChart({
 
   if (currentError) {
     return (
-      <section className="min-w-0 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
+      <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
         <h2 className="text-sm font-semibold text-white">Price trend</h2>
         <DashboardEmptyState
           title="Unable to load price history"
@@ -196,7 +196,7 @@ export function PriceTrendChart({
 
   if (data.length === 0) {
     return (
-      <section className="min-w-0 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
+      <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
         <h2 className="text-sm font-semibold text-white">Price trend</h2>
         <DashboardEmptyState
           title="No price history available"
@@ -208,9 +208,9 @@ export function PriceTrendChart({
   }
 
   return (
-    <section className="min-w-0 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
+    <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
+        <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-sm font-semibold text-white">Price trend</h2>
             <span className="rounded-md border border-blue-400/10 bg-blue-400/[0.07] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-blue-300">
@@ -417,7 +417,7 @@ export function RecentPriceChanges({
       <section
         aria-label="Loading recent price changes"
         aria-busy="true"
-        className="min-w-0 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6"
+        className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6"
       >
         <DashboardSkeleton className="h-4 w-36" />
         <DashboardSkeleton className="mt-2 h-3 w-48" />
@@ -439,7 +439,7 @@ export function RecentPriceChanges({
 
   if (empty || changes.length === 0) {
     return (
-      <section className="min-w-0 rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
+      <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
         <h2 className="text-sm font-semibold text-white">Recent price changes</h2>
         <DashboardEmptyState
           title={empty ? 'No recent price changes' : 'No matching products'}
@@ -455,9 +455,9 @@ export function RecentPriceChanges({
   }
 
   return (
-    <section className="min-w-0 rounded-2xl border border-white/[0.07] bg-[#0d1320]">
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.06] px-5 py-5 sm:px-6">
-        <div className="min-w-0">
+    <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320]">
+      <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-5 sm:px-6">
+        <div>
           <h2 className="text-sm font-semibold text-white">Recent price changes</h2>
           <p className="mt-1 text-[11px] text-slate-500">
             Latest updates from the shared catalog

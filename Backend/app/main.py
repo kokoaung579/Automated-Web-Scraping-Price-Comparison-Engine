@@ -61,6 +61,7 @@ from app.services.category_catalog import (
     stored_category_names,
 )
 from app.models import (
+    LEGACY_ADMIN_PRODUCT_STORE_FIELDS,
     AdminProduct,
     DemoNotification,
     PriceAlert,
@@ -87,6 +88,57 @@ async def _safe_find_all(database, collection_name, *args):
 
 ADMIN_PRODUCTS_MIGRATION_ID = "admin-products-to-products-v1"
 PRODUCT_CATEGORY_MIGRATION_ID = "product-categories-shared-source-v1"
+
+
+def _normalize_store_name(value) -> str:
+    """Return a comparison key for legacy store labels."""
+    return "".join(
+        character
+        for character in str(value or "").casefold()
+        if character.isalnum()
+    )
+
+
+def _normalize_store_website(value) -> str:
+    """Return a comparison key that ignores common URL presentation differences."""
+    text = str(value or "").strip().rstrip("/").casefold()
+    for prefix in ("https://", "http://", "www."):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+    return text
+
+
+async def resolve_legacy_admin_product_store_id(database, document: dict) -> str | None:
+    """Resolve a legacy product's store display fields to its canonical ID.
+
+    Store Management remains the source of truth. The legacy MongoDB fields
+    are only used for lookup and are never deleted or rewritten here.
+    """
+    if document.get("store_id"):
+        return None
+
+    stores = getattr(database, "stores", None)
+    if stores is None or not hasattr(stores, "find"):
+        return None
+
+    legacy_name = str(document.get("store_name") or "").strip()
+    legacy_website = str(document.get("store_website_url") or "").strip()
+    if not legacy_name and not legacy_website:
+        return None
+
+    store_documents = await stores.find().to_list(length=None)
+    wanted_name = _normalize_store_name(legacy_name)
+    wanted_website = _normalize_store_website(legacy_website)
+
+    for store in store_documents:
+        store_id = store.get("store_id") or store.get("_id")
+        if not store_id:
+            continue
+        if wanted_name and _normalize_store_name(store.get("store_name")) == wanted_name:
+            return str(store_id)
+        if wanted_website and _normalize_store_website(store.get("website_url")) == wanted_website:
+            return str(store_id)
+    return None
 
 
 @asynccontextmanager
@@ -191,14 +243,19 @@ async def migrate_legacy_admin_products(database) -> None:
         length=None
     )
     for document in legacy_documents:
-        product = AdminProduct.model_validate({
-            **{
-                key: value
-                for key, value in document.items()
-                if key != "_id"
-            },
-            "product_id": document["_id"],
-        })
+        payload = {
+            key: value
+            for key, value in document.items()
+            if key != "_id"
+        }
+        payload["product_id"] = document["_id"]
+        resolved_store_id = await resolve_legacy_admin_product_store_id(
+            database,
+            payload,
+        )
+        if resolved_store_id:
+            payload["store_id"] = resolved_store_id
+        product = AdminProduct.model_validate(payload)
         existing = await database.products.find_one(
             {"_id": product.product_id}
         )
@@ -234,9 +291,33 @@ async def sync_existing_admin_product_prices(database) -> None:
     documents = await database.products.find().to_list(length=None)
     for document in documents:
         admin_product = document.get("adminProduct")
-        if isinstance(admin_product, dict):
-            product = AdminProduct.model_validate(admin_product)
-            await upsert_admin_product_offer(database, product)
+        if not isinstance(admin_product, dict):
+            continue
+
+        has_legacy_store_fields = any(
+            field in admin_product for field in LEGACY_ADMIN_PRODUCT_STORE_FIELDS
+        )
+        if has_legacy_store_fields:
+            resolved_store_id = await resolve_legacy_admin_product_store_id(
+                database,
+                admin_product,
+            )
+            if resolved_store_id:
+                # Add the canonical reference without removing or rewriting
+                # the legacy values stored in MongoDB.
+                document_id = document.get("_id")
+                if document_id is not None:
+                    await database.products.update_one(
+                        {"_id": document_id},
+                        {"$set": {"adminProduct.store_id": resolved_store_id}},
+                    )
+                admin_product = {
+                    **admin_product,
+                    "store_id": resolved_store_id,
+                }
+
+        product = AdminProduct.model_validate(admin_product)
+        await upsert_admin_product_offer(database, product)
 
 
 async def migrate_product_categories(database) -> None:
@@ -967,6 +1048,8 @@ async def create_alert(
 ):
     await require_product(alert.productId)
     user_id = current_user_id(user)
+    # Ownership always comes from the session, including in the response body.
+    alert.user_id = user_id
     document_id = alert_document_id(user_id, alert.id)
     database = get_database()
 

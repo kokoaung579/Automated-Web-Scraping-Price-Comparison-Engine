@@ -1,23 +1,10 @@
 import os
 from pathlib import Path
 
-from dotenv import dotenv_values, load_dotenv
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-ENV_FILE = BASE_DIR / ".env"
-_ENV_FILE_VALUES = dotenv_values(ENV_FILE)
-load_dotenv(ENV_FILE)
-
-
-def _get_environment_value(name: str, default: str = "") -> str:
-    value = os.getenv(name, "").strip()
-    if value:
-        return value
-
-    file_value = _ENV_FILE_VALUES.get(name)
-    if isinstance(file_value, str) and file_value.strip():
-        return file_value.strip()
-    return default
+load_dotenv(BASE_DIR / ".env")
 
 
 def get_mongodb_url() -> str:
@@ -43,19 +30,19 @@ def get_apify_actor_id() -> str:
 
 
 def get_gmail_smtp_email() -> str:
-    return _get_environment_value("GMAIL_SMTP_EMAIL")
+    return os.getenv("GMAIL_SMTP_EMAIL", "").strip()
 
 
 def get_gmail_app_password() -> str:
-    return _get_environment_value("GMAIL_APP_PASSWORD")
+    return os.getenv("GMAIL_APP_PASSWORD", "").strip()
 
 
 def get_gmail_smtp_host() -> str:
-    return _get_environment_value("GMAIL_SMTP_HOST", "smtp.gmail.com")
+    return os.getenv("GMAIL_SMTP_HOST", "smtp.gmail.com").strip()
 
 
 def get_gmail_smtp_port() -> int:
     try:
-        return int(_get_environment_value("GMAIL_SMTP_PORT", "587"))
+        return int(os.getenv("GMAIL_SMTP_PORT", "587").strip())
     except ValueError:
         return 587

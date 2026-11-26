@@ -233,55 +233,6 @@ describe('Admin Overview', () => {
     expect(within(kpiCard('Completed / Failed Jobs')).getByText('0 / 0')).toBeDefined()
   })
 
-  it('does not chart scraping activity without an API timestamp', async () => {
-    const response = dashboardResponse()
-    response.recent_activity.items = [
-      {
-        ...response.recent_activity.items[0],
-        timestamp: null,
-      },
-    ]
-    stubFetch({ dashboardResponse: response })
-    renderOverview()
-
-    expect(await screen.findByText('No scraping activity available')).toBeDefined()
-  })
-
-  it('charts historical scraping activity under the recorded day', async () => {
-    stubFetch({
-      dashboardResponse: dashboardResponse({
-        recent_activity: {
-          items: [
-            {
-              id: 'scraping-3',
-              category: 'scraping_activities',
-              title: 'Scraping completed',
-              description: 'Historical Product on amazon.com',
-              timestamp: '2026-11-17T09:42:00Z',
-              sort_timestamp: '2026-11-17T09:42:00Z',
-              source: 'scraping_logs',
-              status: 'success',
-            },
-          ],
-          categories: [
-            { key: 'product_additions', label: 'Product additions', count: 0 },
-            { key: 'product_updates', label: 'Product updates', count: 0 },
-            { key: 'store_changes', label: 'Store changes', count: 0 },
-            { key: 'user_activities', label: 'User activities', count: 0 },
-            { key: 'scraping_activities', label: 'Scraping activities', count: 1 },
-          ],
-          total_events: 1,
-        },
-      }),
-    })
-    renderOverview()
-
-    expect(
-      await screen.findByRole('heading', { name: 'Scraping Activity' }),
-    ).toBeDefined()
-    expect(screen.queryByText('No scraping activity available')).toBeNull()
-  })
-
   it('shows the newest backend audit records with actor, timestamp, and description', async () => {
     stubFetch({
       auditResponse: jsonResponse({

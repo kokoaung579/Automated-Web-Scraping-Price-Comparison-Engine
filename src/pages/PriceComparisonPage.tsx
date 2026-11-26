@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -15,7 +15,7 @@ import {
   TriangleAlert,
   X,
 } from 'lucide-react'
-import { useLocation, useOutletContext } from 'react-router-dom'
+import { useOutletContext } from 'react-router-dom'
 import { api } from '../api/client'
 import type { AppOutletContext } from '../context/AppOutletContext'
 import type { AdminStore } from '../data/adminStores'
@@ -365,16 +365,6 @@ function OfferCard({
         )}
         <OfferLink offer={offer} />
       </div>
-      {offer.product_url && (
-        <a
-          href={offer.product_url}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-3 inline-block truncate text-[10px] text-blue-300 hover:text-blue-200"
-        >
-          View store listing
-        </a>
-      )}
     </article>
   )
 }
@@ -655,19 +645,7 @@ function Pagination({
 
 export function PriceComparisonPage() {
   const outlet = useOutletContext<AppOutletContext | null>()
-  const location = useLocation()
-  const initialProduct = useMemo(() => {
-    const state = location.state as
-      | { productId?: string | null; productName?: string | null }
-      | null
-    return {
-      productId: typeof state?.productId === 'string' ? state.productId : null,
-      productName:
-        typeof state?.productName === 'string' ? state.productName : null,
-    }
-  }, [location.state])
-  const appliedInitialSelection = useRef(false)
-  const [searchInput, setSearchInput] = useState(initialProduct.productName ?? '')
+  const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [period, setPeriod] = useState<ComparisonPeriod>('30D')
@@ -736,20 +714,11 @@ export function PriceComparisonPage() {
       .then((data) => {
         if (!active) return
         setResponse(data)
-        setSelectedKey((current) => {
-          if (initialProduct.productId && !appliedInitialSelection.current) {
-            const preferred = data.items.find((item) =>
-              item.identity.matched_product_ids.includes(initialProduct.productId!),
-            )
-            if (preferred) {
-              appliedInitialSelection.current = true
-              return preferred.identity.canonical_key
-            }
-          }
-          return data.items.some((item) => item.identity.canonical_key === current)
+        setSelectedKey((current) =>
+          data.items.some((item) => item.identity.canonical_key === current)
             ? current
-            : (data.items[0]?.identity.canonical_key ?? '')
-        })
+            : (data.items[0]?.identity.canonical_key ?? ''),
+        )
         setLoading(false)
       })
       .catch((loadError: unknown) => {
@@ -764,16 +733,7 @@ export function PriceComparisonPage() {
     return () => {
       active = false
     }
-  }, [
-    search,
-    storeFilter,
-    availability,
-    verifiedOnly,
-    period,
-    page,
-    refreshToken,
-    initialProduct.productId,
-  ])
+  }, [search, storeFilter, availability, verifiedOnly, period, page, refreshToken])
 
   const items = response?.items ?? []
   const selected = useMemo(

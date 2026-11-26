@@ -4,15 +4,10 @@ import hashlib
 from datetime import datetime, timezone
 
 from channel3_sdk.types.search_filters import SearchFilters
-from pymongo import AsyncMongoClient
+from pymongo import AsyncMongoClient, UpdateOne
 
 from app.config import get_database_name, get_mongodb_url
 from app.services.channel3_services import get_channel3_client
-from app.models import AdminProduct
-from app.services.product_catalog import (
-    ingest_product_listing,
-    normalize_store_id,
-)
 
 MAX_BROWSE_PAGES = 5
 MAX_PAGE_SIZE = 30
@@ -122,102 +117,58 @@ async def import_website_products(website_domain: str, product_limit: int = 150)
 
     products = browse_website_products(channel3, website.id, product_limit)
     updated_at = datetime.now(timezone.utc).isoformat()
-    products_created = 0
-    products_matched = 0
-    products_pending_review = 0
-    products_rejected = 0
-    offers_processed = 0
+    product_operations = []
+    offer_operations = []
     skipped_without_usd_offers = 0
-    errors = []
+
+    for product in products:
+        documents = build_product_documents(product, updated_at)
+        if documents is None:
+            skipped_without_usd_offers += 1
+            continue
+
+        product_document, offer_documents = documents
+        product_id = product_document.pop("_id")
+        product_operations.append(
+            UpdateOne(
+                {"_id": product_id},
+                {"$set": product_document},
+                upsert=True,
+            )
+        )
+        for offer_document in offer_documents:
+            offer_id = offer_document.pop("_id")
+            offer_operations.append(
+                UpdateOne(
+                    {"_id": offer_id},
+                    {"$set": offer_document},
+                    upsert=True,
+                )
+            )
 
     client = AsyncMongoClient(get_mongodb_url())
     try:
         await client.admin.command("ping")
         database = client[get_database_name()]
-        for scraped_product in products:
-            scraped_offers = [
-                offer
-                for offer in scraped_product.offers or []
-                if (
-                    offer.price.price > 0
-                    and len(str(offer.price.currency or "").upper()) == 3
-                )
-            ]
-            if not scraped_offers:
-                skipped_without_usd_offers += 1
-                continue
-
-            brands = scraped_product.brands or []
-            brand = brands[0].name if brands else None
-            category = (
-                scraped_product.category.title
-                if scraped_product.category
-                else None
-            )
-            model = (
-                getattr(scraped_product, "model", None)
-                or getattr(scraped_product, "model_number", None)
-                or getattr(scraped_product, "mpn", None)
-            )
-            for offer in scraped_offers:
-                store_id = normalize_store_id(offer.domain)
-                availability_value = str(
-                    getattr(offer, "availability", "") or ""
-                ).casefold()
-                availability = (
-                    "in_stock"
-                    if availability_value in {"instock", "in stock", "available"}
-                    else "out_of_stock"
-                    if availability_value in {"outofstock", "out of stock"}
-                    else "unknown"
-                )
-                now = datetime.now(timezone.utc).isoformat()
-                try:
-                    listing = AdminProduct(
-                        product_id=f"channel3-{scraped_product.id}",
-                        product_name=scraped_product.title,
-                        category=category or "Products",
-                        brand=brand,
-                        model=str(model) if model else None,
-                        description=scraped_product.description,
-                        image_url=None,
-                        product_url=offer.url,
-                        store_id=store_id,
-                        price=offer.price.price,
-                        currency=str(offer.price.currency).upper(),
-                        shipping_fee=getattr(offer, "shipping_fee", None),
-                        sku=getattr(offer, "sku", None),
-                        availability=availability,
-                        source_type="scraped",
-                        created_at=updated_at,
-                        updated_at=now,
-                    )
-                    result = await ingest_product_listing(database, listing)
-                    offers_processed += 1
-                    if result["status"] == "created":
-                        products_created += 1
-                    elif result["status"] == "matched":
-                        products_matched += 1
-                    elif result["status"] == "review":
-                        products_pending_review += 1
-                    elif result["status"] == "rejected":
-                        products_rejected += 1
-                except Exception as error:
-                    if len(errors) < 10:
-                        errors.append(str(error))
+        product_result = (
+            await database.products.bulk_write(product_operations, ordered=False)
+            if product_operations
+            else None
+        )
+        if offer_operations:
+            await database.offers.bulk_write(offer_operations, ordered=False)
     finally:
         await client.close()
 
     return {
         "website": website.name or website.url,
         "products_returned": len(products),
-        "products_upserted": products_created,
-        "products_updated": products_matched,
-        "products_pending_review": products_pending_review,
-        "products_rejected": products_rejected,
-        "offers_upserted_or_updated": offers_processed,
+        "products_upserted": (
+            product_result.upserted_count if product_result else 0
+        ),
+        "products_updated": product_result.modified_count if product_result else 0,
+        "offers_upserted_or_updated": len(offer_operations),
         "products_skipped_without_usd_offers": skipped_without_usd_offers,
-        "errors": errors,
     }
 
 

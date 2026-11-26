@@ -1926,30 +1926,17 @@ export function AdminProductsPage() {
     setFeedback('')
 
     try {
-      let ingestionStatus: 'created' | 'matched' | 'review' | 'rejected' | null =
-        null
       if (existing) {
         await api.updateAdminProduct(existing.product_id, product)
       } else {
-        const result = await api.createAdminProduct(product)
-        ingestionStatus = result.status
+        await api.createAdminProduct(product)
       }
 
       // The write succeeded. Close the form before refreshing so a failed GET
       // cannot make the user submit the same CREATE action a second time.
       setFormOpen(false)
       setEditingProduct(null)
-      setFeedback(
-        existing
-          ? `${product.product_name} updated.`
-          : ingestionStatus === 'review'
-            ? `${product.product_name} was sent for product-matching review.`
-            : ingestionStatus === 'matched'
-              ? `${product.product_name} was linked to an existing shared product.`
-              : ingestionStatus === 'rejected'
-                ? `${product.product_name} remains in rejected matching review.`
-                : `${product.product_name} added as a manual product.`,
-      )
+      setFeedback(successMessage)
       try {
         const refreshedProducts = await api.adminProducts()
         setCatalog({ products: refreshedProducts, error: '' })

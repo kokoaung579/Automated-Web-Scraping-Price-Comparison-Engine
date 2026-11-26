@@ -77,7 +77,7 @@ export type DashboardActivityItem = {
   category: string
   title: string
   description: string
-  timestamp: string | null
+  timestamp: string
   sort_timestamp: string
   source: string
   status: string | null
