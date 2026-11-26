@@ -166,13 +166,16 @@ html[data-theme='light'] .recharts-active-dot circle {
   stroke: #f8fafc !important;
 }
 
-/* Admin tables: switch to readable card lists when the available width is too
-   narrow for the desktop table. Container queries keep desktop/tablet tables
-   intact whenever they genuinely fit. */
+/* Admin tables: switch to readable card lists on phones and tablets. Desktop
+   keeps the original table layout; wide tables use their own overflow wrapper. */
 .admin-table-responsive {
   container-type: inline-size;
 }
 
+/* Card mode is a small-screen adaptation only. From the desktop breakpoint
+   upward the original table layout is restored; wide tables use their own
+   overflow-x wrapper instead of being converted into cards. */
+@media (max-width: 1023px) {
 @container (max-width: 1100px) {
   .admin-table-responsive:not(.admin-table-responsive--wide):not(.admin-table-responsive--compact)
     table.admin-data-table {
@@ -506,30 +509,40 @@ html[data-theme='light'] .recharts-active-dot circle {
     display: block;
   }
 }
+}
 
 /* Mobile comfort for admin controls and long-text values that are safe to wrap. */
 @media (max-width: 767px) {
-  .admin-workspace main button {
+  .admin-workspace button {
     min-height: 40px;
     min-width: 40px;
   }
 
-  .admin-workspace main .truncate {
+  /* Text buttons in dialogs and forms become full-width stacked actions;
+     compact icon buttons keep their intrinsic size. */
+  .admin-workspace [role='dialog'] button:not([aria-label]),
+  .admin-workspace [role='alertdialog'] button:not([aria-label]),
+  .admin-workspace main form button:not([aria-label]) {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .admin-workspace .truncate {
     overflow: visible;
     text-overflow: clip;
     white-space: normal;
   }
 
-  .admin-workspace main [class*='line-clamp-'] {
+  .admin-workspace [class*='line-clamp-'] {
     display: block;
     overflow: visible;
     -webkit-line-clamp: unset;
   }
 
-  .admin-workspace main p,
-  .admin-workspace main dd,
-  .admin-workspace main span,
-  .admin-workspace main code {
+  .admin-workspace p,
+  .admin-workspace dd,
+  .admin-workspace span,
+  .admin-workspace code {
     overflow-wrap: anywhere;
   }
 }

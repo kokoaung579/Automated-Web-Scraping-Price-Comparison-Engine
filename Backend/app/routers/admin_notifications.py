@@ -1,5 +1,6 @@
 """Admin Notification Center API."""
 
+import logging
 import re
 from typing import Literal
 
@@ -22,6 +23,8 @@ router = APIRouter(
     tags=["Admin Notifications"],
     dependencies=[Depends(require_admin)],
 )
+
+logger = logging.getLogger(__name__)
 
 NotificationCategory = Literal[
     "scraping",
@@ -54,6 +57,19 @@ class ConnectionEpisodePayload(BaseModel):
     restoredAt: str = Field(min_length=1, max_length=80)
 
 
+class NotificationBulkDeletePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    notification_ids: list[str] = Field(min_length=1, max_length=500)
+    confirm: bool = False
+
+
+class NotificationDeleteAllPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: bool = False
+
+
 def get_database(request: Request):
     return request.app.state.database
 
@@ -61,6 +77,28 @@ def get_database(request: Request):
 def admin_notification_query() -> dict:
     """Only categorised admin notifications are visible to this API."""
     return {"category": {"$in": list(ADMIN_CATEGORIES)}}
+
+
+def normalize_notification_ids(values: list[str]) -> list[str]:
+    """Validate and deduplicate explicitly selected notification ids."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        notification_id = str(raw_value or "").strip()
+        if not notification_id or len(notification_id) > 200:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="One or more notification ids are invalid.",
+            )
+        if notification_id not in seen:
+            seen.add(notification_id)
+            normalized.append(notification_id)
+    if not normalized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No notification ids were selected.",
+        )
+    return normalized
 
 
 @router.get("")
@@ -96,6 +134,7 @@ async def list_admin_notifications(
     unread_query["isRead"] = False
 
     total = await collection.count_documents(query)
+    all_total = await collection.count_documents(admin_notification_query())
     unread = await collection.count_documents(unread_query)
     documents = (
         await collection.find(query)
@@ -108,6 +147,7 @@ async def list_admin_notifications(
     return {
         "items": [serialize_notification(document) for document in documents],
         "total": total,
+        "all_total": all_total,
         "unread": unread,
         "page": page,
         "page_size": page_size,
@@ -131,6 +171,74 @@ async def mark_all_admin_notifications_read(request: Request):
     if updated is None:
         updated = unread_before
     return {"updated": int(updated)}
+
+
+@router.post("/bulk-delete")
+async def bulk_delete_admin_notifications(
+    payload: NotificationBulkDeletePayload,
+    request: Request,
+):
+    """Delete only explicitly listed admin notifications, reporting failures."""
+    if payload.confirm is not True:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Explicit confirmation is required for bulk deletion.",
+        )
+
+    notification_ids = normalize_notification_ids(payload.notification_ids)
+    collection = get_database(request).notifications
+    query = admin_notification_query()
+    deleted: list[str] = []
+    failed: list[dict[str, str]] = []
+
+    for notification_id in notification_ids:
+        try:
+            result = await collection.delete_one(
+                {"_id": notification_id, **query}
+            )
+            deleted_count = int(getattr(result, "deleted_count", 0) or 0)
+        except Exception as exc:
+            logger.warning(
+                "Admin notification delete failed for %s: %s", notification_id, exc
+            )
+            failed.append({"id": notification_id, "reason": "delete failed"})
+            continue
+        if deleted_count == 1:
+            deleted.append(notification_id)
+        else:
+            failed.append({"id": notification_id, "reason": "not found"})
+
+    return {
+        "requested": len(notification_ids),
+        "deleted": len(deleted),
+        "failed_count": len(failed),
+        "failed": failed,
+    }
+
+
+@router.post("/delete-all")
+async def delete_all_admin_notifications(
+    payload: NotificationDeleteAllPayload,
+    request: Request,
+):
+    """Delete every admin notification, never touch other notification types."""
+    if payload.confirm is not True:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Explicit confirmation is required to delete all notifications.",
+        )
+
+    collection = get_database(request).notifications
+    query = admin_notification_query()
+    matched = await collection.count_documents(query)
+    result = await collection.delete_many(query)
+    deleted = int(getattr(result, "deleted_count", 0) or 0)
+    remaining = await collection.count_documents(query)
+    return {
+        "deleted": deleted,
+        "matched": matched,
+        "remaining": remaining,
+    }
 
 
 @router.get("/settings")
@@ -202,3 +310,17 @@ async def mark_admin_notification_read(
             detail="Notification not found.",
         )
     return None
+
+
+@router.delete("/{notification_id}")
+async def delete_admin_notification(notification_id: str, request: Request):
+    """Delete one admin notification without touching user or legacy records."""
+    result = await get_database(request).notifications.delete_one(
+        {"_id": notification_id, **admin_notification_query()}
+    )
+    if int(getattr(result, "deleted_count", 0) or 0) != 1:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Notification not found.",
+        )
+    return {"deleted": 1}

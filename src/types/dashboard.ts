@@ -28,8 +28,11 @@ export type DashboardPriceTrend = {
 }
 
 export type DashboardPriceChange = {
+  id?: string
   product_id: string
   product_name: string
+  category?: string
+  brand?: string
   store_id: string | null
   store_name: string
   currency: string
@@ -38,6 +41,23 @@ export type DashboardPriceChange = {
   change: number
   change_percent: number | null
   updated_at: string | null
+  observed_at?: string | null
+  previous_observed_at?: string | null
+  source?: string
+}
+
+export type UserDashboardPriceActivity = {
+  period: '7D' | '30D' | '90D' | '1Y'
+  price_drop_count: number
+  recent_changes: DashboardPriceChange[]
+  recent_drops: DashboardPriceChange[]
+  meta: {
+    source: string
+    eligible_offer_count: number
+    compared_observation_count: number
+    total_drop_event_count?: number
+    limitations?: string[]
+  }
 }
 
 export type DashboardStorePrice = {

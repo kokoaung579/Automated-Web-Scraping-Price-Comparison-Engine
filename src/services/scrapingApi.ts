@@ -70,6 +70,7 @@ export type ScrapingApiClient = {
   resumeJob: (jobId: string) => Promise<ScrapingJob>
   cancelJob: (jobId: string) => Promise<ScrapingJob>
   getExecutionHistory: (jobId: string) => Promise<ScrapingExecution[]>
+  getAllExecutionHistory: () => Promise<ScrapingExecution[]>
 }
 
 export function createScrapingApiClient(
@@ -161,6 +162,36 @@ export function createScrapingApiClient(
     return value
   }
 
+  async function readJobs(): Promise<ScrapingJob[]> {
+    const value = await request('getJobs')
+    if (!Array.isArray(value)) {
+      throw new Error('Scraping API getJobs returned an invalid job list.')
+    }
+    const jobs = value.map(normalizeScrapingJob).filter(isScrapingJob)
+    if (value.length > 0 && jobs.length === 0) {
+      throw new Error('Scraping API getJobs returned an invalid job list.')
+    }
+    return jobs
+  }
+
+  async function readExecutions(jobId: string): Promise<ScrapingExecution[]> {
+    const value = await request('getExecutionHistory', { jobId })
+    if (!Array.isArray(value)) {
+      throw new Error(
+        'Scraping API getExecutionHistory returned an invalid execution history.',
+      )
+    }
+    const executions = value
+      .map(normalizeScrapingExecution)
+      .filter(isScrapingExecution)
+    if (value.length > 0 && executions.length === 0) {
+      throw new Error(
+        'Scraping API getExecutionHistory returned an invalid execution history.',
+      )
+    }
+    return executions
+  }
+
   return {
     async getTargets() {
       const value = await request('getTargets')
@@ -170,38 +201,23 @@ export function createScrapingApiClient(
       return value
     },
     createJob: (input) => readJob('createJob', { body: input }),
-    async getJobs() {
-      const value = await request('getJobs')
-      if (!Array.isArray(value)) {
-        throw new Error('Scraping API getJobs returned an invalid job list.')
-      }
-      const jobs = value.map(normalizeScrapingJob).filter(isScrapingJob)
-      if (value.length > 0 && jobs.length === 0) {
-        throw new Error('Scraping API getJobs returned an invalid job list.')
-      }
-      return jobs
-    },
+    getJobs: readJobs,
     getJobDetails: (jobId) => readJob('getJobDetails', { jobId }),
     startJob: (jobId) => readJob('startJob', { jobId }),
     pauseJob: (jobId) => readJob('pauseJob', { jobId }),
     resumeJob: (jobId) => readJob('resumeJob', { jobId }),
     cancelJob: (jobId) => readJob('cancelJob', { jobId }),
-    async getExecutionHistory(jobId) {
-      const value = await request('getExecutionHistory', { jobId })
-      if (!Array.isArray(value)) {
-        throw new Error(
-          'Scraping API getExecutionHistory returned an invalid execution history.',
-        )
+    getExecutionHistory: readExecutions,
+    async getAllExecutionHistory() {
+      const jobs = await readJobs()
+      const histories = await Promise.all(
+        jobs.map((job) => readExecutions(job.id)),
+      )
+      const byId = new Map<string, ScrapingExecution>()
+      for (const execution of histories.flat()) {
+        if (!byId.has(execution.id)) byId.set(execution.id, execution)
       }
-      const executions = value
-        .map(normalizeScrapingExecution)
-        .filter(isScrapingExecution)
-      if (value.length > 0 && executions.length === 0) {
-        throw new Error(
-          'Scraping API getExecutionHistory returned an invalid execution history.',
-        )
-      }
-      return executions
+      return Array.from(byId.values())
     },
   }
 }

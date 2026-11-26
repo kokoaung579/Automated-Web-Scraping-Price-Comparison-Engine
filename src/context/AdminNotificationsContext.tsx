@@ -8,7 +8,11 @@ import {
 } from 'react'
 import type { ReactNode } from 'react'
 import { ApiConnectionError, api } from '../api/client'
-import type { AdminNotification } from '../api/client'
+import type {
+  AdminNotification,
+  AdminNotificationBulkDeleteResult,
+  AdminNotificationDeleteAllResult,
+} from '../api/client'
 
 const PENDING_LOSS_KEY = 'pricepilot-admin-notification-connection-loss'
 const RECENT_PAGE_SIZE = 5
@@ -23,9 +27,27 @@ export type AdminNotificationsContextValue = {
   refresh: () => Promise<void>
   markAsRead: (id: string) => Promise<void>
   markAllAsRead: () => Promise<void>
+  deleteNotification: (id: string) => Promise<{ deleted: number }>
+  bulkDeleteNotifications: (
+    ids: string[],
+  ) => Promise<AdminNotificationBulkDeleteResult>
+  deleteAllNotifications: () => Promise<AdminNotificationDeleteAllResult>
 }
 
 const noop = async () => {}
+const noopDelete = async () => ({ deleted: 0 })
+const noopBulkDelete = async (): Promise<AdminNotificationBulkDeleteResult> => ({
+  requested: 0,
+  deleted: 0,
+  failed_count: 0,
+  failed: [],
+})
+const noopDeleteAll =
+  async (): Promise<AdminNotificationDeleteAllResult> => ({
+    deleted: 0,
+    matched: 0,
+    remaining: 0,
+  })
 
 /**
  * Safe default so admin pages remain usable (and testable) when rendered
@@ -40,6 +62,9 @@ export const AdminNotificationsContext =
     refresh: noop,
     markAsRead: noop,
     markAllAsRead: noop,
+    deleteNotification: noopDelete,
+    bulkDeleteNotifications: noopBulkDelete,
+    deleteAllNotifications: noopDeleteAll,
   })
 
 function createEpisodeId(): string {
@@ -211,6 +236,18 @@ export function AdminNotificationsProvider({
     }
   }, [callApi])
 
+  const applyDeletion = useCallback((deletedIds: string[]) => {
+    if (deletedIds.length === 0) return
+    const deleted = new Set(deletedIds)
+    const unreadRemoved = recentRef.current.filter(
+      (item) => deleted.has(item.id) && !item.isRead,
+    ).length
+    setRecent((items) => items.filter((item) => !deleted.has(item.id)))
+    if (unreadRemoved > 0) {
+      setUnreadCount((count) => Math.max(0, count - unreadRemoved))
+    }
+  }, [])
+
   const markAsRead = useCallback(
     async (id: string) => {
       const wasUnread =
@@ -244,6 +281,55 @@ export function AdminNotificationsProvider({
     }
   }, [callApi, syncUnreadCount])
 
+  const deleteNotification = useCallback(
+    async (id: string) => {
+      try {
+        const result = await callApi(() => api.deleteAdminNotification(id))
+        applyDeletion([id])
+        setError('')
+        await syncUnreadCount()
+        return result
+      } catch (error) {
+        setError(messageFor(error, 'Unable to delete notification.'))
+        throw error
+      }
+    },
+    [applyDeletion, callApi, syncUnreadCount],
+  )
+
+  const bulkDeleteNotifications = useCallback(
+    async (ids: string[]) => {
+      try {
+        const result = await callApi(() =>
+          api.bulkDeleteAdminNotifications(ids),
+        )
+        const failedIds = new Set(result.failed.map((item) => item.id))
+        applyDeletion(ids.filter((id) => !failedIds.has(id)))
+        setError('')
+        await syncUnreadCount()
+        return result
+      } catch (error) {
+        setError(messageFor(error, 'Unable to delete notifications.'))
+        throw error
+      }
+    },
+    [applyDeletion, callApi, syncUnreadCount],
+  )
+
+  const deleteAllNotifications = useCallback(async () => {
+    try {
+      const result = await callApi(() => api.deleteAllAdminNotifications())
+      setRecent([])
+      setUnreadCount(0)
+      setError('')
+      await syncUnreadCount()
+      return result
+    } catch (error) {
+      setError(messageFor(error, 'Unable to delete all notifications.'))
+      throw error
+    }
+  }, [callApi, syncUnreadCount])
+
   const value: AdminNotificationsContextValue = {
     unreadCount,
     recent,
@@ -252,6 +338,9 @@ export function AdminNotificationsProvider({
     refresh,
     markAsRead,
     markAllAsRead,
+    deleteNotification,
+    bulkDeleteNotifications,
+    deleteAllNotifications,
   }
 
   return (

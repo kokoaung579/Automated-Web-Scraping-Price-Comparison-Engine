@@ -145,6 +145,22 @@ export function formatShortDate(value: string | null | undefined): string {
   )
 }
 
+/**
+ * Label an application-timezone calendar-day key without letting the UTC
+ * representation shift the label into the neighbouring day (for example in
+ * UTC+14 or UTC-10 zones).
+ */
+export function formatAppDayKey(value: string | null | undefined): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value?.trim() ?? '')
+  if (!match) return 'Unknown'
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const wallClockAsUtc = new Date(Date.UTC(year, month - 1, day, 12))
+  const offset = getTimeZoneOffsetMs(currentAppTimeZone, wallClockAsUtc)
+  return formatShortDate(new Date(wallClockAsUtc.getTime() - offset).toISOString())
+}
+
 export function formatDateTime(value: string | null | undefined): string {
   return formatAuditTimestamp(value)
 }
@@ -168,6 +184,32 @@ export function getYangonDayKey(
   const month = part('month')
   const day = part('day')
   return year && month && day ? `${year}-${month}-${day}` : null
+}
+
+/**
+ * Calendar-day keys for a trailing window, oldest first. `now` is injectable so
+ * date-boundary behavior can be tested without depending on the wall clock.
+ */
+export function getRecentAppDayKeys(
+  days: number,
+  now: Date = new Date(),
+): string[] {
+  if (!Number.isInteger(days) || days < 1) return []
+  const todayKey = getYangonDayKey(now.toISOString())
+  if (!todayKey) return []
+
+  const [year, month, day] = todayKey.split('-').map(Number)
+  const keys: string[] = []
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    // Start at midday in the intended wall-clock day, then remove the app
+    // timezone offset. This avoids UTC-only assumptions for large offsets.
+    const wallClockAsUtc = new Date(Date.UTC(year, month - 1, day - offset, 12))
+    const offsetMs = getTimeZoneOffsetMs(currentAppTimeZone, wallClockAsUtc)
+    const instant = new Date(wallClockAsUtc.getTime() - offsetMs)
+    const key = getYangonDayKey(instant.toISOString())
+    if (key) keys.push(key)
+  }
+  return keys
 }
 
 /** Convert a Yangon calendar-day filter value to a UTC query boundary. */

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import {
   ArrowDownRight,
   ArrowRight,
@@ -18,6 +19,8 @@ import type {
   AppOutletContext,
   ConnectionStatus,
 } from '../context/AppOutletContext'
+import { api } from '../api/client'
+import type { UserDashboardPriceActivity } from '../types/dashboard'
 
 const statusLabels: Record<ConnectionStatus, string> = {
   checking: 'Checking connection',
@@ -44,10 +47,33 @@ export function DashboardPage() {
     reloadData,
   } = useOutletContext<AppOutletContext>()
 
+  const [priceActivity, setPriceActivity] =
+    useState<UserDashboardPriceActivity | null>(null)
+  const [priceActivityLoading, setPriceActivityLoading] = useState(true)
+
+  useEffect(() => {
+    let active = true
+    api.userDashboardPrices()
+      .then((activity) => {
+        if (!active) return
+        setPriceActivity(activity)
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to load dashboard price activity', error)
+        if (!active) return
+        setPriceActivity(null)
+      })
+      .finally(() => {
+        if (active) setPriceActivityLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [])
+
   const storeCount = new Set(products.map((product) => product.store)).size
-  const priceDropCount = products.filter(
-    (product) => product.price < product.previousPrice,
-  ).length
+  const priceDropCount = priceActivity?.price_drop_count ?? 0
 
   return (
     <div className="space-y-7">
@@ -81,7 +107,7 @@ export function DashboardPage() {
             <StatCard
               label="Total Products"
               value={products.length}
-              detail="in the catalog"
+              detail="Catalog products"
               icon={PackageSearch}
               tone="blue"
               loading={dataSource === 'loading'}
@@ -89,7 +115,7 @@ export function DashboardPage() {
             <StatCard
               label="Total Stores"
               value={storeCount}
-              detail="in the catalog"
+              detail="Connected stores"
               icon={Store}
               tone="emerald"
               loading={dataSource === 'loading'}
@@ -97,15 +123,15 @@ export function DashboardPage() {
             <StatCard
               label="Price Drops"
               value={priceDropCount}
-              detail="from stored prices"
+              detail="Verified decreases"
               icon={ArrowDownRight}
               tone="emerald"
-              loading={dataSource === 'loading'}
+              loading={dataSource === 'loading' || priceActivityLoading}
             />
             <StatCard
               label="Watchlist"
               value={watchlistIds.length}
-              detail="saved products"
+              detail="Saved products"
               icon={Bookmark}
               tone="blue"
               loading={dataSource === 'loading'}
@@ -121,17 +147,21 @@ export function DashboardPage() {
             />
             <RecentPriceChanges
               products={products}
-              loading={dataSource === 'loading'}
+              changes={priceActivity?.recent_changes ?? []}
+              loading={dataSource === 'loading' || priceActivityLoading}
               empty={products.length === 0}
               searchQuery={searchQuery}
+              limitations={priceActivity?.meta?.limitations ?? []}
             />
           </section>
 
           <PriceHighlights
             products={products}
-            loading={dataSource === 'loading'}
+            drops={priceActivity?.recent_drops ?? []}
+            loading={dataSource === 'loading' || priceActivityLoading}
             empty={products.length === 0}
             searchQuery={searchQuery}
+            limitations={priceActivity?.meta?.limitations ?? []}
           />
         </>
       )}

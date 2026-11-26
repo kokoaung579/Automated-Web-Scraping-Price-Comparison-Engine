@@ -310,6 +310,21 @@ class NotificationApiTests(unittest.TestCase):
                 None,
             ),
             (
+                "delete",
+                "/api/admin/notifications/notification-1",
+                None,
+            ),
+            (
+                "post",
+                "/api/admin/notifications/bulk-delete",
+                {"notification_ids": ["notification-1"], "confirm": True},
+            ),
+            (
+                "post",
+                "/api/admin/notifications/delete-all",
+                {"confirm": True},
+            ),
+            (
                 "post",
                 "/api/admin/notifications/connection-episode",
                 {
@@ -460,6 +475,145 @@ class NotificationApiTests(unittest.TestCase):
             "/api/admin/notifications/does-not-exist/read"
         )
         self.assertEqual(missing.status_code, 404)
+
+    def test_single_delete_only_removes_admin_notifications(self):
+        first = self._seed_notification(title="Deletable")
+        second = self._seed_notification(title="Keep me")
+        user_owned = self._seed_notification(
+            category=None, type="price-alert", title="User notification"
+        )
+        del self.database.notifications.documents[user_owned["_id"]]["category"]
+
+        deleted = self.admin_client.delete(
+            f"/api/admin/notifications/{first['_id']}"
+        )
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(deleted.json(), {"deleted": 1})
+        self.assertNotIn(
+            first["_id"], self.database.notifications.documents
+        )
+        self.assertIn(second["_id"], self.database.notifications.documents)
+        self.assertIn(user_owned["_id"], self.database.notifications.documents)
+
+        missing = self.admin_client.delete(
+            f"/api/admin/notifications/{user_owned['_id']}"
+        )
+        self.assertEqual(missing.status_code, 404)
+        self.assertIn(user_owned["_id"], self.database.notifications.documents)
+
+        listing = self.admin_client.get("/api/admin/notifications").json()
+        self.assertEqual(listing["total"], 1)
+        self.assertEqual(listing["all_total"], 1)
+
+    def test_bulk_delete_reports_missing_and_failed_records(self):
+        first = self._seed_notification(title="Bulk one")
+        second = self._seed_notification(title="Bulk two")
+        missing_id = "notification-that-does-not-exist"
+
+        original_delete_one = self.database.notifications.delete_one
+
+        async def selective_delete(query):
+            if query["_id"] == second["_id"]:
+                raise RuntimeError("simulated delete failure")
+            return await original_delete_one(query)
+
+        with patch.object(
+            self.database.notifications,
+            "delete_one",
+            new=selective_delete,
+        ):
+            response = self.admin_client.post(
+                "/api/admin/notifications/bulk-delete",
+                json={
+                    "notification_ids": [first["_id"], second["_id"], missing_id],
+                    "confirm": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "requested": 3,
+                "deleted": 1,
+                "failed_count": 2,
+                "failed": [
+                    {"id": second["_id"], "reason": "delete failed"},
+                    {"id": missing_id, "reason": "not found"},
+                ],
+            },
+        )
+        self.assertNotIn(first["_id"], self.database.notifications.documents)
+        self.assertIn(second["_id"], self.database.notifications.documents)
+
+        no_confirm = self.admin_client.post(
+            "/api/admin/notifications/bulk-delete",
+            json={"notification_ids": [second["_id"]], "confirm": False},
+        )
+        self.assertEqual(no_confirm.status_code, 400)
+        invalid = self.admin_client.post(
+            "/api/admin/notifications/bulk-delete",
+            json={"notification_ids": ["  "], "confirm": True},
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertIn(second["_id"], self.database.notifications.documents)
+
+    def test_delete_all_removes_every_admin_notification_and_spares_others(self):
+        for index in range(6):
+            self._seed_notification(
+                category="scraping" if index % 2 else "product_import",
+                title=f"Across pages {index}",
+            )
+        legacy = self._seed_notification(
+            category=None, type="price-alert", title="Legacy"
+        )
+        del self.database.notifications.documents[legacy["_id"]]["category"]
+
+        before = self.admin_client.get(
+            "/api/admin/notifications?page=1&page_size=2"
+        ).json()
+        self.assertEqual(before["total"], 6)
+        self.assertEqual(before["all_total"], 6)
+
+        no_confirm = self.admin_client.post(
+            "/api/admin/notifications/delete-all", json={"confirm": False}
+        )
+        self.assertEqual(no_confirm.status_code, 400)
+        self.assertEqual(
+            len(self.database.notifications.documents), 7
+        )
+
+        deleted = self.admin_client.post(
+            "/api/admin/notifications/delete-all", json={"confirm": True}
+        )
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(
+            deleted.json(), {"deleted": 6, "matched": 6, "remaining": 0}
+        )
+        self.assertEqual(
+            list(self.database.notifications.documents), [legacy["_id"]]
+        )
+        after = self.admin_client.get("/api/admin/notifications").json()
+        self.assertEqual(after["total"], 0)
+        self.assertEqual(after["all_total"], 0)
+
+    def test_delete_all_database_failure_is_not_reported_as_success(self):
+        first = self._seed_notification(title="Survives failure")
+        failing_client = TestClient(self.app, raise_server_exceptions=False)
+        self.addCleanup(failing_client.close)
+        failing_client.cookies.set(SESSION_COOKIE, self.admin_token)
+
+        with patch.object(
+            self.database.notifications,
+            "delete_many",
+            new=AsyncMock(side_effect=RuntimeError("database unavailable")),
+        ):
+            response = failing_client.post(
+                "/api/admin/notifications/delete-all", json={"confirm": True}
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn(first["_id"], self.database.notifications.documents)
 
     def test_pagination_filtering_search_and_validation(self):
         base = datetime(2026, 1, 10, 12, 0, tzinfo=timezone.utc)

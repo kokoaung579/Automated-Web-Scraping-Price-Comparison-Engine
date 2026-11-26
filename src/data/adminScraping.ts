@@ -93,18 +93,25 @@ const statuses: readonly ScrapingJobStatus[] = [
   'paused',
 ]
 
-const statusAliases: Partial<Record<ScrapingJobStatus, ScrapingJobStatus>> = {
+const statusAliases: Partial<Record<string, ScrapingJobStatus>> = {
   queued: 'pending',
   paused: 'scheduled',
+  starting: 'running',
+  success: 'completed',
+  failure: 'failed',
 }
 
 export function normalizeScrapingJobStatus(
   status: unknown,
 ): ScrapingJobStatus | null {
-  if (typeof status !== 'string' || !statuses.includes(status as ScrapingJobStatus)) {
-    return null
-  }
-  return statusAliases[status as ScrapingJobStatus] ?? (status as ScrapingJobStatus)
+  if (typeof status !== 'string') return null
+  const value = status.toLowerCase()
+  return (
+    statusAliases[value] ??
+    (statuses.includes(value as ScrapingJobStatus)
+      ? (value as ScrapingJobStatus)
+      : null)
+  )
 }
 
 export function normalizeScrapingExecution(value: unknown): unknown {

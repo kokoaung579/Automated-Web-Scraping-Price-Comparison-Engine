@@ -1,8 +1,14 @@
-import { act, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AdminOverviewPage } from '../pages/admin/AdminOverviewPage'
+import type {
+  ScrapingExecution,
+  ScrapingJob,
+} from '../data/adminScraping'
 import type { DashboardResponse } from '../types/dashboard'
+import { getYangonDayKey } from '../utils/datetime'
+import { scrapingStatsFixture } from './scrapingStatsFixture'
 
 function jsonResponse(data: unknown, status = 200) {
   return {
@@ -126,12 +132,76 @@ function auditLog(index: number, timestamp: string) {
   }
 }
 
+function scrapingJob(id = 'job-1'): ScrapingJob {
+  return {
+    id,
+    store_id: 'amazon',
+    store_name: 'Amazon',
+    website_url: 'https://www.amazon.com',
+    status: 'scheduled',
+    last_run: null,
+    next_run: new Date(Date.now() + 86_400_000).toISOString(),
+    products_found: 0,
+    success_rate: 0,
+    executions: [],
+    updated_at: new Date().toISOString(),
+  }
+}
+
+function executionAt(
+  id: string,
+  startedAt: string,
+  status: ScrapingExecution['status'],
+): ScrapingExecution {
+  return {
+    id,
+    job_id: 'job-1',
+    started_at: startedAt,
+    finished_at: status === 'completed' || status === 'failed' ? startedAt : null,
+    status,
+    products_found: 10,
+    success_count: status === 'completed' ? 10 : 8,
+    failure_count: status === 'completed' ? 0 : 2,
+    products_created: 0,
+    products_refreshed: 10,
+    success_rate: status === 'completed' ? 100 : 80,
+    duration_seconds: 12,
+    errors: status === 'failed' ? ['Timed out'] : [],
+    logs: [],
+    trigger: 'scheduled',
+    attempts: 1,
+  }
+}
+
+function execution(
+  id: string,
+  daysAgo: number,
+  status: 'completed' | 'failed',
+): ScrapingExecution {
+  return executionAt(
+    id,
+    new Date(Date.now() - daysAgo * 86_400_000).toISOString(),
+    status,
+  )
+}
+
+function dayKeyDaysAgo(daysAgo: number): string {
+  const key = getYangonDayKey(
+    new Date(Date.now() - daysAgo * 86_400_000).toISOString(),
+  )
+  if (!key) throw new Error('Unable to compute test day key')
+  return key
+}
+
 function stubFetch(
   options: {
     dashboardResponse?: DashboardResponse
     dashboardFailed?: boolean
     auditResponse?: Response | Promise<Response>
     healthFailed?: boolean
+    scrapingExecutions?: ScrapingExecution[]
+    scrapingJobsFailed?: boolean
+    scrapingHistoryFailed?: boolean
   } = {},
 ) {
   const dashboard = options.dashboardFailed
@@ -141,6 +211,16 @@ function stubFetch(
   const health = options.healthFailed
     ? jsonResponse({ detail: 'Unavailable' }, 503)
     : jsonResponse({ status: 'ok' })
+  const executions = options.scrapingExecutions ?? [
+    execution('exec-1', 0, 'completed'),
+    execution('exec-2', 1, 'failed'),
+  ]
+  const jobs = options.scrapingJobsFailed
+    ? jsonResponse({ detail: 'Scraping jobs API unavailable' }, 500)
+    : jsonResponse([scrapingJob()])
+  const histories = options.scrapingHistoryFailed
+    ? jsonResponse({ detail: 'Execution history API unavailable' }, 500)
+    : jsonResponse(executions)
 
   vi.stubGlobal(
     'fetch',
@@ -155,6 +235,16 @@ function stubFetch(
       }
       if (url.pathname === '/api/admin/audit-logs') {
         return auditResponse
+      }
+      if (url.pathname === '/api/admin/scraping/jobs') {
+        return jobs
+      }
+      if (
+        /^\/api\/admin\/scraping\/jobs\/[^/]+\/executions$/.test(
+          url.pathname,
+        )
+      ) {
+        return histories
       }
 
       return jsonResponse({ detail: 'Not found' }, 404)
@@ -180,6 +270,11 @@ function kpiCard(label: string): HTMLElement {
   return labelElement.closest('a') as HTMLElement
 }
 
+function metricCard(label: string): HTMLElement {
+  const labelElement = screen.getByText(label)
+  return labelElement.parentElement as HTMLElement
+}
+
 describe('Admin Overview', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -195,9 +290,28 @@ describe('Admin Overview', () => {
     expect(within(kpiCard('Catalog Products')).getByText('19')).toBeDefined()
     expect(within(kpiCard('Managed Stores')).getByText('4')).toBeDefined()
     expect(within(kpiCard('Categories')).getByText('3')).toBeDefined()
-    expect(within(kpiCard('Scraping Jobs')).getByText('2')).toBeDefined()
-    expect(within(kpiCard('Completed / Failed Jobs')).getByText('1 / 1')).toBeDefined()
     expect(users).toBeDefined()
+
+    const keyMetrics = sectionByHeading('Key metrics')
+    const kpiGrid = keyMetrics.querySelector('div.grid')
+    expect(kpiGrid?.className).toContain('grid-cols-1')
+    expect(kpiGrid?.className).toContain('sm:grid-cols-2')
+    expect(kpiGrid?.className).toContain('lg:grid-cols-4')
+    expect(kpiGrid?.className).not.toContain('2xl:grid-cols-6')
+    expect(within(keyMetrics).getAllByRole('link')).toHaveLength(4)
+    expect(within(keyMetrics).queryByText('Scraping Runs')).toBeNull()
+    expect(within(keyMetrics).queryByText('Completed / Failed Runs')).toBeNull()
+
+    const scrapingSection = sectionByHeading('Scraping Activity')
+    for (const label of [
+      'Total Runs',
+      'Completed Runs',
+      'Failed Runs',
+      'Running Jobs',
+      'Success Rate',
+    ]) {
+      expect(within(scrapingSection).getByText(label)).toBeDefined()
+    }
 
     expect(screen.getAllByText('Connected').length).toBeGreaterThan(0)
     expect(screen.getByRole('heading', { name: 'Backend API' })).toBeDefined()
@@ -210,27 +324,19 @@ describe('Admin Overview', () => {
     expect(screen.queryByText(/simulated/i)).toBeNull()
   })
 
-  it('shows a clear empty state when no scraping activity records are available', async () => {
-    stubFetch({
-      dashboardResponse: dashboardResponse({
-        recent_activity: {
-          items: [],
-          categories: [
-            { key: 'product_additions', label: 'Product additions', count: 0 },
-            { key: 'product_updates', label: 'Product updates', count: 0 },
-            { key: 'store_changes', label: 'Store changes', count: 0 },
-            { key: 'user_activities', label: 'User activities', count: 0 },
-            { key: 'scraping_activities', label: 'Scraping activities', count: 0 },
-          ],
-          total_events: 0,
-        },
-      }),
-    })
+  it('shows a clear empty state when no execution records are available', async () => {
+    stubFetch({ scrapingExecutions: [] })
     renderOverview()
 
-    expect(await screen.findByText('No scraping activity available')).toBeDefined()
-    expect(within(kpiCard('Scraping Jobs')).getByText('0')).toBeDefined()
-    expect(within(kpiCard('Completed / Failed Jobs')).getByText('0 / 0')).toBeDefined()
+    expect(
+      await screen.findByText(
+        'No scraping execution history available for this period.',
+      ),
+    ).toBeDefined()
+    const section = sectionByHeading('Scraping Activity')
+    expect(within(section).getByText('Total Runs')).toBeDefined()
+    expect(within(section).getAllByText('0').length).toBeGreaterThan(0)
+    expect(within(section).getByText('0%')).toBeDefined()
   })
 
   it('shows the newest backend audit records with actor, timestamp, and description', async () => {
@@ -318,5 +424,182 @@ describe('Admin Overview', () => {
       resolveAudit(jsonResponse({ logs: [], total_events: 0 }))
     })
     expect(await screen.findByText('No audit records available')).toBeDefined()
+  })
+
+  it('uses real execution records for the default 7-day range', async () => {
+    stubFetch({
+      scrapingExecutions: [
+        execution('exec-today', 0, 'completed'),
+        execution('exec-day-6', 6, 'failed'),
+        execution('exec-day-5', 5, 'completed'),
+        execution('exec-day-6', 6, 'failed'),
+        execution('exec-day-7', 7, 'completed'),
+        execution('exec-day-89', 89, 'completed'),
+      ],
+    })
+    renderOverview()
+
+    const section = sectionByHeading('Scraping Activity')
+    expect(await within(section).findByText('3 executions · 7 days')).toBeDefined()
+    expect(screen.getByRole('button', { name: '7 Days' }).getAttribute('aria-pressed')).toBe('true')
+    expect(within(metricCard('Total Runs')).getByText('3')).toBeDefined()
+    expect(within(metricCard('Completed Runs')).getByText('2')).toBeDefined()
+    expect(within(metricCard('Failed Runs')).getByText('1')).toBeDefined()
+    expect(within(metricCard('Success Rate')).getByText('67%')).toBeDefined()
+    expect(
+      within(section).queryByText(
+        'No scraping execution history available for this period.',
+      ),
+    ).toBeNull()
+  })
+
+  it('counts non-finalized executions in Total Runs but excludes them from finalized metrics', async () => {
+    stubFetch({
+      scrapingExecutions: [
+        executionAt('exec-completed', new Date().toISOString(), 'completed'),
+        executionAt('exec-running', new Date().toISOString(), 'running'),
+      ],
+    })
+    renderOverview()
+
+    const section = sectionByHeading('Scraping Activity')
+    expect(await within(section).findByText('2 executions · 7 days')).toBeDefined()
+    expect(within(metricCard('Total Runs')).getByText('2')).toBeDefined()
+    expect(within(metricCard('Completed Runs')).getByText('1')).toBeDefined()
+    expect(within(metricCard('Failed Runs')).getByText('0')).toBeDefined()
+    expect(within(metricCard('Success Rate')).getByText('100%')).toBeDefined()
+  })
+
+  it('updates metrics immediately when switching between 7, 30, and 90 days without refetching', async () => {
+    stubFetch({
+      scrapingExecutions: [
+        execution('exec-today', 0, 'completed'),
+        execution('exec-day-29', 29, 'failed'),
+        execution('exec-day-89', 89, 'completed'),
+        execution('exec-day-90', 90, 'failed'),
+      ],
+    })
+    renderOverview()
+
+    const section = sectionByHeading('Scraping Activity')
+    expect(await within(section).findByText('1 execution · 7 days')).toBeDefined()
+
+    fireEvent.click(screen.getByRole('button', { name: '30 Days' }))
+    expect(within(section).getByText('2 executions · 30 days')).toBeDefined()
+    expect(within(metricCard('Total Runs')).getByText('2')).toBeDefined()
+    expect(screen.getByRole('button', { name: '30 Days' }).getAttribute('aria-pressed')).toBe('true')
+
+    fireEvent.click(screen.getByRole('button', { name: '90 Days' }))
+    expect(within(section).getByText('3 executions · 90 days')).toBeDefined()
+    expect(within(metricCard('Completed Runs')).getByText('2')).toBeDefined()
+    expect(within(metricCard('Failed Runs')).getByText('1')).toBeDefined()
+
+    fireEvent.click(screen.getByRole('button', { name: '7 Days' }))
+    expect(within(section).getByText('1 execution · 7 days')).toBeDefined()
+    expect(within(metricCard('Total Runs')).getByText('1')).toBeDefined()
+
+    const historyCalls = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.filter(([input]) =>
+        String(input).includes('/executions'),
+      )
+    expect(historyCalls).toHaveLength(1)
+  })
+
+  it('reconciles one isolated scraping dataset across 7, 30, and 90 day ranges', async () => {
+    const expected = scrapingStatsFixture.expected.overview
+    const baseDashboard = dashboardResponse()
+    stubFetch({
+      dashboardResponse: {
+        ...baseDashboard,
+        kpis: {
+          ...baseDashboard.kpis,
+          active_scraping_jobs: expected[7].runningJobs,
+        },
+      },
+      scrapingExecutions: scrapingStatsFixture.executions,
+    })
+    renderOverview()
+
+    const section = sectionByHeading('Scraping Activity')
+    const assertMetrics = (days: 7 | 30 | 90) => {
+      const values = expected[days]
+      expect(
+        within(section).getByText(`${values.totalRuns} executions · ${days} days`),
+      ).toBeDefined()
+      expect(within(metricCard('Total Runs')).getByText(String(values.totalRuns))).toBeDefined()
+      expect(within(metricCard('Completed Runs')).getByText(String(values.completedRuns))).toBeDefined()
+      expect(within(metricCard('Failed Runs')).getByText(String(values.failedRuns))).toBeDefined()
+      expect(within(metricCard('Running Jobs')).getByText(String(values.runningJobs))).toBeDefined()
+      expect(within(metricCard('Success Rate')).getByText(`${values.successRate}%`)).toBeDefined()
+    }
+
+    expect(
+      await within(section).findByText(`${expected[7].totalRuns} executions · 7 days`),
+    ).toBeDefined()
+    assertMetrics(7)
+
+    fireEvent.click(screen.getByRole('button', { name: '30 Days' }))
+    assertMetrics(30)
+
+    fireEvent.click(screen.getByRole('button', { name: '90 Days' }))
+    assertMetrics(90)
+
+    const historyCalls = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.filter(([input]) => String(input).includes('/executions'))
+    expect(historyCalls).toHaveLength(1)
+  })
+
+  it('applies application-timezone calendar boundaries to execution dates', async () => {
+    stubFetch({
+      scrapingExecutions: [
+        executionAt(
+          'included-start',
+          `${dayKeyDaysAgo(6)}T00:00:00+06:30`,
+          'completed',
+        ),
+        executionAt(
+          'excluded-before',
+          `${dayKeyDaysAgo(7)}T23:59:00+06:30`,
+          'failed',
+        ),
+        executionAt(
+          'included-today',
+          `${dayKeyDaysAgo(0)}T23:59:00+06:30`,
+          'completed',
+        ),
+      ],
+    })
+    renderOverview()
+
+    const section = sectionByHeading('Scraping Activity')
+    expect(await within(section).findByText('2 executions · 7 days')).toBeDefined()
+    expect(within(metricCard('Completed Runs')).getByText('2')).toBeDefined()
+    expect(within(metricCard('Failed Runs')).getByText('0')).toBeDefined()
+  })
+
+  it('distinguishes an unavailable execution history API from an empty history', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    stubFetch({ scrapingHistoryFailed: true })
+    renderOverview()
+
+    expect(await screen.findByText('Scraping execution history unavailable')).toBeDefined()
+    expect(screen.getAllByText(/Execution history API unavailable/).length).toBeGreaterThan(0)
+    expect(
+      screen.queryByText(
+        'No scraping execution history available for this period.',
+      ),
+    ).toBeNull()
+    expect(within(metricCard('Total Runs')).getByText('—')).toBeDefined()
+  })
+
+  it('shows an unavailable state when the jobs API cannot enumerate execution histories', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    stubFetch({ scrapingJobsFailed: true })
+    renderOverview()
+
+    expect(await screen.findByText('Scraping execution history unavailable')).toBeDefined()
+    expect(screen.getAllByText(/Scraping jobs API unavailable/).length).toBeGreaterThan(0)
   })
 })

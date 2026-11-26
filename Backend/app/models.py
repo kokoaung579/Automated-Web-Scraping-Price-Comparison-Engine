@@ -224,6 +224,8 @@ class PriceHistoryPoint(APIModel):
 class StoreHistory(APIModel):
     store: str
     points: list[PriceHistoryPoint]
+    store_id: str | None = None
+    currency: str | None = None
     availability: str | None = None
     verification_status: str | None = None
     is_test_site: bool = False
@@ -456,6 +458,8 @@ class PriceHistoryPoint(APIModel):
 class StoreHistory(APIModel):
     store: str
     points: list[PriceHistoryPoint]
+    store_id: str | None = None
+    currency: str | None = None
     availability: str | None = None
     verification_status: str | None = None
     is_test_site: bool = False

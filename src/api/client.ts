@@ -14,7 +14,10 @@ import type { AuthUser, BrowserAccountImport, UserStatus } from '../types/auth'
 import type { AuditLogsQuery, AuditLogsResponse } from '../data/adminAuditLogs'
 import type { AdminCategory } from '../data/adminCategories'
 import type { AdminStore } from '../data/adminStores'
-import type { DashboardResponse } from '../types/dashboard'
+import type {
+  DashboardResponse,
+  UserDashboardPriceActivity,
+} from '../types/dashboard'
 import type {
   ComparisonAvailability,
   ComparisonQuery,
@@ -46,9 +49,23 @@ export type AdminNotification = {
 export type AdminNotificationsResponse = {
   items: AdminNotification[]
   total: number
+  all_total?: number
   unread: number
   page: number
   page_size: number
+}
+
+export type AdminNotificationBulkDeleteResult = {
+  requested: number
+  deleted: number
+  failed_count: number
+  failed: { id: string; reason: string }[]
+}
+
+export type AdminNotificationDeleteAllResult = {
+  deleted: number
+  matched: number
+  remaining: number
 }
 
 export type AdminNotificationSettings = {
@@ -148,6 +165,11 @@ export type ScrapingLog = {
 export type StoreHistory = {
   store: string
   points: PriceHistoryPoint[]
+  store_id?: string | null
+  currency?: string | null
+  availability?: string | null
+  verification_status?: string | null
+  is_test_site?: boolean
 }
 
 export type Channel3Offer = {
@@ -426,6 +448,11 @@ export const api = {
 
   dashboard: () => request<DashboardResponse>('/admin/dashboard'),
 
+  userDashboardPrices: (period: PriceHistoryPeriod = '30D') =>
+    request<UserDashboardPriceActivity>(
+      `/user/dashboard/prices?period=${encodeURIComponent(period)}`,
+    ),
+
   auditLogs: (query: AuditLogsQuery = {}) => {
     const params = new URLSearchParams()
     const values: Record<string, string | number | undefined> = {
@@ -475,6 +502,27 @@ export const api = {
   markAllAdminNotificationsRead: () =>
     request<{ updated: number }>('/admin/notifications/read-all', {
       method: 'POST',
+    }),
+
+  deleteAdminNotification: (notificationId: string) =>
+    request<{ deleted: number }>(
+      `/admin/notifications/${encodeURIComponent(notificationId)}`,
+      { method: 'DELETE' },
+    ),
+
+  bulkDeleteAdminNotifications: (notificationIds: string[]) =>
+    request<AdminNotificationBulkDeleteResult>('/admin/notifications/bulk-delete', {
+      method: 'POST',
+      body: JSON.stringify({
+        notification_ids: notificationIds,
+        confirm: true,
+      }),
+    }),
+
+  deleteAllAdminNotifications: () =>
+    request<AdminNotificationDeleteAllResult>('/admin/notifications/delete-all', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true }),
     }),
 
   adminNotificationSettings: () =>

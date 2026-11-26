@@ -33,6 +33,11 @@ LEGACY_STATUS_ALIASES = {
     "queued": "pending",
     "paused": "scheduled",
     "starting": "running",
+    # Older execution logs used success/failure instead of the canonical
+    # completed/failed values. Normalize at the backend boundary so response
+    # validation and both admin pages agree on execution status.
+    "success": "completed",
+    "failure": "failed",
 }
 
 STARTABLE_STATUSES = frozenset({"pending", "scheduled", "completed", "failed"})
@@ -54,7 +59,7 @@ ALLOWED_TRANSITIONS = {
 
 
 def normalize_status(value: str | None) -> str:
-    """Return the canonical status for current and legacy job documents."""
+    """Return the canonical status for current and legacy job/execution records."""
     if not value:
         return "pending"
     return LEGACY_STATUS_ALIASES.get(str(value).lower(), str(value).lower())

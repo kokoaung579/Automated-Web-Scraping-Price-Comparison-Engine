@@ -2,8 +2,6 @@ import { createElement, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   ArrowDown,
-  ArrowLeft,
-  ArrowRight,
   ArrowUp,
   Boxes,
   Check,
@@ -23,6 +21,7 @@ import {
   X,
 } from 'lucide-react'
 import type { DemoProduct } from '../../data/products'
+import { ProductPagination } from '../../components/ProductPagination'
 import {
   PRODUCT_AVAILABILITIES,
   PRODUCT_REQUIRED_FIELDS,
@@ -43,6 +42,10 @@ import type {
   ManualOfferRecord,
   ManualOfferVerificationRequest,
 } from '../../types/manualOffer'
+import {
+  DEFAULT_PRODUCT_PAGE_SIZE,
+  type ProductPageSize,
+} from '../../utils/productPagination'
 import {
   api,
   type BulkDeleteResponse,
@@ -73,7 +76,6 @@ type ProductFormValues = Pick<
 const fieldClassName =
   'h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10'
 const labelClassName = 'mb-1.5 block text-[11px] font-medium text-slate-300'
-const PRODUCTS_PER_PAGE = 15
 
 function ProductThumbnail({ product }: { product: Product }) {
   const [imageFailed, setImageFailed] = useState(false)
@@ -657,7 +659,7 @@ function DeleteProductDialog({
           </span>{' '}
           will be removed from the product catalog.
         </p>
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <button
             type="button"
             onClick={onCancel}
@@ -1589,7 +1591,7 @@ function ManualOfferVerificationDialog({
                   <p className="mb-3 text-xs text-emerald-300">{success}</p>
                 )}
 
-                <div className="flex items-center justify-end gap-2 border-t border-white/[0.06] pt-4">
+                <div className="flex flex-col-reverse gap-2 border-t border-white/[0.06] pt-4 sm:flex-row sm:items-center sm:justify-end">
                   <button
                     type="button"
                     onClick={onClose}
@@ -1631,6 +1633,7 @@ export function AdminProductsPage() {
   const [storeFilter, setStoreFilter] = useState('all')
   const [availabilityFilter, setAvailabilityFilter] = useState('all')
   const [sourceFilter, setSourceFilter] = useState('all')
+  const [pageSize, setPageSize] = useState<ProductPageSize>(DEFAULT_PRODUCT_PAGE_SIZE)
   const [page, setPage] = useState(1)
   const [formOpen, setFormOpen] = useState(false)
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
@@ -1773,21 +1776,17 @@ export function AdminProductsPage() {
 
   // Pagination is derived from the filtered catalog, so adding, editing,
   // importing or deleting a product changes the page count automatically.
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filteredProducts.length / PRODUCTS_PER_PAGE),
-  )
+  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / pageSize))
   const currentPage = Math.min(page, totalPages)
-  const pageStartIndex = (currentPage - 1) * PRODUCTS_PER_PAGE
+  const pageStartIndex = (currentPage - 1) * pageSize
   const pageEndIndex = Math.min(
-    pageStartIndex + PRODUCTS_PER_PAGE,
+    pageStartIndex + pageSize,
     filteredProducts.length,
   )
   const pageProducts = filteredProducts.slice(
     pageStartIndex,
-    pageStartIndex + PRODUCTS_PER_PAGE,
+    pageStartIndex + pageSize,
   )
-  const pageNumbers = Array.from({ length: totalPages }, (_, index) => index + 1)
 
   // If a refresh leaves fewer pages than before (for example after a delete),
   // move back to the last page that still has products.
@@ -2579,7 +2578,7 @@ export function AdminProductsPage() {
               >
                 Clear Selection
               </button>
-              {filteredProducts.length > PRODUCTS_PER_PAGE && (
+              {filteredProducts.length > pageSize && (
                 <button
                   type="button"
                   onClick={toggleAllFilteredSelection}
@@ -2792,52 +2791,19 @@ export function AdminProductsPage() {
           </div>
         )}
 
-        <nav
-          aria-label="Product catalog pagination"
-          className="flex flex-col gap-3 border-t border-white/[0.06] px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5"
-        >
-          <p className="text-[10px] text-slate-500">
-            {`Showing ${filteredProducts.length === 0 ? 0 : pageStartIndex + 1}–${pageEndIndex} of ${filteredProducts.length} products`}
-          </p>
-          <div className="flex items-center gap-1.5 self-end sm:self-auto">
-            <button
-              type="button"
-              onClick={() => setPage(currentPage - 1)}
-              disabled={currentPage === 1}
-              aria-label="Previous page"
-              className="rounded-lg border border-white/[0.08] p-2 text-slate-400 transition hover:bg-white/[0.04] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
-            >
-              <ArrowLeft aria-hidden="true" size={14} />
-            </button>
-            <div className="flex max-w-[15rem] items-center gap-1 overflow-x-auto sm:max-w-none">
-              {pageNumbers.map((pageNumber) => (
-                <button
-                  key={pageNumber}
-                  type="button"
-                  onClick={() => setPage(pageNumber)}
-                  aria-label={`Page ${pageNumber}`}
-                  aria-current={pageNumber === currentPage ? 'page' : undefined}
-                  className={`min-w-7 rounded-lg border px-2 py-1.5 text-[10px] font-medium transition ${
-                    pageNumber === currentPage
-                      ? 'border-blue-400/40 bg-blue-500 text-white'
-                      : 'border-white/[0.08] text-slate-400 hover:bg-white/[0.04] hover:text-white'
-                  }`}
-                >
-                  {pageNumber}
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() => setPage(currentPage + 1)}
-              disabled={currentPage >= totalPages}
-              aria-label="Next page"
-              className="rounded-lg border border-white/[0.08] p-2 text-slate-400 transition hover:bg-white/[0.04] hover:text-white disabled:cursor-not-allowed disabled:opacity-35"
-            >
-              <ArrowRight aria-hidden="true" size={14} />
-            </button>
-          </div>
-        </nav>
+        <ProductPagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredProducts.length}
+          rangeStart={filteredProducts.length === 0 ? 0 : pageStartIndex + 1}
+          rangeEnd={pageEndIndex}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size)
+            setPage(1)
+          }}
+        />
       </section>
 
       <p className="flex items-center justify-center gap-1.5 pb-1 text-[9px] text-slate-600">

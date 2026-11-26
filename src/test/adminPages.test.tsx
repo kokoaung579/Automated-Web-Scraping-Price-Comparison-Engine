@@ -58,6 +58,7 @@ let backendUsers: AuthUser[] = []
 let backendSession: AuthUser | null = null
 let failNextUserDelete = false
 let storeCreateRequests = 0
+let storeDeleteError: { status: number; detail: string } | null = null
 let productAuditCalls: Array<{
   kind: 'import' | 'export' | 'delete' | 'verify_manual_offer'
   payload: Record<string, unknown>
@@ -902,6 +903,12 @@ async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
       return jsonResponse({ message: 'Store updated successfully.', store: updated })
     }
     if (method === 'DELETE') {
+      if (storeDeleteError) {
+        return jsonResponse(
+          { detail: storeDeleteError.detail },
+          storeDeleteError.status,
+        )
+      }
       const store = backendStores.find((item) => item.store_id === storeId)
       if (!store) return jsonResponse({ detail: 'Store not found.' }, 404)
       if (store.product_count > 0) {
@@ -1298,6 +1305,7 @@ describe('admin and shared user pages', () => {
     backendSession = null
     failNextUserDelete = false
     storeCreateRequests = 0
+    storeDeleteError = null
     productAuditCalls = []
     failBulkDeleteIds = new Set()
     lastExportedBlob = null
@@ -2551,6 +2559,83 @@ describe('admin and shared user pages', () => {
       .toBe(true)
   })
 
+  it('deletes an unlinked store and refreshes the list without a page reload', async () => {
+    const user = userEvent.setup()
+    const unlinkedStore = {
+      ...amazonStore,
+      store_id: 'test-store',
+      store_name: 'Test Store',
+      website_url: 'https://example.com',
+      product_count: 0,
+    }
+    backendStores = [unlinkedStore]
+
+    render(<AdminStoresPage />)
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Delete Test Store' }),
+    )
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', {
+        name: 'Delete store',
+      }),
+    )
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: 'Delete Test Store' }),
+      ).toBeNull()
+    })
+    expect(screen.getByRole('status').textContent).toContain('Test Store deleted.')
+    expect(backendStores).toHaveLength(0)
+
+    const fetchMock = vi.mocked(globalThis.fetch)
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input) === '/api/admin/stores/test-store' &&
+          init?.method === 'DELETE',
+      ),
+    ).toBe(true)
+  })
+
+  it('shows the backend deletion error and keeps the store listed', async () => {
+    const user = userEvent.setup()
+    backendStores = [
+      {
+        ...amazonStore,
+        store_id: 'test-store',
+        store_name: 'Test Store',
+        website_url: 'https://example.com',
+        product_count: 0,
+      },
+    ]
+    storeDeleteError = {
+      status: 409,
+      detail: 'Cannot delete this store because it is linked to 1 products and 2 offers.',
+    }
+
+    render(<AdminStoresPage />)
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Delete Test Store' }),
+    )
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', {
+        name: 'Delete store',
+      }),
+    )
+
+    expect(await screen.findByRole('alert')).toBeDefined()
+    expect(screen.getByRole('alert').textContent).toContain(
+      'linked to 1 products and 2 offers',
+    )
+    expect(
+      screen.getByRole('button', { name: 'Delete Test Store' }),
+    ).toBeDefined()
+    expect(backendStores).toHaveLength(1)
+  })
+
   it('runs a real job through the backend and shows execution error details', async () => {
     const user = userEvent.setup()
     render(<AdminScrapingPage />)
@@ -2841,7 +2926,7 @@ describe('admin and shared user pages', () => {
     expect(screen.getByText('MongoDB connected')).toBeDefined()
   })
 
-  it('paginates 18 catalog products into 15 on the first page and 3 on the second', async () => {
+  it('paginates 18 catalog products into 10 on the first page and 8 on the second', async () => {
     const user = userEvent.setup()
     seedAccounts('admin@example.test', 'Admin')
     backendProducts = paginatedProductFixtures(18)
@@ -2849,41 +2934,47 @@ describe('admin and shared user pages', () => {
     render(<AdminProductsPage />)
     const firstPageTable = await screen.findByRole('table')
     await waitFor(() =>
-      expect(within(firstPageTable).getAllByRole('row')).toHaveLength(16),
+      expect(within(firstPageTable).getAllByRole('row')).toHaveLength(11),
     )
-    expect(screen.getByText('Showing 1–15 of 18 products')).toBeDefined()
+    expect(screen.getByText('Showing 1–10 of 18 products')).toBeDefined()
+    expect(screen.getByText('Page 1 of 2')).toBeDefined()
     expect(within(firstPageTable).getByText('Page Product 1')).toBeDefined()
-    expect(within(firstPageTable).getByText('Page Product 15')).toBeDefined()
-    expect(within(firstPageTable).queryByText('Page Product 16')).toBeNull()
+    expect(within(firstPageTable).getByText('Page Product 10')).toBeDefined()
+    expect(within(firstPageTable).queryByText('Page Product 11')).toBeNull()
+    expect(screen.getByLabelText('Products per page')).toHaveProperty('value', '10')
+
+    const pagination = within(
+      screen.getByRole('navigation', { name: 'Product catalog pagination' }),
+    )
+    expect(pagination.getByRole('button', { name: 'Previous page' })).toHaveProperty(
+      'disabled',
+      true,
+    )
     expect(
-      (screen.getByRole('button', { name: 'Previous page' }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true)
-    expect(
-      screen.getByRole('button', { name: 'Page 1' }).getAttribute('aria-current'),
+      pagination.getByRole('button', { name: 'Go to page 1' }).getAttribute('aria-current'),
     ).toBe('page')
-    expect(screen.getByRole('button', { name: 'Page 2' })).toBeDefined()
-    expect(screen.queryByRole('button', { name: 'Page 3' })).toBeNull()
+    expect(pagination.getByRole('button', { name: 'Go to page 2' })).toBeDefined()
+    expect(pagination.queryByRole('button', { name: 'Go to page 3' })).toBeNull()
 
-    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    await user.click(pagination.getByRole('button', { name: 'Next page' }))
     const secondPageTable = screen.getByRole('table')
-    expect(await screen.findByText('Showing 16–18 of 18 products')).toBeDefined()
-    expect(within(secondPageTable).getAllByRole('row')).toHaveLength(4)
-    expect(within(secondPageTable).getByText('Page Product 16')).toBeDefined()
+    expect(await screen.findByText('Showing 11–18 of 18 products')).toBeDefined()
+    expect(within(secondPageTable).getAllByRole('row')).toHaveLength(9)
+    expect(within(secondPageTable).getByText('Page Product 11')).toBeDefined()
     expect(within(secondPageTable).getByText('Page Product 18')).toBeDefined()
-    expect(within(secondPageTable).queryByText('Page Product 15')).toBeNull()
-    expect(
-      (screen.getByRole('button', { name: 'Next page' }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true)
-    expect(
-      (screen.getByRole('button', { name: 'Previous page' }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(false)
+    expect(within(secondPageTable).queryByText('Page Product 10')).toBeNull()
+    expect(pagination.getByRole('button', { name: 'Next page' })).toHaveProperty(
+      'disabled',
+      true,
+    )
+    expect(pagination.getByRole('button', { name: 'Previous page' })).toHaveProperty(
+      'disabled',
+      false,
+    )
 
-    await user.click(screen.getByRole('button', { name: 'Page 1' }))
+    await user.click(pagination.getByRole('button', { name: 'Go to page 1' }))
     expect(await screen.findByText('Page Product 1')).toBeDefined()
-    expect(screen.getByText('Showing 1–15 of 18 products')).toBeDefined()
+    expect(screen.getByText('Showing 1–10 of 18 products')).toBeDefined()
   })
 
   it('resets to page 1 for every filter and shows an empty state when nothing matches', async () => {
@@ -2892,30 +2983,30 @@ describe('admin and shared user pages', () => {
     backendProducts = paginatedProductFixtures(18)
 
     render(<AdminProductsPage />)
-    await screen.findByText('Showing 1–15 of 18 products')
+    await screen.findByText('Showing 1–10 of 18 products')
     await user.click(screen.getByRole('button', { name: 'Next page' }))
-    expect(screen.getByText('Showing 16–18 of 18 products')).toBeDefined()
+    expect(screen.getByText('Showing 11–18 of 18 products')).toBeDefined()
 
     const search = screen.getByRole('searchbox', { name: 'Search products' })
     fireEvent.change(search, { target: { value: 'Page Product 17' } })
     expect(await screen.findByText('Showing 1–1 of 1 products')).toBeDefined()
     expect(
-      screen.getByRole('button', { name: 'Page 1' }).getAttribute('aria-current'),
+      screen.getByRole('button', { name: 'Go to page 1' }).getAttribute('aria-current'),
     ).toBe('page')
-    expect(screen.queryByRole('button', { name: 'Page 2' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Go to page 2' })).toBeNull()
 
     fireEvent.change(search, { target: { value: '' } })
-    expect(await screen.findByText('Showing 1–15 of 18 products')).toBeDefined()
+    expect(await screen.findByText('Showing 1–10 of 18 products')).toBeDefined()
 
     await user.click(screen.getByRole('button', { name: 'Next page' }))
-    expect(screen.getByText('Showing 16–18 of 18 products')).toBeDefined()
+    expect(screen.getByText('Showing 11–18 of 18 products')).toBeDefined()
     await user.selectOptions(
       screen.getByLabelText('Filter by category'),
       getProductCategories()[0],
     )
     expect(await screen.findByText('Showing 1–9 of 9 products')).toBeDefined()
     expect(
-      screen.getByRole('button', { name: 'Page 1' }).getAttribute('aria-current'),
+      screen.getByRole('button', { name: 'Go to page 1' }).getAttribute('aria-current'),
     ).toBe('page')
 
     fireEvent.change(search, { target: { value: 'No Such Product' } })
@@ -2934,13 +3025,13 @@ describe('admin and shared user pages', () => {
 
     render(<AdminProductsPage />)
     await user.click(await screen.findByLabelText('Select all visible products'))
-    expect(screen.getByText('15 products selected')).toBeDefined()
+    expect(screen.getByText('10 products selected')).toBeDefined()
     expect(
       screen.getByRole('button', { name: 'Select all 18 filtered products' }),
     ).toBeDefined()
 
     await user.click(screen.getByRole('button', { name: 'Next page' }))
-    expect(screen.getByText('15 products selected')).toBeDefined()
+    expect(screen.getByText('10 products selected')).toBeDefined()
     const headerCheckbox = screen.getByLabelText(
       'Select all visible products',
     ) as HTMLInputElement
@@ -3047,9 +3138,9 @@ describe('admin and shared user pages', () => {
     backendProducts = paginatedProductFixtures(18)
 
     render(<AdminProductsPage />)
-    await screen.findByText('Showing 1–15 of 18 products')
+    await screen.findByText('Showing 1–10 of 18 products')
     await user.click(screen.getByRole('button', { name: 'Next page' }))
-    expect(screen.getByText('Showing 16–18 of 18 products')).toBeDefined()
+    expect(screen.getByText('Showing 11–18 of 18 products')).toBeDefined()
 
     await user.click(screen.getByRole('button', { name: 'Add manual product' }))
     const form = await screen.findByRole('dialog')
@@ -3063,13 +3154,18 @@ describe('admin and shared user pages', () => {
     )
 
     expect(await screen.findByText('Page Product 19')).toBeDefined()
-    expect(screen.getByText('Showing 16–19 of 19 products')).toBeDefined()
+    expect(screen.getByText('Showing 11–19 of 19 products')).toBeDefined()
 
     for (const productName of [
       'Page Product 19',
       'Page Product 18',
       'Page Product 17',
       'Page Product 16',
+      'Page Product 15',
+      'Page Product 14',
+      'Page Product 13',
+      'Page Product 12',
+      'Page Product 11',
     ]) {
       await user.click(
         screen.getByRole('button', { name: `Delete ${productName}` }),
@@ -3085,10 +3181,10 @@ describe('admin and shared user pages', () => {
       )
     }
 
-    expect(await screen.findByText('Showing 1–15 of 15 products')).toBeDefined()
-    expect(screen.queryByRole('button', { name: 'Page 2' })).toBeNull()
-    expect(backendProducts).toHaveLength(15)
-  }, 20_000)
+    expect(await screen.findByText('Showing 1–10 of 10 products')).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Go to page 2' })).toBeNull()
+    expect(backendProducts).toHaveLength(10)
+  }, 30_000)
 
   it('shows loading and error states without exposing stale pagination', async () => {
     let resolveProducts:
@@ -3119,7 +3215,7 @@ describe('admin and shared user pages', () => {
     ).toBe(true)
 
     resolveProducts!(jsonResponse(paginatedProductFixtures(18)))
-    expect(await screen.findByText('Showing 1–15 of 18 products')).toBeDefined()
+    expect(await screen.findByText('Showing 1–10 of 18 products')).toBeDefined()
     view.unmount()
 
     vi.stubGlobal(
@@ -3152,13 +3248,13 @@ describe('admin and shared user pages', () => {
     backendProducts = paginatedProductFixtures(18)
 
     render(<AdminProductsPage />)
-    await screen.findByText('Showing 1–15 of 18 products')
+    await screen.findByText('Showing 1–10 of 18 products')
     const pagination = screen.getByRole('navigation', {
       name: 'Product catalog pagination',
     })
     expect(pagination.className).toContain('sm:flex-row')
 
-    for (const width of [375, 768, 1280]) {
+    for (const width of [320, 375, 425, 768, 1024, 1440]) {
       Object.defineProperty(window, 'innerWidth', {
         configurable: true,
         value: width,
@@ -3168,11 +3264,16 @@ describe('admin and shared user pages', () => {
         screen.getByRole('button', { name: 'Previous page' }),
       ).toBeDefined()
       expect(screen.getByRole('button', { name: 'Next page' })).toBeDefined()
-      expect(screen.getByRole('button', { name: 'Page 2' })).toBeDefined()
+      expect(screen.getByRole('button', { name: 'Go to page 2' })).toBeDefined()
+      expect(screen.getByRole('button', { name: 'Jump back 10 pages' })).toBeDefined()
+      expect(
+        screen.getByRole('button', { name: 'Jump forward 10 pages' }),
+      ).toBeDefined()
+      expect(screen.getByLabelText('Go to page number')).toBeDefined()
     }
 
     await user.click(screen.getByRole('button', { name: 'Next page' }))
-    expect(screen.getByText('Showing 16–18 of 18 products')).toBeDefined()
+    expect(screen.getByText('Showing 11–18 of 18 products')).toBeDefined()
   })
 
   it('loads product form categories from the shared category API instead of a demo list', async () => {

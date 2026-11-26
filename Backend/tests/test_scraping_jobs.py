@@ -56,6 +56,7 @@ from app.services.scraping_schedule import (
     compute_lease_seconds,
     compute_next_run,
     format_app_timezone,
+    normalize_status,
     parse_utc_timestamp,
     validate_future_schedule,
 )
@@ -375,6 +376,27 @@ def product_record(product_number: int = 31) -> ScrapedProductRecord:
         source_type="scraped",
         store_id=TARGET_STORE_ID,
     )
+
+
+class ScrapingStatusNormalizationTests(unittest.TestCase):
+    def test_normalizes_current_and_legacy_job_and_execution_statuses(self):
+        cases = {
+            "pending": "pending",
+            "scheduled": "scheduled",
+            "running": "running",
+            "completed": "completed",
+            "failed": "failed",
+            "cancelled": "cancelled",
+            "queued": "pending",
+            "paused": "scheduled",
+            "starting": "running",
+            "success": "completed",
+            "failure": "failed",
+            "FAILED": "failed",
+        }
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(normalize_status(raw), expected)
 
 
 class ScraperExtractionTests(unittest.TestCase):
@@ -808,6 +830,61 @@ class ScrapingJobApiTests(unittest.TestCase):
         self.assertEqual(body["next_run"], body["configuration"]["scheduled_at"])
         self.assertIsNone(body["active_execution_id"])
         self.assertEqual(len(self.database.scraping_jobs.documents), 1)
+
+    def test_execution_history_endpoint_normalizes_legacy_statuses(self):
+        job_id = self._create_job().json()["id"]
+        legacy_executions = [
+            {
+                "_id": "execution-legacy-failure",
+                "job_id": job_id,
+                "started_at": "2026-11-20T03:00:00.000Z",
+                "finished_at": "2026-11-20T03:00:10.000Z",
+                "status": "failure",
+                "products_found": 0,
+                "success_count": 0,
+                "failure_count": 1,
+                "products_created": 0,
+                "products_refreshed": 0,
+                "success_rate": 0.0,
+                "duration_seconds": 10.0,
+                "errors": ["Legacy failure."],
+                "logs": [],
+                "target_url": TARGET_URL,
+                "product_limit": 10,
+                "attempts": 1,
+            },
+            {
+                "_id": "execution-legacy-success",
+                "job_id": job_id,
+                "started_at": "2026-11-20T04:00:00.000Z",
+                "finished_at": "2026-11-20T04:00:10.000Z",
+                "status": "success",
+                "products_found": 10,
+                "success_count": 10,
+                "failure_count": 0,
+                "products_created": 10,
+                "products_refreshed": 0,
+                "success_rate": 100.0,
+                "duration_seconds": 10.0,
+                "errors": [],
+                "logs": [],
+                "target_url": TARGET_URL,
+                "product_limit": 10,
+                "attempts": 1,
+            },
+        ]
+        for document in legacy_executions:
+            self.database.scraping_executions.documents[document["_id"]] = document
+
+        response = self.admin_client.get(
+            f"/api/admin/scraping/jobs/{job_id}/executions"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["status"] for item in response.json()],
+            ["completed", "failed"],
+        )
 
     def test_run_now_persists_execution_and_updates_job_status(self):
         job_id = self._create_job().json()["id"]

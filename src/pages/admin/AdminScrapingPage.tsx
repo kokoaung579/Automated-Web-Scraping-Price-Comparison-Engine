@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  Ban,
   CalendarClock,
   CheckCircle2,
   CircleX,
@@ -161,13 +162,14 @@ function SummaryCard({
   label: string
   value: number
   icon: typeof Activity
-  tone: 'blue' | 'emerald' | 'cyan' | 'rose'
+  tone: 'blue' | 'emerald' | 'cyan' | 'rose' | 'slate'
 }) {
   const tones = {
     blue: 'border-blue-300/10 bg-blue-400/[0.06] text-blue-200',
     emerald: 'border-emerald-300/10 bg-emerald-400/[0.06] text-emerald-200',
     cyan: 'border-cyan-300/10 bg-cyan-400/[0.06] text-cyan-200',
     rose: 'border-rose-300/10 bg-rose-400/[0.06] text-rose-200',
+    slate: 'border-slate-400/10 bg-slate-400/[0.06] text-slate-400',
   }
   return (
     <article className="flex items-center justify-between rounded-2xl border border-white/[0.07] bg-[#0d1320] p-4 sm:p-5">
@@ -551,7 +553,7 @@ function ConfirmJobActionDialog({
             {error}
           </p>
         )}
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <button type="button" onClick={onCancel} disabled={saving} className="rounded-xl border border-white/[0.08] px-3.5 py-2 text-[11px] font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:opacity-50">Keep job</button>
           <button type="button" onClick={onConfirm} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-blue-500 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50">
             {saving && <LoaderCircle aria-hidden="true" size={13} className="animate-spin" />}
@@ -724,15 +726,22 @@ export function AdminScrapingPage() {
   // `currentPage` is clamped here rather than in an effect, so a refresh that
   // removes jobs immediately falls back to the last page that still has jobs.
 
-  const summary = useMemo(
-    () => ({
+  // These cards describe the current job documents in MongoDB, not execution
+  // history. Count each job exactly once using the same canonical status used
+  // by the table badges and filters.
+  const summary = useMemo(() => {
+    const statuses = jobs.map((job) => canonicalStatus(job.status))
+    return {
       total: jobs.length,
-      running: jobs.filter((job) => job.status === 'running').length,
-      completed: jobs.filter((job) => job.status === 'completed').length,
-      failed: jobs.filter((job) => job.status === 'failed').length,
-    }),
-    [jobs],
-  )
+      running: statuses.filter((value) => value === 'running').length,
+      completed: statuses.filter((value) => value === 'completed').length,
+      failed: statuses.filter((value) => value === 'failed').length,
+      cancelled: statuses.filter((value) => value === 'cancelled').length,
+      pending: statuses.filter(
+        (value) => value === 'pending' || value === 'scheduled',
+      ).length,
+    }
+  }, [jobs])
 
   async function createJob(input: CreateScrapingJobInput) {
     if (!apiClient) throw new Error('The scraping backend is unavailable.')
@@ -901,11 +910,17 @@ export function AdminScrapingPage() {
         }`}>{feedback}</p>
       )}
 
-      <section aria-label="Scraping jobs summary" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard label="Total Jobs" value={summary.total} icon={Globe2} tone="blue" />
-        <SummaryCard label="Running" value={summary.running} icon={Activity} tone="emerald" />
-        <SummaryCard label="Completed" value={summary.completed} icon={CheckCircle2} tone="cyan" />
-        <SummaryCard label="Failed" value={summary.failed} icon={CircleX} tone="rose" />
+      <section aria-label="Scraping jobs summary" className="space-y-2">
+        <p className="text-[10px] leading-4 text-slate-500">
+          {`Jobs = current job status (all jobs, no date filter) · Pending/Scheduled: ${summary.pending}`}
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <SummaryCard label="Total Jobs" value={summary.total} icon={Globe2} tone="blue" />
+          <SummaryCard label="Running" value={summary.running} icon={Activity} tone="emerald" />
+          <SummaryCard label="Completed" value={summary.completed} icon={CheckCircle2} tone="cyan" />
+          <SummaryCard label="Failed" value={summary.failed} icon={CircleX} tone="rose" />
+          <SummaryCard label="Cancelled" value={summary.cancelled} icon={Ban} tone="slate" />
+        </div>
       </section>
 
       <section className="overflow-hidden rounded-2xl border border-white/[0.07] bg-[#0d1320]">

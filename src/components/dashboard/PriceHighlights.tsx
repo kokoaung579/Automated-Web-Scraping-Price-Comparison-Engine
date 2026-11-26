@@ -5,11 +5,14 @@ import {
   DashboardSkeleton,
 } from './DashboardDataState'
 import {
+  formatDashboardObservationDate,
   formatDashboardPrice,
-  getPriceChangePercent,
+  matchesDashboardPriceChange,
   matchesDashboardProduct,
+  sortDashboardPriceChangesNewestFirst,
 } from './catalogProducts'
 import type { DashboardProduct } from './catalogProducts'
+import type { DashboardPriceChange } from '../../types/dashboard'
 
 function ProductThumbnail({ product }: { product: DashboardProduct }) {
   const Icon = product.icon
@@ -25,35 +28,61 @@ function ProductThumbnail({ product }: { product: DashboardProduct }) {
   )
 }
 
-function PriceDropCard({ product }: { product: DashboardProduct }) {
-  const priceChange = getPriceChangePercent(
-    product.previousPrice,
-    product.price,
-  )
+function PriceDropCard({
+  change,
+  product,
+}: {
+  change: DashboardPriceChange
+  product?: DashboardProduct
+}) {
+  const percent = change.change_percent
+  const Icon = product?.icon ?? ArrowDownRight
+  const tone =
+    product?.tone ?? 'text-emerald-200 from-emerald-400/20 to-emerald-500/5'
 
   return (
     <article className="group flex items-center gap-3 rounded-xl border border-white/[0.05] bg-[#0a101b]/70 p-3 transition duration-200 hover:-translate-y-0.5 hover:border-emerald-400/20 hover:bg-[#111a29]">
-      <ProductThumbnail product={product} />
+      <span
+        role="img"
+        aria-label={`${change.product_name} product image`}
+        className={`flex size-12 shrink-0 items-center justify-center rounded-xl border border-white/[0.06] bg-gradient-to-br ${tone}`}
+      >
+        <Icon aria-hidden="true" size={22} strokeWidth={1.7} />
+      </span>
       <div className="min-w-0 flex-1">
         <h3 className="truncate text-xs font-medium text-slate-200">
-          {product.name}
+          {change.product_name}
         </h3>
         <p className="mt-1 flex items-center gap-1 text-[10px] text-slate-500">
           <Store aria-hidden="true" size={11} />
-          {product.store}
+          {change.store_name}
         </p>
+        {change.observed_at ? (
+          <time
+            aria-label={`Observed ${formatDashboardObservationDate(change.observed_at)}`}
+            className="mt-0.5 block truncate text-[10px] text-slate-600"
+            dateTime={change.observed_at}
+          >
+            Observed {formatDashboardObservationDate(change.observed_at)}
+          </time>
+        ) : null}
         <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
           <span className="text-[10px] text-slate-600 line-through">
-            {formatDashboardPrice(product.previousPrice)}
+            {formatDashboardPrice(change.previous_price)}
           </span>
           <span className="text-xs font-semibold text-white">
-            {formatDashboardPrice(product.price)}
+            {formatDashboardPrice(change.price)}
           </span>
         </div>
       </div>
-      <span className="inline-flex shrink-0 items-center gap-0.5 rounded-lg bg-emerald-400/[0.09] px-2 py-1.5 text-[10px] font-semibold text-emerald-300">
+      <span
+        title={
+          percent === null ? 'No valid previous price observation' : undefined
+        }
+        className="inline-flex shrink-0 items-center gap-0.5 rounded-lg bg-emerald-400/[0.09] px-2 py-1.5 text-[10px] font-semibold text-emerald-300"
+      >
         <ArrowDownRight aria-hidden="true" size={13} />
-        {Math.abs(priceChange).toFixed(1)}%
+        {percent === null ? 'N/A' : `${Math.abs(percent).toFixed(1)}%`}
       </span>
     </article>
   )
@@ -81,26 +110,26 @@ function CheapestProductCard({ product }: { product: DashboardProduct }) {
 
 export function PriceHighlights({
   products,
+  drops,
   loading = false,
   empty = false,
   searchQuery = '',
+  limitations = [],
 }: {
   products: DashboardProduct[]
+  drops: DashboardPriceChange[]
   loading?: boolean
   empty?: boolean
   searchQuery?: string
+  limitations?: string[]
 }) {
+  const productById = new Map(products.map((product) => [product.id, product]))
+  const matchingDrops = sortDashboardPriceChangesNewestFirst(drops).filter(
+    (drop) => matchesDashboardPriceChange(drop, searchQuery),
+  )
   const matchingProducts = products.filter((product) =>
     matchesDashboardProduct(product, searchQuery),
   )
-  const priceDrops = matchingProducts
-    .filter((product) => product.price < product.previousPrice)
-    .sort(
-      (first, second) =>
-        getPriceChangePercent(second.previousPrice, second.price) -
-        getPriceChangePercent(first.previousPrice, first.price),
-    )
-    .slice(0, 5)
   const cheapestProducts = [...matchingProducts]
     .sort((first, second) => first.price - second.price)
     .slice(0, 5)
@@ -159,21 +188,30 @@ export function PriceHighlights({
             Recent Price Drops
           </h2>
           <p className="mt-1 text-[11px] text-slate-500">
-            Catalog products with a lower stored price
+            Verified decreases from stored price history
           </p>
         </div>
         {renderContent(
           searchQuery ? 'No matching price drops' : 'No recent price drops',
           searchQuery
             ? 'Try another product or store, or search for a different item.'
-            : 'Products with a stored price decrease will appear here.',
+            : 'No verified stored price decreases were found for the current period.',
           <div className="space-y-2.5">
-            {priceDrops.map((product) => (
-              <PriceDropCard key={product.id} product={product} />
+            {matchingDrops.map((drop) => (
+              <PriceDropCard
+                key={drop.id ?? `${drop.product_id}:${drop.observed_at ?? drop.updated_at}`}
+                change={drop}
+                product={productById.get(drop.product_id)}
+              />
             ))}
           </div>,
-          !empty && priceDrops.length === 0,
+          !empty && matchingDrops.length === 0,
         )}
+        {limitations.length > 0 ? (
+          <p className="mt-3 border-t border-white/[0.06] pt-3 text-[10px] leading-4 text-slate-500">
+            Data limitation: {limitations.join(' ')}
+          </p>
+        ) : null}
       </section>
 
       <section

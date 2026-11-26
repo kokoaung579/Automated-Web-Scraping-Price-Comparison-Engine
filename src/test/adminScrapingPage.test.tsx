@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AdminScrapingPage } from '../pages/admin/AdminScrapingPage'
+import { scrapingStatsFixture } from './scrapingStatsFixture'
 import type {
   ScrapingJob,
   ScrapingJobStatus,
@@ -143,6 +144,65 @@ describe('AdminScrapingPage live backend integration', () => {
     expect(screen.getByText('Showing 1 of 5 live jobs')).toBeDefined()
     expect(screen.getByText('Gamma Store')).toBeDefined()
     expect(screen.queryByText('Alpha Store')).toBeNull()
+  })
+
+  it('counts one isolated dataset by current job status and refreshes those counts', async () => {
+    let liveJobs = scrapingStatsFixture.jobs
+    stubFetcher(() => liveJobs)
+    render(<AdminScrapingPage />)
+
+    const expected = scrapingStatsFixture.expected.management
+    expect(await screen.findByText(`Showing ${expected.total} of ${expected.total} live jobs`)).toBeDefined()
+    expect(within(summaryCard('Total Jobs')).getByText(String(expected.total))).toBeDefined()
+    expect(within(summaryCard('Running')).getByText(String(expected.running))).toBeDefined()
+    expect(within(summaryCard('Completed')).getByText(String(expected.completed))).toBeDefined()
+    expect(within(summaryCard('Failed')).getByText(String(expected.failed))).toBeDefined()
+    expect(within(summaryCard('Cancelled')).getByText(String(expected.cancelled))).toBeDefined()
+    expect(
+      screen.getByText(
+        `Jobs = current job status (all jobs, no date filter) · Pending/Scheduled: ${expected.pendingOrScheduled}`,
+      ),
+    ).toBeDefined()
+    expect(
+      expected.running +
+        expected.completed +
+        expected.failed +
+        expected.cancelled +
+        expected.pendingOrScheduled,
+    ).toBe(expected.total)
+
+    liveJobs = liveJobs.filter(
+      (job) => job.id === 'job-failed-then-success' || job.id === 'job-running',
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+
+    expect(await screen.findByText('Showing 2 of 2 live jobs')).toBeDefined()
+    expect(within(summaryCard('Total Jobs')).getByText('2')).toBeDefined()
+    expect(within(summaryCard('Running')).getByText('1')).toBeDefined()
+    expect(within(summaryCard('Completed')).getByText('1')).toBeDefined()
+    expect(within(summaryCard('Failed')).getByText('0')).toBeDefined()
+    expect(within(summaryCard('Cancelled')).getByText('0')).toBeDefined()
+  })
+
+  it('counts legacy backend statuses with the canonical job summary', async () => {
+    const legacyJobs = [
+      { ...scrapingStatsFixture.jobs[0], status: 'starting' },
+      { ...scrapingStatsFixture.jobs[1], status: 'success' },
+      { ...scrapingStatsFixture.jobs[2], status: 'failure' },
+      { ...scrapingStatsFixture.jobs[3], status: 'paused' },
+    ] as unknown as ScrapingJob[]
+    stubFetcher(legacyJobs)
+    render(<AdminScrapingPage />)
+
+    expect(await screen.findByText('Showing 4 of 4 live jobs')).toBeDefined()
+    expect(within(summaryCard('Running')).getByText('1')).toBeDefined()
+    expect(within(summaryCard('Completed')).getByText('1')).toBeDefined()
+    expect(within(summaryCard('Failed')).getByText('1')).toBeDefined()
+    expect(
+      screen.getByText(
+        'Jobs = current job status (all jobs, no date filter) · Pending/Scheduled: 1',
+      ),
+    ).toBeDefined()
   })
 
   it('runs a job through the live backend endpoint', async () => {

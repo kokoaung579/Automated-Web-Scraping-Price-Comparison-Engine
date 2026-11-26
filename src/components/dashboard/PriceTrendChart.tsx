@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react'
 import {
   ArrowDownRight,
   ArrowUpRight,
+  Info,
   MoreHorizontal,
+  PackageSearch,
   TriangleAlert,
 } from 'lucide-react'
 import {
@@ -22,11 +24,14 @@ import {
   DashboardSkeleton,
 } from './DashboardDataState'
 import {
+  formatDashboardObservationDate,
   formatDashboardPrice,
-  getPriceChangePercent,
+  matchesDashboardPriceChange,
   matchesDashboardProduct,
+  sortDashboardPriceChangesNewestFirst,
 } from './catalogProducts'
 import type { DashboardProduct } from './catalogProducts'
+import type { DashboardPriceChange } from '../../types/dashboard'
 import { priceHistoryPeriods } from '../../data/priceHistory'
 import type {
   PriceHistoryPeriod,
@@ -35,17 +40,37 @@ import type {
 
 type Period = PriceHistoryPeriod
 
+type TrendStatus =
+  | 'available'
+  | 'unchanged'
+  | 'insufficient_history'
+  | 'no_data'
+
 type CurrentHistory = {
   productId: string
   period: Period
   points: PriceHistoryPoint[]
   store: string | null
+  currency: string | null
+  changePercent: number | null
+  status: TrendStatus
+  message: string
 }
 
 type HistoryLoadError = {
   productId: string
   period: Period
   message: string
+}
+
+const VERIFIED_HISTORY_STATUSES = new Set([
+  'verified_scraped',
+  'manually_verified',
+])
+
+function parseHistoryDate(value: string) {
+  const parsed = Date.parse(`${value}T00:00:00Z`)
+  return Number.isNaN(parsed) ? null : parsed
 }
 
 function HistorySkeleton() {
@@ -105,12 +130,68 @@ export function PriceTrendChart({
     api.priceHistory(productId, period)
       .then((histories: StoreHistory[]) => {
         if (!active) return
-        const storedHistory = histories.find((item) => item.points.length > 0)
+
+        const eligible = histories.filter(
+          (item) =>
+            VERIFIED_HISTORY_STATUSES.has(item.verification_status ?? '') &&
+            !item.is_test_site &&
+            item.availability === 'in_stock',
+        )
+        const storedHistory = eligible.find((item) => item.points.length > 0)
+        const sortedPoints = [...(storedHistory?.points ?? [])].sort(
+          (first, second) => first.date.localeCompare(second.date),
+        )
+        const datedPoints = sortedPoints.filter(
+          (point) => parseHistoryDate(point.date) !== null,
+        )
+        const latest = datedPoints.at(-1)
+        const latestTime = latest ? parseHistoryDate(latest.date) : null
+        const windowDays = priceHistoryPeriods[period].days
+        const points = latestTime
+          ? datedPoints.filter(
+              (point) =>
+                (parseHistoryDate(point.date) ?? 0) >=
+                latestTime - windowDays * 24 * 60 * 60 * 1000,
+            )
+          : datedPoints
+
+        let status: TrendStatus = 'no_data'
+        let message =
+          histories.length === 0
+            ? 'No stored price observations were found for this product and date range.'
+            : 'No verified stored price observations were found for this product and date range.'
+        let changePercent: number | null = null
+
+        if (points.length === 1) {
+          status = 'insufficient_history'
+          message = 'Only one stored observation is available in this period.'
+        } else if (points.length > 1) {
+          const firstPrice = points[0].price
+          const lastPrice = points[points.length - 1].price
+          if (firstPrice === lastPrice) {
+            status = 'unchanged'
+            message = 'Stored prices are unchanged in this period.'
+            changePercent = 0
+          } else if (Number.isFinite(firstPrice) && firstPrice > 0) {
+            status = 'available'
+            message = 'Calculated from the first and last stored observations.'
+            changePercent = ((lastPrice - firstPrice) / firstPrice) * 100
+          } else {
+            status = 'insufficient_history'
+            message =
+              'The stored baseline is invalid, so the percentage cannot be calculated.'
+          }
+        }
+
         setCurrentHistory({
           productId,
           period,
-          points: storedHistory?.points ?? [],
+          points,
           store: storedHistory?.store ?? null,
+          currency: storedHistory?.currency ?? null,
+          changePercent,
+          status,
+          message,
         })
         setHistoryLoadError(null)
       })
@@ -146,9 +227,12 @@ export function PriceTrendChart({
       : null
   const isLoadingHistory = Boolean(product) && !hasCurrentHistory && currentError === null
   const data = hasCurrentHistory ? currentHistory.points : []
-  const firstPrice = data[0]?.price ?? 0
-  const currentPrice = data[data.length - 1]?.price ?? 0
-  const priceChange = getPriceChangePercent(firstPrice, currentPrice)
+  const currentPrice = data.at(-1)?.price ?? 0
+  const changePercent = hasCurrentHistory
+    ? currentHistory.changePercent
+    : null
+  const trendStatus = hasCurrentHistory ? currentHistory.status : null
+  const trendMessage = hasCurrentHistory ? currentHistory.message : ''
 
   if (loading || isLoadingHistory) {
     return <HistorySkeleton />
@@ -200,7 +284,7 @@ export function PriceTrendChart({
         <h2 className="text-sm font-semibold text-white">Price trend</h2>
         <DashboardEmptyState
           title="No price history available"
-          description="No stored price observations were found for this product and date range."
+          description={trendMessage}
           className="min-h-[280px]"
         />
       </section>
@@ -234,7 +318,7 @@ export function PriceTrendChart({
         </div>
         <div
           aria-label="Select chart date range"
-          className="flex items-center gap-0.5 rounded-xl border border-white/[0.07] bg-[#090e18] p-1"
+          className="flex flex-wrap items-center gap-0.5 rounded-xl border border-white/[0.07] bg-[#090e18] p-1"
         >
           {(Object.keys(priceHistoryPeriods) as Period[]).map((range) => (
             <button
@@ -258,20 +342,36 @@ export function PriceTrendChart({
         <p className="text-3xl font-semibold tracking-tight text-white">
           {formatDashboardPrice(currentPrice)}
         </p>
-        <span
-          className={`mb-1 inline-flex items-center gap-1 text-xs font-medium ${
-            priceChange <= 0 ? 'text-emerald-300' : 'text-blue-300'
-          }`}
-        >
-          {priceChange <= 0 ? (
-            <ArrowDownRight size={14} />
-          ) : (
-            <ArrowUpRight size={14} />
-          )}
-          {Math.abs(priceChange).toFixed(1)}%
-        </span>
+        {changePercent === null ? (
+          <span
+            title={trendMessage}
+            aria-label={`Price trend comparison: ${trendMessage}`}
+            className="mb-1 inline-flex items-center gap-1 text-xs font-medium text-slate-400"
+          >
+            N/A
+            <Info size={12} aria-hidden="true" />
+          </span>
+        ) : (
+          <span
+            className={`mb-1 inline-flex items-center gap-1 text-xs font-medium ${
+              changePercent <= 0 ? 'text-emerald-300' : 'text-blue-300'
+            }`}
+          >
+            {changePercent === 0 ? (
+              <Info size={14} aria-hidden="true" />
+            ) : changePercent < 0 ? (
+              <ArrowDownRight size={14} />
+            ) : (
+              <ArrowUpRight size={14} />
+            )}
+            {Math.abs(changePercent).toFixed(1)}%
+            {changePercent === 0 ? ' unchanged' : ''}
+          </span>
+        )}
         <span className="mb-1 text-[11px] text-slate-500">
-          over the selected period
+          {changePercent === null || trendStatus === 'unchanged'
+            ? trendMessage
+            : 'over the selected period'}
         </span>
       </div>
 
@@ -366,6 +466,7 @@ export function PriceTrendChart({
         <span className="min-w-0 break-words pr-3 [overflow-wrap:anywhere]">
           Stored price history for {product.name}
           {currentHistory?.store ? ` from ${currentHistory.store}` : ''}
+          {currentHistory?.currency ? ` (${currentHistory.currency})` : ''}
         </span>
         <span className="shrink-0">
           {period === '1Y' ? 'Past year' : `Past ${period.toLowerCase()}`}
@@ -377,42 +478,23 @@ export function PriceTrendChart({
 
 export function RecentPriceChanges({
   products,
+  changes,
   loading = false,
   empty = false,
   searchQuery = '',
+  limitations = [],
 }: {
   products: DashboardProduct[]
+  changes: DashboardPriceChange[]
   loading?: boolean
   empty?: boolean
   searchQuery?: string
+  limitations?: string[]
 }) {
-  const getUpdatedTime = (value: string) => {
-    const parsed = Date.parse(value)
-    return Number.isNaN(parsed) ? 0 : parsed
-  }
-  const changes = products
-    .filter((product) => matchesDashboardProduct(product, searchQuery))
-    .sort((first, second) => getUpdatedTime(second.updatedAt) - getUpdatedTime(first.updatedAt))
-    .slice(0, 5)
-    .map((product) => {
-      const priceChange = getPriceChangePercent(
-        product.previousPrice,
-        product.price,
-      )
-      const Icon = product.icon
-
-      return {
-        id: product.id,
-        name: product.name,
-        detail: `${product.category} · ${product.store}`,
-        tone: product.tone,
-        Icon,
-        price: formatDashboardPrice(product.price),
-        previous: formatDashboardPrice(product.previousPrice),
-        change: `${priceChange > 0 ? '+' : ''}${priceChange.toFixed(1)}%`,
-        down: priceChange < 0,
-      }
-    })
+  const productById = new Map(products.map((product) => [product.id, product]))
+  const filteredChanges = sortDashboardPriceChangesNewestFirst(changes).filter(
+    (change) => matchesDashboardPriceChange(change, searchQuery),
+  )
 
   if (loading) {
     return (
@@ -439,30 +521,58 @@ export function RecentPriceChanges({
     )
   }
 
-  if (empty || changes.length === 0) {
+  if (empty || changes.length === 0 || filteredChanges.length === 0) {
+    const title = empty
+      ? 'No recent price changes'
+      : changes.length === 0
+        ? 'No qualifying price changes'
+        : 'No matching price changes'
+    const description = empty
+      ? 'Verified price changes will appear here once stored history is available.'
+      : changes.length === 0
+        ? 'No verified stored price increases or decreases were found for the current period.'
+        : 'Try a different product, store, or category search.'
+
     return (
-      <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6">
-        <h2 className="text-sm font-semibold text-white">Recent price changes</h2>
+      <section
+        aria-labelledby="recent-price-changes-title"
+        className="rounded-2xl border border-white/[0.07] bg-[#0d1320] p-5 sm:p-6"
+      >
+        <h2
+          id="recent-price-changes-title"
+          className="text-sm font-semibold text-white"
+        >
+          Recent price changes
+        </h2>
         <DashboardEmptyState
-          title={empty ? 'No recent price changes' : 'No matching products'}
-          description={
-            empty
-              ? 'Price updates will show here when catalog prices are available.'
-              : 'Try a different product, store, or category search.'
-          }
+          title={title}
+          description={description}
           className="min-h-[240px]"
         />
+        {limitations.length > 0 ? (
+          <p className="border-t border-white/[0.06] px-5 py-3 text-[10px] leading-4 text-slate-500 sm:px-6">
+            Data limitation: {limitations.join(' ')}
+          </p>
+        ) : null}
       </section>
     )
   }
 
   return (
-    <section className="rounded-2xl border border-white/[0.07] bg-[#0d1320]">
+    <section
+      aria-labelledby="recent-price-changes-title"
+      className="rounded-2xl border border-white/[0.07] bg-[#0d1320]"
+    >
       <div className="flex items-center justify-between border-b border-white/[0.06] px-5 py-5 sm:px-6">
         <div>
-          <h2 className="text-sm font-semibold text-white">Recent price changes</h2>
+          <h2
+            id="recent-price-changes-title"
+            className="text-sm font-semibold text-white"
+          >
+            Recent price changes
+          </h2>
           <p className="mt-1 text-[11px] text-slate-500">
-            Latest updates from the shared catalog
+            Verified stored price observations
           </p>
         </div>
         <span aria-hidden="true" className="rounded-lg p-2 text-slate-500">
@@ -470,49 +580,86 @@ export function RecentPriceChanges({
         </span>
       </div>
       <div className="divide-y divide-white/[0.05]">
-        {changes.map((item) => (
-          <article
-            key={item.id}
-            className="flex items-center gap-3 px-5 py-4 sm:gap-4 sm:px-6"
-          >
-            <span
-              className={`flex size-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${item.tone}`}
+        {filteredChanges.slice(0, 5).map((change) => {
+          const linkedProduct = productById.get(change.product_id)
+          const Icon = linkedProduct?.icon ?? PackageSearch
+          const tone =
+            linkedProduct?.tone ??
+            'text-blue-200 from-blue-400/20 to-blue-500/5'
+          const down = change.change < 0
+          const percent = change.change_percent
+          const changeLabel =
+            percent === null
+              ? 'N/A'
+              : `${percent > 0 ? '+' : ''}${percent.toFixed(1)}%`
+
+          return (
+            <article
+              key={change.id ?? `${change.product_id}:${change.updated_at}`}
+              className="flex items-center gap-3 px-5 py-4 sm:gap-4 sm:px-6"
             >
-              <item.Icon aria-hidden="true" size={18} />
-            </span>
-            <div className="min-w-0 flex-1">
-              <h3 className="truncate text-xs font-medium text-slate-200">
-                {item.name}
-              </h3>
-              <p className="mt-1 text-[10px] text-slate-500">{item.detail}</p>
-            </div>
-            <div className="hidden text-right sm:block">
-              <p className="text-xs font-semibold text-slate-200">{item.price}</p>
-              <p className="mt-1 text-[10px] text-slate-600">
-                from {item.previous}
-              </p>
-            </div>
-            <span
-              className={`inline-flex min-w-[68px] items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-[10px] font-semibold ${
-                item.down
-                  ? 'bg-emerald-400/[0.08] text-emerald-300'
-                  : 'bg-rose-400/[0.08] text-rose-300'
-              }`}
-            >
-              {item.down ? (
-                <ArrowDownRight size={13} />
-              ) : (
-                <ArrowUpRight size={13} />
-              )}
-              {item.change}
-            </span>
-          </article>
-        ))}
+              <span
+                className={`flex size-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${tone}`}
+              >
+                <Icon aria-hidden="true" size={18} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h3 className="truncate text-xs font-medium text-slate-200">
+                  {change.product_name}
+                </h3>
+                <p className="mt-1 text-[10px] text-slate-500">
+                  {[change.category, change.store_name]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+                {change.observed_at ? (
+                  <time
+                    aria-label={`Observed ${formatDashboardObservationDate(change.observed_at)}`}
+                    className="mt-0.5 block truncate text-[10px] text-slate-600"
+                    dateTime={change.observed_at}
+                  >
+                    Observed {formatDashboardObservationDate(change.observed_at)}
+                  </time>
+                ) : null}
+              </div>
+              <div className="hidden text-right sm:block">
+                <p className="text-xs font-semibold text-slate-200">
+                  {formatDashboardPrice(change.price)}
+                </p>
+                <p className="mt-1 text-[10px] text-slate-600">
+                  from {formatDashboardPrice(change.previous_price)}
+                </p>
+              </div>
+              <span
+                title={
+                  percent === null ? 'No valid previous price observation' : undefined
+                }
+                className={`inline-flex min-w-[68px] items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-[10px] font-semibold ${
+                  down
+                    ? 'bg-emerald-400/[0.08] text-emerald-300'
+                    : 'bg-rose-400/[0.08] text-rose-300'
+                }`}
+              >
+                {down ? (
+                  <ArrowDownRight size={13} />
+                ) : (
+                  <ArrowUpRight size={13} />
+                )}
+                {changeLabel}
+              </span>
+            </article>
+          )
+        })}
       </div>
       <div className="border-t border-white/[0.06] px-5 py-3.5 text-center sm:px-6">
         <p className="text-[10px] text-slate-500">
-          Based on stored catalog prices
+          Based on verified price-history observations
         </p>
+        {limitations.length > 0 ? (
+          <p className="mt-1 text-[10px] leading-4 text-slate-500">
+            Data limitation: {limitations.join(' ')}
+          </p>
+        ) : null}
       </div>
     </section>
   )

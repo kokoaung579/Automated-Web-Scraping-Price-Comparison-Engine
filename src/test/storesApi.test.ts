@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createStore, getStores } from '../services/storesApi'
+import { createStore, deleteStore, getStores } from '../services/storesApi'
 import type { AdminStore } from '../data/adminStores'
 
 const bestBuy: AdminStore = {
@@ -68,6 +68,53 @@ describe('store API session handling', () => {
     expect(init?.credentials).toBe('include')
   })
 
+  it('deletes a store through the encoded store ID endpoint', async () => {
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        void input
+        void init
+        return Promise.resolve(
+          jsonResponse({
+            message: 'Store deleted successfully.',
+            store_id: 'test-store',
+            deleted_offers: 0,
+          }),
+        )
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await deleteStore('test-store')
+
+    const [input, init] = fetchMock.mock.calls[0]
+    expect(String(input)).toBe('/api/admin/stores/test-store')
+    expect(init?.method).toBe('DELETE')
+    expect(result.deleted_offers).toBe(0)
+  })
+
+  it('sends the explicit linked-offer opt-in as a query parameter', async () => {
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        void input
+        void init
+        return Promise.resolve(
+          jsonResponse({
+            message: 'Store deleted successfully.',
+            store_id: 'test-store',
+            deleted_offers: 2,
+          }),
+        )
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await deleteStore('test-store', true)
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      '/api/admin/stores/test-store?delete_offers=true',
+    )
+  })
+
   it('surfaces a genuine session error from the backend', async () => {
     vi.stubGlobal(
       'fetch',
@@ -80,6 +127,27 @@ describe('store API session handling', () => {
 
     await expect(createStore(bestBuy)).rejects.toThrow(
       'Sign in to continue.',
+    )
+  })
+
+  it('surfaces backend deletion conflicts as readable errors', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(
+            {
+              detail:
+                'Cannot delete this store because it is linked to 1 products and 2 offers.',
+            },
+            409,
+          ),
+        ),
+      ),
+    )
+
+    await expect(deleteStore('test-store')).rejects.toThrow(
+      'linked to 1 products and 2 offers',
     )
   })
 })

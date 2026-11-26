@@ -57,6 +57,9 @@ let networkDown = false
 let recordedEpisodes: AdminConnectionEpisodePayload[] = []
 let settingsPuts: AdminNotificationSettings[] = []
 let requests: { method: string; path: string; body: unknown }[] = []
+let bulkFailIds: Set<string> = new Set()
+let deleteError: string | null = null
+let deleteAllError: string | null = null
 
 function jsonResponse(data: unknown, status = 200) {
   return {
@@ -131,6 +134,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse({
       items: matching.slice((page - 1) * pageSize, page * pageSize),
       total: matching.length,
+      all_total: notifications.length,
       unread: notifications.filter((item) => !item.isRead).length,
       page,
       page_size: pageSize,
@@ -151,6 +155,71 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   if (url.pathname === '/api/admin/notifications/read-all' && method === 'POST') {
     notifications = notifications.map((item) => ({ ...item, isRead: true }))
     return jsonResponse({ updated: notifications.length })
+  }
+
+  const deleteMatch = url.pathname.match(
+    /^\/api\/admin\/notifications\/([^/]+)$/,
+  )
+  if (deleteMatch && method === 'DELETE') {
+    const id = decodeURIComponent(deleteMatch[1])
+    if (deleteError) {
+      return jsonResponse({ detail: deleteError }, 403)
+    }
+    const before = notifications.length
+    notifications = notifications.filter((item) => item.id !== id)
+    if (notifications.length === before) {
+      return jsonResponse({ detail: 'Notification not found.' }, 404)
+    }
+    return jsonResponse({ deleted: 1 })
+  }
+
+  if (
+    url.pathname === '/api/admin/notifications/bulk-delete' &&
+    method === 'POST'
+  ) {
+    const payload = body as {
+      notification_ids?: string[]
+      confirm?: boolean
+    }
+    if (payload?.confirm !== true) {
+      return jsonResponse({ detail: 'Confirmation required.' }, 400)
+    }
+    const ids = [...new Set(payload.notification_ids ?? [])]
+    const failed = ids
+      .filter(
+        (id) =>
+          bulkFailIds.has(id) || !notifications.some((item) => item.id === id),
+      )
+      .map((id) => ({
+        id,
+        reason: bulkFailIds.has(id) ? 'delete failed' : 'not found',
+      }))
+    const failedIds = new Set(failed.map((item) => item.id))
+    notifications = notifications.filter(
+      (item) => !ids.includes(item.id) || failedIds.has(item.id),
+    )
+    return jsonResponse({
+      requested: ids.length,
+      deleted: ids.length - failed.length,
+      failed_count: failed.length,
+      failed,
+    })
+  }
+
+  if (
+    url.pathname === '/api/admin/notifications/delete-all' &&
+    method === 'POST'
+  ) {
+    const payload = body as { confirm?: boolean }
+    if (payload?.confirm !== true) {
+      return jsonResponse({ detail: 'Confirmation required.' }, 400)
+    }
+    if (deleteAllError) {
+      return jsonResponse({ detail: deleteAllError }, 500)
+    }
+    const deleted = notifications.length
+    notifications = []
+    return jsonResponse({ deleted, matched: deleted, remaining: 0 })
   }
 
   if (url.pathname === '/api/admin/notifications/settings' && method === 'GET') {
@@ -218,6 +287,9 @@ describe('admin notification center', () => {
     recordedEpisodes = []
     settingsPuts = []
     requests = []
+    bulkFailIds = new Set()
+    deleteError = null
+    deleteAllError = null
     vi.stubGlobal('fetch', vi.fn(mockFetch))
   })
 
@@ -490,4 +562,279 @@ describe('admin notification center', () => {
       ),
     ).toBe(false)
   })
-})
+
+  it('deletes one notification only after confirmation and refreshes the list and count', async () => {
+    const user = userEvent.setup()
+    notifications = seedNotifications(12)
+    renderPage()
+
+    expect(await screen.findByText(/12 matching records/)).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Delete System Event 1' }))
+    const firstDialog = await screen.findByRole('alertdialog', {
+      name: 'Delete this notification?',
+    })
+    expect(within(firstDialog).getByText(/irreversible/)).toBeDefined()
+    await user.click(within(firstDialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('alertdialog', { name: 'Delete this notification?' }),
+      ).toBeNull()
+    })
+    expect(notifications.some((item) => item.id === 'notification-1')).toBe(true)
+    expect(requests.some((request) => request.method === 'DELETE')).toBe(false)
+
+    await user.click(screen.getByRole('button', { name: 'Delete System Event 1' }))
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'Delete this notification?',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(notifications.some((item) => item.id === 'notification-1')).toBe(false)
+    })
+    expect(await screen.findByText(/11 matching records/)).toBeDefined()
+    expect(
+      await screen.findByText('Deleted notification "System Event 1".'),
+    ).toBeDefined()
+    expect(
+      requests.some(
+        (request) =>
+          request.method === 'DELETE' &&
+          request.path === '/api/admin/notifications/notification-1',
+      ),
+    ).toBe(true)
+  })
+
+  it('limits bulk selection to the current page and reports partial failures', async () => {
+    const user = userEvent.setup()
+    notifications = seedNotifications(12)
+    bulkFailIds = new Set(['notification-1'])
+    renderPage()
+
+    expect(await screen.findByText('Page 1 of 2')).toBeDefined()
+    const selectAll = screen.getByRole('checkbox', {
+      name: 'Select all notifications on this page',
+    })
+    await user.click(selectAll)
+    expect((selectAll as HTMLInputElement).checked).toBe(true)
+    expect(await screen.findByText('8 notifications selected')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Delete Selected' }))
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'Delete selected notifications?',
+    })
+    expect(
+      within(dialog).getByText(/Selection is limited to the current page/),
+    ).toBeDefined()
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Delete Selected' }),
+    )
+
+    await waitFor(() => expect(notifications).toHaveLength(5))
+    expect(
+      await screen.findByText(
+        /Deleted 7 of 8 notifications\. Could not delete: notification-1/,
+      ),
+    ).toBeDefined()
+    const bulkRequest = requests.find(
+      (request) =>
+        request.method === 'POST' &&
+        request.path === '/api/admin/notifications/bulk-delete',
+    )
+    expect(bulkRequest?.body).toEqual({
+      notification_ids: expect.arrayContaining([
+        'notification-1',
+        'notification-8',
+      ]),
+      confirm: true,
+    })
+    expect(
+      (
+        screen.getByRole('checkbox', {
+          name: 'Select System Event 1',
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true)
+    expect(notifications.some((item) => item.id === 'notification-9')).toBe(true)
+  })
+
+  it('delete all ignores active filters, warns with the full total, and cancels safely', async () => {
+    const user = userEvent.setup()
+    notifications = seedNotifications(12)
+    renderPage()
+
+    expect(await screen.findByText(/12 matching records/)).toBeDefined()
+    await user.type(
+      screen.getByLabelText('Search notifications'),
+      'System Event 12',
+    )
+    await waitFor(() => {
+      expect(screen.getByText(/1 matching record ·/)).toBeDefined()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Delete All' }))
+    const firstDialog = await screen.findByRole('alertdialog', {
+      name: 'Delete all notifications?',
+    })
+    expect(within(firstDialog).getByText(/all 12 notifications/)).toBeDefined()
+    expect(within(firstDialog).getByText(/irreversible/)).toBeDefined()
+    await user.click(
+      within(firstDialog).getByRole('button', { name: 'Cancel' }),
+    )
+    expect(notifications).toHaveLength(12)
+    expect(
+      requests.some(
+        (request) => request.path === '/api/admin/notifications/delete-all',
+      ),
+    ).toBe(false)
+
+    await user.click(screen.getByRole('button', { name: 'Delete All' }))
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'Delete all notifications?',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Delete All' }))
+
+    await waitFor(() => expect(notifications).toHaveLength(0))
+    expect(await screen.findByText('No notifications found')).toBeDefined()
+    expect(
+      (screen.getByRole('button', { name: 'Delete All' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+  })
+
+  it('surfaces backend deletion failures without changing the records', async () => {
+    const user = userEvent.setup()
+    notifications = seedNotifications(3)
+    deleteError = 'Administrator access required.'
+    renderPage()
+
+    expect(await screen.findByText(/3 matching records/)).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Delete System Event 1' }))
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'Delete this notification?',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    expect(await screen.findByText('Administrator access required.')).toBeDefined()
+    expect(notifications).toHaveLength(3)
+
+    deleteAllError = 'Database unavailable.'
+    await user.click(screen.getByRole('button', { name: 'Delete All' }))
+    const allDialog = await screen.findByRole('alertdialog', {
+      name: 'Delete all notifications?',
+    })
+    await user.click(
+      within(allDialog).getByRole('button', { name: 'Delete All' }),
+    )
+    expect(await screen.findByText('Database unavailable.')).toBeDefined()
+    expect(notifications).toHaveLength(3)
+  })
+
+  it('keeps single deletion working with active status and category filters', async () => {
+    const user = userEvent.setup()
+    notifications = seedNotifications(12)
+    renderPage()
+
+    expect(await screen.findByText(/12 matching records/)).toBeDefined()
+    await user.click(screen.getByRole('button', { name: /^Unread/ }))
+    await user.selectOptions(
+      screen.getByLabelText('Filter by category'),
+      'scraping',
+    )
+    expect(await screen.findByText(/2 matching records/)).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Delete System Event 1' }))
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'Delete this notification?',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => {
+      expect(notifications.some((item) => item.id === 'notification-1')).toBe(false)
+    })
+    expect(await screen.findByText(/1 matching record ·/)).toBeDefined()
+  })
+
+  it('clamps pagination after deleting the last item on the last page', async () => {
+    const user = userEvent.setup()
+    notifications = seedNotifications(9)
+    renderPage()
+
+    expect(await screen.findByText('Page 1 of 2')).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Next page' }))
+    expect(await screen.findByText('Page 2 of 2')).toBeDefined()
+    await user.click(screen.getByRole('button', { name: 'Delete System Event 9' }))
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'Delete this notification?',
+    })
+    await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByText('Page 1 of 1')).toBeDefined()
+    expect(notifications).toHaveLength(8)
+  })
+
+  it('shows the empty state and disables delete actions with no notifications', async () => {
+    notifications = []
+    renderPage()
+
+    expect(await screen.findByText('No notifications found')).toBeDefined()
+    expect(
+      (screen.getByRole('button', { name: 'Delete All' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+    expect(
+      screen.queryByRole('checkbox', {
+        name: 'Select all notifications on this page',
+      }),
+    ).toBeNull()
+  })
+
+  it('cancels bulk deletion without deleting and clears selection after full success', async () => {
+    const user = userEvent.setup()
+    notifications = seedNotifications(2)
+    renderPage()
+
+    expect(await screen.findByText(/2 matching records/)).toBeDefined()
+    await user.click(
+      screen.getByRole('checkbox', {
+        name: 'Select all notifications on this page',
+      }),
+    )
+    expect(await screen.findByText('2 notifications selected')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Delete Selected' }))
+    const cancelDialog = await screen.findByRole('alertdialog', {
+      name: 'Delete selected notifications?',
+    })
+    await user.click(
+      within(cancelDialog).getByRole('button', { name: 'Cancel' }),
+    )
+    expect(notifications).toHaveLength(2)
+    expect(
+      requests.filter(
+        (request) =>
+          request.method === 'POST' &&
+          request.path === '/api/admin/notifications/bulk-delete',
+      ),
+    ).toHaveLength(0)
+
+    await user.click(screen.getByRole('button', { name: 'Delete Selected' }))
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'Delete selected notifications?',
+    })
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Delete Selected' }),
+    )
+
+    await waitFor(() => expect(notifications).toHaveLength(0))
+    expect(await screen.findByText('Deleted 2 notifications.')).toBeDefined()
+    expect(screen.queryByText(/notifications selected/)).toBeNull()
+    expect(
+      requests.filter(
+        (request) =>
+          request.method === 'POST' &&
+          request.path === '/api/admin/notifications/bulk-delete',
+      ),
+    ).toHaveLength(1)
+  })
+}, 15000)

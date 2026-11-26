@@ -21,6 +21,7 @@ from app.routers.audit import (
     router as audit_router,
 )
 from app.routers.dashboard import router as dashboard_router
+from app.routers.user_dashboard import router as user_dashboard_router
 from app.routers.categories import router as categories_router
 from app.routers.comparison import router as comparison_router
 from app.routers.manual_offers import router as manual_offers_router
@@ -193,6 +194,7 @@ app.include_router(product_bulk_router)
 app.include_router(admin_notifications_router)
 app.include_router(system_settings_router)
 app.include_router(dashboard_router)
+app.include_router(user_dashboard_router)
 
 
 def get_database():
@@ -1003,6 +1005,8 @@ async def product_history(
         payload, _ = classify_product_offer(classified, context, now=now)
         enriched.append({
             **document,
+            "store_id": payload["store_id"] or None,
+            "currency": payload["price"]["currency"],
             "availability": payload["availability"],
             "verification_status": payload["verification_status"],
             "is_test_site": payload["is_test_site"],

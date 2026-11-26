@@ -190,6 +190,65 @@ describe('scraping API client', () => {
     await expect(client.getExecutionHistory('job-1')).resolves.toEqual([execution])
   })
 
+  it('composes all execution histories from existing job endpoints and deduplicates records', async () => {
+    const execution = {
+      id: 'execution-1',
+      job_id: 'job-1',
+      started_at: '2026-11-20T03:00:00.000Z',
+      finished_at: '2026-11-20T03:00:10.000Z',
+      status: 'completed',
+      products_found: 10,
+      success_count: 10,
+      failure_count: 0,
+      products_created: 10,
+      products_refreshed: 0,
+      success_rate: 100,
+      duration_seconds: 10,
+      errors: [],
+      logs: ['done'],
+    }
+    const sharedExecution = { ...execution, id: 'execution-shared', job_id: 'job-2' }
+    const secondExecution = { ...execution, id: 'execution-2', job_id: 'job-2' }
+    const fetcher = vi.fn(async (url: string) => {
+      if (url.includes('/jobs/job-1/executions')) {
+        return jsonResponse([execution, sharedExecution])
+      }
+      if (url.includes('/jobs/job-2/executions')) {
+        return jsonResponse([sharedExecution, secondExecution])
+      }
+      return jsonResponse([job, { ...job, id: 'job-2' }])
+    })
+    const client = createBackendScrapingApiClient(
+      fetcher as unknown as typeof fetch,
+    )
+
+    await expect(client.getAllExecutionHistory()).resolves.toEqual([
+      execution,
+      sharedExecution,
+      secondExecution,
+    ])
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      '/api/admin/scraping/jobs',
+      '/api/admin/scraping/jobs/job-1/executions',
+      '/api/admin/scraping/jobs/job-2/executions',
+    ])
+  })
+
+  it('fails the aggregated history when one job history is unavailable', async () => {
+    const fetcher = vi.fn(async (url: string) =>
+      url.includes('/executions')
+        ? jsonResponse({ detail: 'History unavailable' }, false, 500)
+        : jsonResponse([job]),
+    )
+    const client = createBackendScrapingApiClient(
+      fetcher as unknown as typeof fetch,
+    )
+
+    await expect(client.getAllExecutionHistory()).rejects.toThrow(
+      'History unavailable',
+    )
+  })
+
   it('normalizes legacy backend statuses', async () => {
     const legacyJob = {
       ...job,
@@ -213,6 +272,61 @@ describe('scraping API client', () => {
     ])
     await expect(client.getJobs()).resolves.toEqual([
       { ...cancelledJob, next_run: null },
+    ])
+  })
+
+  it('normalizes all known legacy backend job statuses before validation', async () => {
+    const legacyJobs = [
+      { ...job, id: 'job-queued', status: 'queued' },
+      { ...job, id: 'job-paused', status: 'paused' },
+      { ...job, id: 'job-starting', status: 'starting' },
+    ]
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse(legacyJobs))
+    const client = createBackendScrapingApiClient(
+      fetcher as unknown as typeof fetch,
+    )
+
+    await expect(client.getJobs()).resolves.toEqual([
+      { ...legacyJobs[0], status: 'pending' },
+      { ...legacyJobs[1], status: 'scheduled' },
+      { ...legacyJobs[2], status: 'running' },
+    ])
+  })
+
+  it('normalizes legacy success/failure execution statuses before validation', async () => {
+    const legacyExecution = {
+      id: 'execution-legacy',
+      job_id: 'job-1',
+      started_at: '2026-11-20T03:00:00.000Z',
+      finished_at: '2026-11-20T03:00:10.000Z',
+      status: 'failure',
+      products_found: 0,
+      success_count: 0,
+      failure_count: 1,
+      products_created: 0,
+      products_refreshed: 0,
+      success_rate: 0,
+      duration_seconds: 10,
+      errors: ['Legacy failure.'],
+      logs: [],
+      target_url: target.target_url,
+      product_limit: 10,
+    }
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse([
+      legacyExecution,
+      { ...legacyExecution, id: 'execution-legacy-success', status: 'success' },
+    ]))
+    const client = createBackendScrapingApiClient(
+      fetcher as unknown as typeof fetch,
+    )
+
+    await expect(client.getExecutionHistory('job-1')).resolves.toEqual([
+      { ...legacyExecution, status: 'failed' },
+      {
+        ...legacyExecution,
+        id: 'execution-legacy-success',
+        status: 'completed',
+      },
     ])
   })
 

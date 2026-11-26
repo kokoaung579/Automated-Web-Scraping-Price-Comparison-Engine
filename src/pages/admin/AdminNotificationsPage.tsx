@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import {
   Activity,
   ArrowLeft,
@@ -14,6 +15,7 @@ import {
   Save,
   Search,
   Settings2,
+  Trash2,
   Upload,
   Users,
   X,
@@ -100,6 +102,77 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback
 }
 
+function DeleteConfirmationDialog({
+  id,
+  title,
+  children,
+  confirmLabel,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  id: string
+  title: string
+  children: ReactNode
+  confirmLabel: string
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/80 px-4 py-6 backdrop-blur-sm sm:items-center">
+      <button
+        type="button"
+        aria-label="Close delete confirmation"
+        onClick={onCancel}
+        disabled={busy}
+        className="absolute inset-0 cursor-default"
+      />
+      <section
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={id}
+        className="relative z-10 w-full max-h-[calc(100dvh-2.5rem)] max-w-md overflow-y-auto rounded-2xl border border-rose-400/15 bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <h3 id={id} className="text-sm font-semibold text-white">
+            {title}
+          </h3>
+          <button
+            type="button"
+            aria-label="Close delete confirmation"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-lg p-1.5 text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-200"
+          >
+            <X aria-hidden="true" size={15} />
+          </button>
+        </div>
+        <div className="mt-3 text-[11px] leading-5 text-slate-400">{children}</div>
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-xl border border-white/[0.08] px-4 py-2 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-rose-300/20 bg-rose-500/15 px-4 py-2 text-[10px] font-semibold text-rose-100 transition hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Trash2 aria-hidden="true" size={12} />
+            {confirmLabel}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function normalizeSettings(value: AdminNotificationSettings | null) {
   return settingFields.reduce((result, field) => {
     result[field.key] = value?.[field.key] === true
@@ -134,7 +207,14 @@ const inputClassName =
   'h-10 w-full rounded-xl border border-white/[0.07] bg-[#090e18] px-3 text-xs text-slate-200 outline-none transition focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10'
 
 export function AdminNotificationsPage() {
-  const { unreadCount, markAsRead, markAllAsRead } = useAdminNotifications()
+  const {
+    unreadCount,
+    markAsRead,
+    markAllAsRead,
+    deleteNotification,
+    bulkDeleteNotifications,
+    deleteAllNotifications,
+  } = useAdminNotifications()
 
   const [status, setStatus] = useState<AdminNotificationStatus>('all')
   const [category, setCategory] = useState('')
@@ -157,8 +237,22 @@ export function AdminNotificationsPage() {
   const [settingsSaving, setSettingsSaving] = useState(false)
   const [confirmMarkAll, setConfirmMarkAll] = useState(false)
   const [confirmRestore, setConfirmRestore] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [deleteTarget, setDeleteTarget] = useState<AdminNotification | null>(null)
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteFeedback, setDeleteFeedback] = useState<{
+    tone: 'success' | 'error'
+    text: string
+  } | null>(null)
+  const [allTotal, setAllTotal] = useState(0)
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const selectedCount = selectedIds.size
+  const pageIds = items.map((item) => item.id)
+  const allPageSelected =
+    pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id))
   const settingsDirty =
     settings !== null && JSON.stringify(draft) !== JSON.stringify(settings)
 
@@ -185,6 +279,9 @@ export function AdminNotificationsPage() {
         }
         setItems(received)
         setTotal(Number(response.total ?? 0) || 0)
+        setAllTotal(
+          Number(response.all_total ?? response.total ?? 0) || 0,
+        )
         setUnread(Number(response.unread ?? 0) || 0)
       })
       .catch((error: unknown) => {
@@ -227,19 +324,29 @@ export function AdminNotificationsPage() {
     }
   }, [])
 
+  function clearSelection() {
+    setSelectedIds(new Set())
+  }
+
   function changeStatus(next: AdminNotificationStatus) {
     setStatus(next)
     setPage(1)
+    clearSelection()
+    setDeleteFeedback(null)
   }
 
   function changeCategory(next: string) {
     setCategory(next)
     setPage(1)
+    clearSelection()
+    setDeleteFeedback(null)
   }
 
   function changeSearch(next: string) {
     setSearch(next)
     setPage(1)
+    clearSelection()
+    setDeleteFeedback(null)
   }
 
   function clearFilters() {
@@ -247,6 +354,32 @@ export function AdminNotificationsPage() {
     setCategory('')
     setSearch('')
     setPage(1)
+    clearSelection()
+    setDeleteFeedback(null)
+  }
+
+  function toggleSelection(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAllPage() {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      pageIds.forEach((id) => {
+        if (allPageSelected) next.delete(id)
+        else next.add(id)
+      })
+      return next
+    })
+  }
+
+  function reloadList() {
+    setReloadToken((token) => token + 1)
   }
 
   async function handleMarkRead(notification: AdminNotification) {
@@ -258,6 +391,97 @@ export function AdminNotificationsPage() {
     setConfirmMarkAll(false)
     await markAllAsRead()
     setReloadToken((token) => token + 1)
+  }
+
+  async function handleDeleteOne() {
+    const target = deleteTarget
+    if (!target || deleting) return
+    setDeleting(true)
+    setDeleteFeedback(null)
+    try {
+      await deleteNotification(target.id)
+      setDeleteTarget(null)
+      setSelectedIds((current) => {
+        const next = new Set(current)
+        next.delete(target.id)
+        return next
+      })
+      setDeleteFeedback({
+        tone: 'success',
+        text: `Deleted notification "${target.title}".`,
+      })
+      reloadList()
+    } catch (error) {
+      setDeleteTarget(null)
+      setDeleteFeedback({
+        tone: 'error',
+        text: errorMessage(error, 'Unable to delete notification.'),
+      })
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  async function handleDeleteSelected() {
+    if (selectedCount === 0 || deleting) return
+    const ids = [...selectedIds]
+    setConfirmBulkDelete(false)
+    setDeleting(true)
+    setDeleteFeedback(null)
+    try {
+      const result = await bulkDeleteNotifications(ids)
+      const failedIds = new Set(result.failed.map((item) => item.id))
+      setSelectedIds(new Set(ids.filter((id) => failedIds.has(id))))
+      setDeleteFeedback(
+        result.failed_count === 0
+          ? {
+              tone: 'success',
+              text: `Deleted ${result.deleted} notification${result.deleted === 1 ? '' : 's'}.`,
+            }
+          : {
+              tone: 'error',
+              text: `Deleted ${result.deleted} of ${result.requested} notifications. Could not delete: ${result.failed.map((item) => item.id).join(', ')}.`,
+            },
+      )
+      reloadList()
+    } catch (error) {
+      setDeleteFeedback({
+        tone: 'error',
+        text: errorMessage(error, 'Unable to delete selected notifications.'),
+      })
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  async function handleDeleteAll() {
+    if (deleting) return
+    setConfirmDeleteAll(false)
+    setDeleting(true)
+    setDeleteFeedback(null)
+    try {
+      const result = await deleteAllNotifications()
+      clearSelection()
+      setDeleteFeedback(
+        result.remaining > 0
+          ? {
+              tone: 'error',
+              text: `Deleted ${result.deleted} notifications. ${result.remaining} could not be deleted.`,
+            }
+          : {
+              tone: 'success',
+              text: `Deleted ${result.deleted} notifications.`,
+            },
+      )
+      reloadList()
+    } catch (error) {
+      setDeleteFeedback({
+        tone: 'error',
+        text: errorMessage(error, 'Unable to delete all notifications.'),
+      })
+    } finally {
+      setDeleting(false)
+    }
   }
 
   function setAllSettings(value: boolean) {
@@ -445,15 +669,75 @@ export function AdminNotificationsPage() {
               timestamps shown in Asia/Yangon
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setReloadToken((token) => token + 1)}
-            className="inline-flex items-center gap-2 rounded-lg border border-white/[0.07] px-3 py-2 text-[10px] font-medium text-slate-300 transition hover:border-cyan-400/20 hover:text-white"
-          >
-            <RefreshCw aria-hidden="true" size={13} />
-            Refresh
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                clearSelection()
+                setDeleteFeedback(null)
+                reloadList()
+              }}
+              disabled={deleting}
+              className="inline-flex items-center gap-2 rounded-lg border border-white/[0.07] px-3 py-2 text-[10px] font-medium text-slate-300 transition hover:border-cyan-400/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <RefreshCw aria-hidden="true" size={13} />
+              Refresh
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmDeleteAll(true)}
+              disabled={deleting || allTotal === 0}
+              title={`Permanently delete all ${allTotal} notifications`}
+              className="inline-flex items-center gap-2 rounded-lg border border-rose-300/15 bg-rose-400/[0.06] px-3 py-2 text-[10px] font-medium text-rose-200 transition hover:bg-rose-400/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Trash2 aria-hidden="true" size={13} />
+              Delete All
+            </button>
+          </div>
         </div>
+
+        {deleteFeedback && (
+          <div
+            role={deleteFeedback.tone === 'error' ? 'alert' : 'status'}
+            className={`mx-4 mt-4 rounded-xl border px-4 py-3 text-[11px] leading-5 sm:mx-5 ${
+              deleteFeedback.tone === 'error'
+                ? 'border-rose-400/20 bg-rose-500/[0.07] text-rose-200'
+                : 'border-emerald-400/15 bg-emerald-400/[0.06] text-emerald-200'
+            }`}
+          >
+            {deleteFeedback.text}
+          </div>
+        )}
+
+        {!listLoading && !listError && items.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.06] px-4 py-3 sm:px-5">
+            <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500">
+              <span aria-live="polite">
+                {selectedCount} notification{selectedCount === 1 ? '' : 's'} selected
+              </span>
+              <span>· Selection is limited to this page.</span>
+              {selectedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  disabled={deleting}
+                  className="rounded-lg border border-white/[0.08] px-2.5 py-1 font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Clear Selection
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setConfirmBulkDelete(true)}
+              disabled={selectedCount === 0 || deleting}
+              className="inline-flex items-center gap-2 rounded-lg border border-rose-300/15 bg-rose-400/[0.06] px-3 py-2 text-[10px] font-medium text-rose-200 transition hover:bg-rose-400/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Trash2 aria-hidden="true" size={12} />
+              Delete Selected
+            </button>
+          </div>
+        )}
 
         {listLoading ? (
           <p className="px-5 py-12 text-center text-xs text-slate-400">
@@ -487,10 +771,21 @@ export function AdminNotificationsPage() {
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto admin-table-responsive">
-            <table className="w-full min-w-[760px] border-collapse text-left admin-data-table">
+          <div className="overflow-x-auto admin-table-responsive admin-table-responsive--wide admin-table-responsive--selection">
+            <table className="w-full min-w-[860px] border-collapse text-left admin-data-table">
               <thead>
                 <tr className="border-b border-white/[0.06] bg-white/[0.015] text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                  <th scope="col" className="px-4 py-3 font-semibold">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all notifications on this page"
+                      title="Selection is limited to this page"
+                      checked={allPageSelected}
+                      onChange={toggleAllPage}
+                      disabled={deleting}
+                      className="size-3.5 cursor-pointer accent-blue-500"
+                    />
+                  </th>
                   <th className="px-4 py-3 sm:px-5">Notification</th>
                   <th className="px-3 py-3">Type</th>
                   <th className="px-3 py-3">Category</th>
@@ -505,6 +800,16 @@ export function AdminNotificationsPage() {
                     key={notification.id}
                     className={notification.isRead ? '' : 'bg-cyan-400/[0.025]'}
                   >
+                    <td data-label="" className="admin-cell-checkbox px-4 py-3.5">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${notification.title}`}
+                        checked={selectedIds.has(notification.id)}
+                        onChange={() => toggleSelection(notification.id)}
+                        disabled={deleting}
+                        className="size-3.5 cursor-pointer accent-blue-500"
+                      />
+                    </td>
                     <td data-label="Notification" className="px-4 py-3.5 sm:px-5">
                       <div className="flex items-start gap-3">
                         <CategoryIcon category={notification.category} />
@@ -558,18 +863,29 @@ export function AdminNotificationsPage() {
                       </span>
                     </td>
                     <td data-label="Actions" className="admin-cell-actions px-4 py-3.5 text-right sm:px-5">
-                      {notification.isRead ? (
-                        <span className="text-[10px] text-slate-600">—</span>
-                      ) : (
+                      <div className="flex items-center justify-end gap-1.5">
+                        {!notification.isRead && (
+                          <button
+                            type="button"
+                            onClick={() => void handleMarkRead(notification)}
+                            aria-label={`Mark ${notification.title} as read`}
+                            disabled={deleting}
+                            className="rounded-lg border border-cyan-400/15 bg-cyan-500/[0.07] px-2.5 py-1.5 text-[9px] font-medium text-cyan-200 transition hover:bg-cyan-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Mark as Read
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={() => void handleMarkRead(notification)}
-                          aria-label={`Mark ${notification.title} as read`}
-                          className="rounded-lg border border-cyan-400/15 bg-cyan-500/[0.07] px-2.5 py-1.5 text-[9px] font-medium text-cyan-200 transition hover:bg-cyan-500/15"
+                          onClick={() => setDeleteTarget(notification)}
+                          aria-label={`Delete ${notification.title}`}
+                          disabled={deleting}
+                          className="inline-flex items-center gap-1 rounded-lg border border-rose-300/15 bg-rose-400/[0.06] px-2.5 py-1.5 text-[9px] font-medium text-rose-200 transition hover:bg-rose-400/[0.12] disabled:cursor-not-allowed disabled:opacity-40"
                         >
-                          Mark as Read
+                          <Trash2 aria-hidden="true" size={11} />
+                          Delete
                         </button>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -587,7 +903,10 @@ export function AdminNotificationsPage() {
               type="button"
               aria-label="Previous page"
               disabled={page <= 1}
-              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              onClick={() => {
+                clearSelection()
+                setPage((current) => Math.max(1, current - 1))
+              }}
               className="inline-flex items-center gap-1 rounded-lg border border-white/[0.07] px-2.5 py-1.5 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <ArrowLeft aria-hidden="true" size={12} />
@@ -597,7 +916,10 @@ export function AdminNotificationsPage() {
               type="button"
               aria-label="Next page"
               disabled={page >= totalPages}
-              onClick={() => setPage((current) => current + 1)}
+              onClick={() => {
+                clearSelection()
+                setPage((current) => current + 1)
+              }}
               className="inline-flex items-center gap-1 rounded-lg border border-white/[0.07] px-2.5 py-1.5 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40"
             >
               Next
@@ -760,7 +1082,7 @@ export function AdminNotificationsPage() {
             <p className="mt-3 text-[11px] leading-5 text-slate-400">
               All unread notifications will be marked as read. This cannot be undone.
             </p>
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={() => setConfirmMarkAll(false)}
@@ -814,7 +1136,7 @@ export function AdminNotificationsPage() {
               The backend will replace your current notification preferences with
               their default values.
             </p>
-            <div className="mt-5 flex justify-end gap-2">
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <button
                 type="button"
                 onClick={() => setConfirmRestore(false)}
@@ -832,6 +1154,62 @@ export function AdminNotificationsPage() {
             </div>
           </section>
         </div>
+      )}
+
+      {deleteTarget && (
+        <DeleteConfirmationDialog
+          id="delete-notification-title"
+          title="Delete this notification?"
+          confirmLabel="Delete"
+          busy={deleting}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => void handleDeleteOne()}
+        >
+          <p>
+            <strong className="font-semibold text-slate-200">
+              {deleteTarget.title}
+            </strong>{' '}
+            will be permanently deleted from the backend notification records.
+            This action is irreversible.
+          </p>
+        </DeleteConfirmationDialog>
+      )}
+
+      {confirmBulkDelete && (
+        <DeleteConfirmationDialog
+          id="bulk-delete-notifications-title"
+          title="Delete selected notifications?"
+          confirmLabel="Delete Selected"
+          busy={deleting}
+          onCancel={() => setConfirmBulkDelete(false)}
+          onConfirm={() => void handleDeleteSelected()}
+        >
+          <p>
+            {selectedCount} notification{selectedCount === 1 ? '' : 's'} on this
+            page will be permanently deleted. Selection is limited to the current
+            page. This action is irreversible.
+          </p>
+        </DeleteConfirmationDialog>
+      )}
+
+      {confirmDeleteAll && (
+        <DeleteConfirmationDialog
+          id="delete-all-notifications-title"
+          title="Delete all notifications?"
+          confirmLabel="Delete All"
+          busy={deleting}
+          onCancel={() => setConfirmDeleteAll(false)}
+          onConfirm={() => void handleDeleteAll()}
+        >
+          <p>
+            This will permanently delete{' '}
+            <strong className="font-semibold text-white">
+              all {allTotal.toLocaleString()} notifications
+            </strong>{' '}
+            across every page, category, and filter. This action is irreversible
+            and cannot be undone.
+          </p>
+        </DeleteConfirmationDialog>
       )}
     </div>
   )

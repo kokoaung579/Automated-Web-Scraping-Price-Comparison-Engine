@@ -5,12 +5,10 @@ import { DashboardSkeleton } from './DashboardDataState'
 type StatCardProps = {
   label: string
   value: number
-  change?: string | null
-  detail?: string
+  detail: string
   icon: LucideIcon
   tone: 'blue' | 'emerald'
   loading?: boolean
-  empty?: boolean
 }
 
 const tones = {
@@ -21,12 +19,10 @@ const tones = {
 export function StatCard({
   label,
   value,
-  change,
   detail,
   icon: Icon,
   tone,
   loading = false,
-  empty = false,
 }: StatCardProps) {
   const [count, setCount] = useState(0)
 
@@ -87,35 +83,18 @@ export function StatCard({
         <div>
           <p className="text-xs font-medium text-slate-400">{label}</p>
           <p
-            aria-label={
-              empty ? `${label}: no data` : `${label}: ${value.toLocaleString()}`
-            }
+            aria-label={`${label}: ${value.toLocaleString()}`}
             className="mt-3 text-[27px] font-semibold leading-none tracking-tight text-white tabular-nums"
           >
-            {empty ? '—' : count.toLocaleString()}
+            {count.toLocaleString()}
           </p>
         </div>
         <span className={`flex size-10 items-center justify-center rounded-xl ring-1 transition duration-200 group-hover:scale-105 ${tones[tone]}`}>
           <Icon size={19} />
         </span>
       </div>
-      <div className="mt-5 flex items-center gap-2 text-[11px]">
-        {empty ? (
-          <span className="text-slate-500">No data available yet</span>
-        ) : (
-          <>
-            <span
-              className={
-                change
-                  ? 'rounded-md bg-emerald-400/10 px-1.5 py-1 font-semibold text-emerald-300'
-                  : 'text-slate-500'
-              }
-            >
-              {change ?? 'N/A'}
-            </span>
-            {detail && <span className="text-slate-500">{detail}</span>}
-          </>
-        )}
+      <div className="mt-5 flex items-center text-[11px]">
+        <span className="min-w-0 truncate text-slate-500">{detail}</span>
       </div>
     </article>
   )

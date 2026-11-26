@@ -210,7 +210,7 @@ function DeleteCategoryDialog({
           <span className="font-medium text-slate-200">{category.name}</span>{' '}
           will be removed from the category list.
         </p>
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <button
             type="button"
             onClick={onCancel}

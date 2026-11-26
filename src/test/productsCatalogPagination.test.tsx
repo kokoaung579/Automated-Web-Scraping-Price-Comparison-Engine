@@ -52,6 +52,7 @@ function jsonResponse(data: unknown, status = 200) {
 type MockOptions = {
   failProducts?: boolean
   delayProducts?: number
+  catalog?: DemoProduct[]
   imageUrls?: Record<string, string>
   offerPrices?: Record<string, { store: string; price: number }[]>
 }
@@ -74,8 +75,9 @@ function mockBackend(options: MockOptions = {}) {
         if (options.delayProducts) {
           await new Promise((resolve) => setTimeout(resolve, options.delayProducts))
         }
+        const catalog = options.catalog ?? products
         return jsonResponse(
-          products.map((product) => ({
+          catalog.map((product) => ({
             id: product.id,
             name: product.name,
             brand: product.brand,
@@ -278,6 +280,75 @@ describe('Product Catalog pagination', () => {
     fireEvent.change(pageSize, { target: { value: '10' } })
     expectRange(1, 10, 18)
     expect(tableNames()).toHaveLength(10)
+  })
+
+  it('shows nearby pages with ellipses and supports ten-page jumps and Go-to-page validation', async () => {
+    mockBackend({
+      catalog: Array.from({ length: 105 }, (_, index) => makeProduct(index + 1)),
+    })
+    renderCatalog()
+    await waitFor(() => expectRange(1, 10, 105))
+
+    const pageButtonLabels = () =>
+      within(pagination())
+        .getAllByRole('button', { name: /^Go to page \d+$/ })
+        .map((button) => button.getAttribute('aria-label'))
+    const jumpBack = within(pagination()).getByRole('button', {
+      name: 'Jump back 10 pages',
+    })
+    const jumpForward = within(pagination()).getByRole('button', {
+      name: 'Jump forward 10 pages',
+    })
+    const goToInput = within(pagination()).getByLabelText('Go to page number')
+    const goButton = within(pagination()).getByRole('button', { name: 'Go to page' })
+
+    expect(screen.getByText('Page 1 of 11')).toBeDefined()
+    expect(pageButtonLabels()).toEqual([
+      'Go to page 1',
+      'Go to page 2',
+      'Go to page 11',
+    ])
+    expect(pagination().textContent).toContain('…')
+    expect(jumpBack).toHaveProperty('disabled', true)
+    expect(jumpForward).toHaveProperty('disabled', false)
+
+    fireEvent.click(jumpForward)
+    expectRange(101, 105, 105)
+    expect(screen.getByText('Page 11 of 11')).toBeDefined()
+    expect(pageButtonLabels()).toEqual([
+      'Go to page 1',
+      'Go to page 10',
+      'Go to page 11',
+    ])
+    expect(jumpBack).toHaveProperty('disabled', false)
+    expect(jumpForward).toHaveProperty('disabled', true)
+
+    fireEvent.click(jumpBack)
+    expectRange(1, 10, 105)
+
+    fireEvent.change(goToInput, { target: { value: '5' } })
+    expect(goButton).toHaveProperty('disabled', false)
+    fireEvent.click(goButton)
+    expectRange(41, 50, 105)
+    expect(screen.getByText('Page 5 of 11')).toBeDefined()
+    expect(pageButtonLabels()).toEqual([
+      'Go to page 1',
+      'Go to page 4',
+      'Go to page 5',
+      'Go to page 6',
+      'Go to page 11',
+    ])
+    expect(pagination().textContent?.match(/…/g)).toHaveLength(2)
+
+    for (const invalidPage of ['0', '12', '']) {
+      fireEvent.change(goToInput, { target: { value: invalidPage } })
+      expect(goButton).toHaveProperty('disabled', true)
+      if (invalidPage !== '') {
+        expect(goToInput.getAttribute('aria-invalid')).toBe('true')
+      }
+      fireEvent.click(goButton)
+      expectRange(41, 50, 105)
+    }
   })
 
   it('combines local search with pagination and resets to page 1', async () => {

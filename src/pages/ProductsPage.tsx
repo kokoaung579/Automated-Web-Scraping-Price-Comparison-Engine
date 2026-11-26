@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   ArrowDownRight,
-  ArrowLeft,
   ArrowRight,
   ArrowUpRight,
   Bookmark,
@@ -20,15 +19,19 @@ import {
 } from 'lucide-react'
 import { Link, useOutletContext } from 'react-router-dom'
 import { api, toChannel3CatalogProduct } from '../api/client'
+import { ProductPagination } from '../components/ProductPagination'
 import type { AppOutletContext } from '../context/AppOutletContext'
 import { validHttpUrl } from '../data/adminProducts'
 import { mergeCatalogProducts } from '../data/catalogProducts'
 import type { DemoProduct } from '../data/products'
 import type { StoreOffer } from '../data/storeOffers'
+import {
+  DEFAULT_PRODUCT_PAGE_SIZE,
+  type ProductPageSize,
+} from '../utils/productPagination'
 
 type PriceRange = 'all' | 'under-200' | '200-400' | 'over-400'
 type SortOrder = 'recent' | 'price-low' | 'price-high' | 'name'
-type PageSize = 10 | 20 | 50
 
 const priceRanges: { value: PriceRange; label: string }[] = [
   { value: 'all', label: 'Any price' },
@@ -44,18 +47,12 @@ const sortOrders: { value: SortOrder; label: string }[] = [
   { value: 'name', label: 'Name: A to Z' },
 ]
 
-const pageSizes: PageSize[] = [10, 20, 50]
-
 function isPriceRange(value: string): value is PriceRange {
   return priceRanges.some((range) => range.value === value)
 }
 
 function isSortOrder(value: string): value is SortOrder {
   return sortOrders.some((order) => order.value === value)
-}
-
-function isPageSize(value: string): value is `${PageSize}` {
-  return pageSizes.some((size) => String(size) === value)
 }
 
 function formatPrice(price: number) {
@@ -105,21 +102,6 @@ function inPriceRange(price: number, range: PriceRange) {
     default:
       return true
   }
-}
-
-function getPageItems(currentPage: number, totalPages: number) {
-  if (totalPages <= 7) {
-    return Array.from({ length: totalPages }, (_, index) => index + 1)
-  }
-
-  const pages: (number | 'ellipsis')[] = [1]
-  const start = Math.max(2, currentPage - 1)
-  const end = Math.min(totalPages - 1, currentPage + 1)
-  if (start > 2) pages.push('ellipsis')
-  for (let page = start; page <= end; page += 1) pages.push(page)
-  if (end < totalPages - 1) pages.push('ellipsis')
-  pages.push(totalPages)
-  return pages
 }
 
 function getProductImageUrl(product: DemoProduct) {
@@ -659,133 +641,6 @@ function CatalogEmptyState({ onClear }: { onClear: () => void }) {
   )
 }
 
-function CatalogPagination({
-  currentPage,
-  totalPages,
-  totalProducts,
-  rangeStart,
-  endIndex,
-  pageSize,
-  onPageChange,
-  onPageSizeChange,
-}: {
-  currentPage: number
-  totalPages: number
-  totalProducts: number
-  rangeStart: number
-  endIndex: number
-  pageSize: PageSize
-  onPageChange: (page: number) => void
-  onPageSizeChange: (size: PageSize) => void
-}) {
-  const navButton =
-    'inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/[0.07] bg-white/[0.02] px-3.5 text-xs font-medium text-slate-300 transition hover:border-blue-400/25 hover:bg-blue-400/[0.08] hover:text-blue-200 disabled:cursor-not-allowed disabled:opacity-35'
-
-  return (
-    <nav
-      aria-label="Product catalog pagination"
-      className="flex flex-col gap-4 rounded-[26px] border border-white/[0.06] bg-[#0b1220] p-4 shadow-lg shadow-black/10 sm:flex-row sm:items-center sm:justify-between sm:px-5"
-    >
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
-        <p className="text-xs text-slate-400">
-          Showing{' '}
-          <span className="font-semibold tabular-nums text-white">
-            {rangeStart}–{endIndex}
-          </span>{' '}
-          of{' '}
-          <span className="font-semibold tabular-nums text-white">
-            {totalProducts}
-          </span>{' '}
-          products
-        </p>
-        <div className="flex items-center gap-2">
-          <label htmlFor="product-page-size" className="text-[11px] text-slate-500">
-            Rows per page
-          </label>
-          <div className="relative">
-            <select
-              id="product-page-size"
-              aria-label="Products per page"
-              value={pageSize}
-              onChange={(event) => {
-                const value = event.currentTarget.value
-                if (isPageSize(value)) onPageSizeChange(Number(value) as PageSize)
-              }}
-              className="h-9 appearance-none rounded-xl border border-white/[0.07] bg-[#0e1626] pl-3 pr-8 text-xs font-medium text-slate-200 outline-none transition focus:border-blue-400/40"
-            >
-              {pageSizes.map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-            <ChevronDown
-              aria-hidden="true"
-              size={13}
-              className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500"
-            />
-          </div>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-1.5">
-        <button
-          type="button"
-          aria-label="Previous page"
-          disabled={currentPage === 1}
-          onClick={() => onPageChange(currentPage - 1)}
-          className={navButton}
-        >
-          <ArrowLeft aria-hidden="true" size={14} />
-          Previous
-        </button>
-
-        {getPageItems(currentPage, totalPages).map((item, index) =>
-          item === 'ellipsis' ? (
-            <span
-              key={`ellipsis-${index}`}
-              aria-hidden="true"
-              className="px-1 text-xs text-slate-600"
-            >
-              …
-            </span>
-          ) : (
-            <button
-              key={item}
-              type="button"
-              aria-label={`Go to page ${item}`}
-              aria-current={item === currentPage ? 'page' : undefined}
-              onClick={() => onPageChange(item)}
-              className={`inline-flex size-10 items-center justify-center rounded-xl text-xs font-semibold transition ${
-                item === currentPage
-                  ? 'bg-gradient-to-br from-blue-500 to-indigo-500 text-white shadow-lg shadow-blue-950/30'
-                  : 'border border-white/[0.07] bg-white/[0.02] text-slate-400 hover:border-blue-400/25 hover:bg-blue-400/[0.08] hover:text-blue-200'
-              }`}
-            >
-              {item}
-            </button>
-          ),
-        )}
-
-        <button
-          type="button"
-          aria-label="Next page"
-          disabled={currentPage >= totalPages}
-          onClick={() => onPageChange(currentPage + 1)}
-          className={navButton}
-        >
-          Next
-          <ArrowRight aria-hidden="true" size={14} />
-        </button>
-
-        <span className="ml-1 text-[11px] tabular-nums text-slate-500">
-          Page {currentPage} of {totalPages}
-        </span>
-      </div>
-    </nav>
-  )
-}
-
 function BestOfferSection({ product }: { product: DemoProduct | null }) {
   const [offerState, setOfferState] = useState<{
     productId: string
@@ -938,7 +793,7 @@ export function ProductsPage() {
   const [category, setCategory] = useState('all')
   const [priceRange, setPriceRange] = useState<PriceRange>('all')
   const [sortOrder, setSortOrder] = useState<SortOrder>('recent')
-  const [pageSize, setPageSize] = useState<PageSize>(10)
+  const [pageSize, setPageSize] = useState<ProductPageSize>(DEFAULT_PRODUCT_PAGE_SIZE)
   const [page, setPage] = useState(1)
   const query = search.trim() || headerQuery.trim()
   const [channel3Result, setChannel3Result] = useState<{
@@ -1033,6 +888,17 @@ export function ProductsPage() {
   const endIndex =
     totalProducts === 0 ? 0 : Math.min(startIndex + pageSize, totalProducts)
   const visibleProducts = filteredProducts.slice(startIndex, startIndex + pageSize)
+
+  useEffect(() => {
+    setPage(1)
+  }, [headerQuery])
+
+  // Keep the active page valid when the filtered catalog shrinks after updates
+  // or removals, without changing any product data.
+  useEffect(() => {
+    setPage((previous) => Math.min(previous, totalPages))
+  }, [totalPages])
+
   const isLoading = dataSource === 'loading'
   const hasError = dataSource === 'error'
   const hasActiveFilters = Boolean(
@@ -1140,12 +1006,12 @@ export function ProductsPage() {
             <CatalogEmptyState onClear={clearFilters} />
           )}
 
-          <CatalogPagination
+          <ProductPagination
             currentPage={currentPage}
             totalPages={totalPages}
-            totalProducts={totalProducts}
+            totalItems={totalProducts}
             rangeStart={totalProducts === 0 ? 0 : startIndex + 1}
-            endIndex={endIndex}
+            rangeEnd={endIndex}
             pageSize={pageSize}
             onPageChange={setPage}
             onPageSizeChange={(size) => {

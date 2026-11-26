@@ -3,13 +3,13 @@ import {
   Activity,
   Bell,
   Boxes,
+  CalendarDays,
   CircleAlert,
   CircleCheck,
   ClipboardList,
   Clock3,
   Database,
   FolderTree,
-  Layers,
   Pencil,
   Play,
   Plus,
@@ -36,8 +36,9 @@ import { Link } from 'react-router-dom'
 import { api } from '../../api/client'
 import { useAdminNotifications } from '../../context/AdminNotificationsContext'
 import {
+  formatAppDayKey,
   formatDateTime,
-  formatShortDate,
+  getRecentAppDayKeys,
   getYangonDayKey,
 } from '../../utils/datetime'
 import type {
@@ -45,6 +46,8 @@ import type {
   AuditLog,
   AuditLogStatus,
 } from '../../data/adminAuditLogs'
+import type { ScrapingExecution } from '../../data/adminScraping'
+import { createBackendScrapingApiClient } from '../../services/scrapingApi'
 import type { DashboardResponse } from '../../types/dashboard'
 
 type ApiStatus = 'checking' | 'online' | 'offline'
@@ -83,6 +86,21 @@ type ScrapingChartPoint = {
   completed: number
   failed: number
   total: number
+}
+
+type ScrapingRangeDays = 7 | 30 | 90
+
+type ScrapingHistoryState = {
+  executions: ScrapingExecution[]
+  loading: boolean
+  error: string
+}
+
+type ScrapingActivityMetrics = {
+  totalRuns: number
+  completedRuns: number
+  failedRuns: number
+  successRate: number
 }
 
 type SourceStat = {
@@ -235,41 +253,86 @@ function isDashboardResponse(value: unknown): value is DashboardResponse {
   )
 }
 
-function buildScrapingActivityChart(
-  dashboard: DashboardResponse | null,
-): ScrapingChartPoint[] {
-  if (!dashboard) return []
+function isCompletedExecution(execution: ScrapingExecution): boolean {
+  const status = execution.status.toLowerCase()
+  return status === 'completed' || status === 'success'
+}
 
-  const scrapingItems = dashboard.recent_activity.items.filter(
-    (item) => item.category === 'scraping_activities',
-  )
-  const byDay = new Map<string, ScrapingChartPoint>()
+function isFailedExecution(execution: ScrapingExecution): boolean {
+  const status = execution.status.toLowerCase()
+  return status === 'failed' || status === 'failure'
+}
 
-  for (const item of scrapingItems) {
-    const key = getYangonDayKey(item.timestamp)
-    if (!key) continue
-
-    const current = byDay.get(key) ?? {
-      label: formatShortDate(item.timestamp),
-      completed: 0,
-      failed: 0,
-      total: 0,
+/**
+ * Build all Scraping Activity values from one deduplicated set of real
+ * execution records. Day keys come from the configured application timezone,
+ * so the trailing window always means today plus the previous N-1 calendar
+ * days rather than a rolling 24-hour count.
+ */
+function buildScrapingActivity(
+  executions: ScrapingExecution[],
+  rangeDays: ScrapingRangeDays,
+  now: Date,
+): {
+  chart: ScrapingChartPoint[]
+  metrics: ScrapingActivityMetrics
+  latestTimestamp: string
+} {
+  const dayKeys = getRecentAppDayKeys(rangeDays, now)
+  const allowedDays = new Set(dayKeys)
+  const uniqueExecutions = new Map<string, ScrapingExecution>()
+  for (const execution of executions) {
+    if (!uniqueExecutions.has(execution.id)) {
+      uniqueExecutions.set(execution.id, execution)
     }
-
-    const status = (item.status ?? '').toLowerCase()
-    if (status === 'success' || status === 'completed') {
-      current.completed += 1
-    } else if (status === 'failure' || status === 'failed') {
-      current.failed += 1
-    }
-    current.total += 1
-    byDay.set(key, current)
   }
 
-  return Array.from(byDay.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .slice(-7)
-    .map(([, point]) => point)
+  const byDay = new Map<string, ScrapingExecution[]>()
+  for (const key of dayKeys) byDay.set(key, [])
+
+  let totalRuns = 0
+  let completedRuns = 0
+  let failedRuns = 0
+  let latestTimestamp = ''
+
+  for (const execution of uniqueExecutions.values()) {
+    const key = getYangonDayKey(execution.started_at)
+    if (!key || !allowedDays.has(key)) continue
+
+    byDay.get(key)?.push(execution)
+    totalRuns += 1
+    if (isCompletedExecution(execution)) completedRuns += 1
+    if (isFailedExecution(execution)) failedRuns += 1
+    if (
+      !latestTimestamp ||
+      Date.parse(execution.started_at) > Date.parse(latestTimestamp)
+    ) {
+      latestTimestamp = execution.started_at
+    }
+  }
+
+  const chart = dayKeys.map((key) => {
+    const records = byDay.get(key) ?? []
+    const completed = records.filter(isCompletedExecution).length
+    const failed = records.filter(isFailedExecution).length
+    return {
+      label: formatAppDayKey(key),
+      completed,
+      failed,
+      // The chart intentionally shows finalized executions only.
+      total: completed + failed,
+    }
+  })
+
+  const finalizedRuns = completedRuns + failedRuns
+  const successRate =
+    finalizedRuns > 0 ? Math.round((completedRuns / finalizedRuns) * 100) : 0
+
+  return {
+    chart,
+    metrics: { totalRuns, completedRuns, failedRuns, successRate },
+    latestTimestamp,
+  }
 }
 
 function getScrapingChartHeightClass(pointCount: number): string {
@@ -312,7 +375,32 @@ function StatCard({ label, value, detail, icon: Icon, tone, to }: KpiCard) {
   )
 }
 
-const pairedCardClassName = 'flex min-h-[360px] min-w-0 flex-col sm:h-[400px]'
+function ScrapingMetricCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string
+  value: string
+  detail: string
+}) {
+  return (
+    <div className="min-w-0 rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2">
+      <p className="text-[9px] font-medium uppercase tracking-[0.12em] text-slate-500">
+        {label}
+      </p>
+      <p className="mt-1 text-base font-semibold tabular-nums text-white">
+        {value}
+      </p>
+      <p className="mt-0.5 text-[9px] leading-4 text-slate-500">{detail}</p>
+    </div>
+  )
+}
+
+// Scraping Activity defines the row height. On desktop the audit panel is
+// absolutely positioned inside a zero-content grid item, so expanded audit
+// records can only scroll inside its body instead of growing either panel.
+const pairedCardClassName = 'flex min-h-0 min-w-0 flex-col'
 
 function SectionCard({
   title,
@@ -487,7 +575,7 @@ function ScrapingTooltip({
           </span>
         </div>
         <div className="flex items-center justify-between gap-6 border-t border-white/[0.06] pt-1.5">
-          <span className="text-slate-500">Total activity</span>
+          <span className="text-slate-500">Finalized activity</span>
           <span className="font-semibold tabular-nums text-slate-200">
             {point?.total ?? 0}
           </span>
@@ -734,6 +822,12 @@ export function AdminOverviewPage() {
     loading: true,
     error: '',
   })
+  const [scrapingHistory, setScrapingHistory] = useState<ScrapingHistoryState>({
+    executions: [],
+    loading: true,
+    error: '',
+  })
+  const [scrapingRange, setScrapingRange] = useState<ScrapingRangeDays>(7)
 
   useEffect(() => {
     let active = true
@@ -799,6 +893,29 @@ export function AdminOverviewPage() {
         }
       })
 
+    const scrapingClient = createBackendScrapingApiClient()
+    setScrapingHistory((previous) => ({ ...previous, loading: true, error: '' }))
+    scrapingClient
+      .getAllExecutionHistory()
+      .then((executions) => {
+        if (active) {
+          setScrapingHistory({ executions, loading: false, error: '' })
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to load scraping execution history', error)
+        if (active) {
+          setScrapingHistory({
+            executions: [],
+            loading: false,
+            error: getErrorMessage(
+              error,
+              'Unable to load scraping execution history.',
+            ),
+          })
+        }
+      })
+
     return () => {
       active = false
     }
@@ -810,42 +927,18 @@ export function AdminOverviewPage() {
     setReloadToken((token) => token + 1)
   }
 
-  const scrapingActivityData = useMemo(
-    () => buildScrapingActivityChart(dashboard),
-    [dashboard],
-  )
-
-  const scrapingItems = useMemo(
+  const scrapingActivity = useMemo(
     () =>
-      dashboard?.recent_activity.items.filter(
-        (item) => item.category === 'scraping_activities',
-      ) ?? [],
-    [dashboard],
+      buildScrapingActivity(
+        scrapingHistory.executions,
+        scrapingRange,
+        new Date(),
+      ),
+    [scrapingHistory.executions, scrapingRange],
   )
-
-  const latestScrapingUpdate = useMemo(
-    () =>
-      scrapingItems
-        .map((item) => item.sort_timestamp || item.timestamp)
-        .filter(Boolean)
-        .sort((first, second) => Date.parse(second) - Date.parse(first))[0] ?? '',
-    [scrapingItems],
-  )
-
-  const completedScrapingJobs = scrapingItems.filter((item) => {
-    const status = (item.status ?? '').toLowerCase()
-    return status === 'success' || status === 'completed'
-  }).length
-
-  const failedScrapingJobs = scrapingItems.filter((item) => {
-    const status = (item.status ?? '').toLowerCase()
-    return status === 'failure' || status === 'failed'
-  }).length
-
-  const totalScrapingJobs =
-    dashboard?.recent_activity.categories.find(
-      (category) => category.key === 'scraping_activities',
-    )?.count ?? 0
+  const scrapingActivityData = scrapingActivity.chart
+  const scrapingMetrics = scrapingActivity.metrics
+  const latestScrapingUpdate = scrapingActivity.latestTimestamp
 
   const kpis: KpiCard[] = dashboard
     ? [
@@ -881,35 +974,14 @@ export function AdminOverviewPage() {
           tone: 'green',
           to: '/admin/categories',
         },
-        {
-          label: 'Scraping Jobs',
-          value: totalScrapingJobs.toLocaleString(),
-          detail: `${dashboard.kpis.active_scraping_jobs.toLocaleString()} active job records`,
-          icon: Activity,
-          tone: 'amber',
-          to: '/admin/scraping',
-        },
-        {
-          label: 'Completed / Failed Jobs',
-          value: `${completedScrapingJobs.toLocaleString()} / ${failedScrapingJobs.toLocaleString()}`,
-          detail: 'Derived from recorded scraping activity',
-          icon: Layers,
-          tone: 'rose',
-          to: '/admin/scraping',
-        },
       ]
     : []
 
-  const scrapingExecutionStatus: DisplayStatus =
-    apiStatus === 'offline'
-      ? 'unavailable'
-      : dashboard
-        ? totalScrapingJobs > 0 || dashboard.kpis.active_scraping_jobs >= 0
-          ? 'healthy'
-          : 'unavailable'
-        : dashboardLoading
-          ? 'checking'
-          : 'unavailable'
+  const scrapingExecutionStatus: DisplayStatus = scrapingHistory.error
+    ? 'unavailable'
+    : scrapingHistory.loading
+      ? 'checking'
+      : 'healthy'
 
   const catalogStatus: DisplayStatus = dashboard
     ? 'healthy'
@@ -951,15 +1023,22 @@ export function AdminOverviewPage() {
         : '—',
     },
     {
-      label: 'Activity records',
-      value: dashboard ? totalScrapingJobs.toLocaleString() : '—',
+      label: 'Executions',
+      value:
+        scrapingHistory.error || scrapingHistory.loading
+          ? '—'
+          : scrapingMetrics.totalRuns.toLocaleString(),
     },
   ]
 
-  const sparseChart = scrapingActivityData.length <= 2
+  const sparseChart = scrapingActivityData.filter((point) => point.total > 0).length <= 2
   const chartHeightClass = getScrapingChartHeightClass(
     scrapingActivityData.length,
   )
+  const scrapingMetricValue = (value: number) =>
+    scrapingHistory.error || scrapingHistory.loading
+      ? '—'
+      : value.toLocaleString()
 
   return (
     <div className="min-w-0 space-y-4 sm:space-y-5">
@@ -1039,13 +1118,13 @@ export function AdminOverviewPage() {
         </div>
 
         {dashboardLoading && !dashboard ? (
-          <div className="grid auto-rows-fr gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
-            {Array.from({ length: 6 }, (_, index) => (
+          <div className="grid auto-rows-fr gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+            {Array.from({ length: 4 }, (_, index) => (
               <SkeletonCard key={index} />
             ))}
           </div>
         ) : dashboard ? (
-          <div className="grid auto-rows-fr gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+          <div className="grid auto-rows-fr gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
             {kpis.map((card) => (
               <StatCard key={card.label} {...card} />
             ))}
@@ -1059,37 +1138,98 @@ export function AdminOverviewPage() {
         )}
       </section>
 
-      <section className="grid min-w-0 gap-4 lg:grid-cols-2">
+      <section className="grid min-w-0 gap-4 lg:grid-cols-2 lg:items-stretch">
         <SectionCard
           title="Scraping Activity"
-          description="Recent scraping execution records aggregated from available dashboard activity data."
+          description="Runs = historical execution records grouped by calendar day in the application timezone."
           action={
-            <div className="flex shrink-0 flex-col items-end rounded-xl border border-white/[0.08] bg-white/[0.02] px-3 py-1.5">
-              <span className="text-[9px] font-medium uppercase tracking-[0.12em] text-slate-500">
-                Total activity
-              </span>
-              <span className="mt-0.5 text-lg font-semibold tabular-nums text-white">
-                {dashboardLoading
-                  ? '—'
-                  : totalScrapingJobs.toLocaleString()}
-              </span>
+            <div
+              aria-label="Filter scraping activity by date range"
+              className="flex flex-wrap items-center gap-0.5 rounded-xl border border-white/[0.07] bg-[#090e18] p-1"
+            >
+              <CalendarDays
+                aria-hidden="true"
+                size={13}
+                className="ml-1.5 mr-0.5 text-slate-500"
+              />
+              {([7, 30, 90] as const).map((days) => (
+                <button
+                  key={days}
+                  type="button"
+                  aria-pressed={scrapingRange === days}
+                  onClick={() => setScrapingRange(days)}
+                  className={`min-h-9 rounded-lg px-2.5 py-1.5 text-[10px] font-medium transition sm:min-h-0 ${
+                    scrapingRange === days
+                      ? 'bg-blue-400/10 text-blue-200'
+                      : 'text-slate-500 hover:text-slate-300'
+                  }`}
+                >
+                  {days} Days
+                </button>
+              ))}
             </div>
           }
           className={pairedCardClassName}
         >
-          {dashboardLoading && !dashboard ? (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <ScrapingMetricCard
+              label="Total Runs"
+              value={scrapingMetricValue(scrapingMetrics.totalRuns)}
+              detail={`${scrapingRange}-day executions`}
+            />
+            <ScrapingMetricCard
+              label="Completed Runs"
+              value={scrapingMetricValue(scrapingMetrics.completedRuns)}
+              detail="Finalized successfully"
+            />
+            <ScrapingMetricCard
+              label="Failed Runs"
+              value={scrapingMetricValue(scrapingMetrics.failedRuns)}
+              detail="Finalized with errors"
+            />
+            <ScrapingMetricCard
+              label="Running Jobs"
+              value={
+                dashboard
+                  ? dashboard.kpis.active_scraping_jobs.toLocaleString()
+                  : '—'
+              }
+              detail="Current active jobs"
+            />
+            <ScrapingMetricCard
+              label="Success Rate"
+              value={
+                scrapingHistory.error || scrapingHistory.loading
+                  ? '—'
+                  : `${scrapingMetrics.successRate}%`
+              }
+              detail="Completed / finalized runs"
+            />
+          </div>
+
+          {scrapingHistory.loading ? (
             <div
-              className={`${getScrapingChartHeightClass(4)} animate-pulse rounded-xl bg-white/[0.03]`}
+              className={`${getScrapingChartHeightClass(4)} mt-3 animate-pulse rounded-xl bg-white/[0.03]`}
             />
-          ) : scrapingActivityData.length === 0 ? (
-            <EmptyPanel
-              icon={Activity}
-              title="No scraping activity available"
-              description="Scraping execution history is not available yet or no dated scraping records were returned by the dashboard API."
-            />
+          ) : scrapingHistory.error ? (
+            <div className="mt-3">
+              <EmptyPanel
+                icon={CircleAlert}
+                title="Scraping execution history unavailable"
+                description={scrapingHistory.error}
+              />
+            </div>
+          ) : scrapingMetrics.totalRuns === 0 ? (
+            <div className="mt-3">
+              <EmptyPanel
+                icon={Activity}
+                title="No scraping execution history available for this period."
+                description="No execution records from the scraping history API fall inside the selected calendar range."
+              />
+            </div>
           ) : (
             <>
-              <div className={`${chartHeightClass} w-full min-w-0`}>
+              <div className={`${chartHeightClass} mt-3 w-full min-w-0`}>
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart
                     data={scrapingActivityData}
@@ -1185,35 +1325,38 @@ export function AdminOverviewPage() {
                   </span>
                 </div>
                 <span className="text-[10px] text-slate-500">
-                  {scrapingActivityData.length} dated{' '}
-                  {scrapingActivityData.length === 1 ? 'entry' : 'entries'}
+                  {scrapingMetrics.totalRuns.toLocaleString()}{' '}
+                  {scrapingMetrics.totalRuns === 1 ? 'execution' : 'executions'} ·{' '}
+                  {scrapingRange} days
                 </span>
               </div>
             </>
           )}
         </SectionCard>
 
-        <SectionCard
-          title="Recent Audit Records"
-          description="Latest audit log entries from the backend audit records API."
-          action={
-            <Link
-              to="/admin/audit-logs"
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-2 text-[11px] font-medium text-slate-300 transition hover:border-cyan-400/20 hover:text-white"
-            >
-              <ClipboardList aria-hidden="true" size={14} />
-              Open audit log
-            </Link>
-          }
-          className={pairedCardClassName}
-          bodyClassName="min-h-0 flex-1 overflow-y-auto pr-1"
-        >
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
-            <span>{auditState.totalEvents.toLocaleString()} total audit events</span>
-            <span>Most recent records</span>
-          </div>
-          <AuditRecords state={auditState} />
-        </SectionCard>
+        <div className="relative min-w-0">
+          <SectionCard
+            title="Recent Audit Records"
+            description="Latest audit log entries from the backend audit records API."
+            action={
+              <Link
+                to="/admin/audit-logs"
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-2 text-[11px] font-medium text-slate-300 transition hover:border-cyan-400/20 hover:text-white"
+              >
+                <ClipboardList aria-hidden="true" size={14} />
+                Open audit log
+              </Link>
+            }
+            className={`${pairedCardClassName} lg:absolute lg:inset-0`}
+            bodyClassName="min-h-0 flex-1 overflow-y-auto pr-1"
+          >
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
+              <span>{auditState.totalEvents.toLocaleString()} total audit events</span>
+              <span>Most recent records</span>
+            </div>
+            <AuditRecords state={auditState} />
+          </SectionCard>
+        </div>
       </section>
 
       <section className="min-w-0">
@@ -1266,16 +1409,16 @@ export function AdminOverviewPage() {
 
           <DataSourceCard
             title="Scraping Execution"
-            description="Recorded jobs and activity status"
+            description="Real execution history and current job status"
             status={scrapingExecutionStatus}
             icon={Activity}
             tone="purple"
             message={
-              dashboard
-                ? `${totalScrapingJobs.toLocaleString()} scraping activity records available, with ${dashboard.kpis.active_scraping_jobs.toLocaleString()} active jobs reported.`
-                : dashboardLoading
-                  ? 'Loading scraping execution status…'
-                  : 'Scraping execution status is unavailable.'
+              scrapingHistory.error
+                ? `Scraping execution history could not be loaded: ${scrapingHistory.error}`
+                : scrapingHistory.loading
+                  ? 'Loading scraping execution history…'
+                  : `${scrapingMetrics.totalRuns.toLocaleString()} executions in the selected ${scrapingRange}-day range, with ${dashboard?.kpis.active_scraping_jobs.toLocaleString() ?? '—'} active jobs reported.`
             }
             lastUpdated={latestScrapingUpdate}
             stats={scrapingStats}
