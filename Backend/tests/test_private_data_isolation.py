@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from app.main import app
+from app.main import alert_document_id, app
 from app.routers.auth import SESSION_COOKIE
 from tests.test_notifications_api import MemoryCollection as BaseMemoryCollection
 
@@ -190,10 +190,17 @@ class PrivateDataIsolationTests(unittest.IsolatedAsyncioTestCase):
             self.user_b,
             {**alert_payload(), "user_id": self.user_a},
         )
-        self.assertEqual(response.status_code, 422)
-        clean_response = await self.add_alert(self.user_b)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["user_id"], self.user_b)
+        self.assertEqual(
+            self.database.alerts.documents[
+                alert_document_id(self.user_b, "alert-1")
+            ]["user_id"],
+            self.user_b,
+        )
+        clean_response = await self.add_alert(self.user_b, alert_id="alert-b")
         self.assertEqual(clean_response.status_code, 201)
-        self.assertEqual(len(self.database.alerts.documents), 2)
+        self.assertEqual(len(self.database.alerts.documents), 3)
 
     async def test_user_a_cannot_update_or_delete_user_b_alert(self):
         await self.add_alert(self.user_b)

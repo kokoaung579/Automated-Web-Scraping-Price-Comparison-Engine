@@ -100,7 +100,8 @@ class AmazonOnlyStoreTests(unittest.IsolatedAsyncioTestCase):
                 {"_id": "p4", "store_id": "amazon"},
             ]
         )
-        database = SimpleNamespace(stores=stores, products=products)
+        offers = SimpleNamespace(count_documents=AsyncMock(return_value=0))
+        database = SimpleNamespace(stores=stores, products=products, offers=offers)
         request = SimpleNamespace(
             app=SimpleNamespace(state=SimpleNamespace(database=database))
         )

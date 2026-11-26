@@ -62,11 +62,16 @@ async def list_stores(request: Request):
             }
         )
 
+        offer_count = await db.offers.count_documents(
+            {"store": store.get("store_name", "")}
+        )
+
         result.append(
             {
                 **store,
                 "store_id": store_id,
                 "product_count": product_count,
+                "offer_count": offer_count,
             }
         )
 
@@ -234,6 +239,7 @@ async def update_store(
 async def delete_store(
     store_id: str,
     request: Request,
+    delete_offers: bool = False,
     admin: dict = Depends(require_admin),
 ):
     db = request.app.state.database
@@ -268,7 +274,7 @@ async def delete_store(
         {"store": existing["store_name"]}
     )
 
-    if product_count > 0 or offer_count > 0:
+    if product_count > 0:
         await _audit(
             db,
             request,
@@ -289,17 +295,55 @@ async def delete_store(
             ),
         )
 
-    await db.stores.delete_one({"_id": store_id})
+    if offer_count > 0 and not delete_offers:
+        await _audit(
+            db,
+            request,
+            admin,
+            action="DELETE",
+            description=(
+                f"Failed to delete store {store_id}: linked to "
+                f"{product_count} products and {offer_count} offers."
+            ),
+            target_record_id=store_id,
+            event_status="FAILED",
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot delete this store because it is linked "
+                f"to {product_count} products and {offer_count} offers."
+            ),
+        )
+
+    client = db.client
+    async with await client.start_session() as session:
+        async with await session.start_transaction():
+            deleted_offers = 0
+            if offer_count > 0 and delete_offers:
+                result = await db.offers.delete_many(
+                    {"store": existing["store_name"]},
+                    session=session,
+                )
+                deleted_offers = getattr(result, "deleted_count", 0) or 0
+            await db.stores.delete_one({"_id": store_id}, session=session)
+
+    description = f"Deleted store {store_id}."
+    if deleted_offers:
+        description = (
+            f"Deleted store {store_id} and {deleted_offers} linked offers."
+        )
     await _audit(
         db,
         request,
         admin,
         action="DELETE",
-        description=f"Deleted store {store_id}.",
+        description=description,
         target_record_id=store_id,
     )
 
     return {
         "message": "Store deleted successfully.",
         "store_id": store_id,
+        "deleted_offers": deleted_offers,
     }

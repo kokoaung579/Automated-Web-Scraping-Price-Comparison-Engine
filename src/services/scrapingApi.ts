@@ -115,7 +115,7 @@ export function createScrapingApiClient(
     try {
       body = await response.json()
     } catch {
-      body = null
+      // Keep the null fallback when the response has no JSON body.
     }
 
     if (!response.ok) {
