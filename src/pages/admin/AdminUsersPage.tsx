@@ -132,7 +132,7 @@ function UserDetailsDialog({
   onClose: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm sm:items-center">
       <button
         type="button"
         aria-label="Close user details"
@@ -143,7 +143,7 @@ function UserDetailsDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="user-details-title"
-        className="relative z-10 w-full max-w-md overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
+        className="relative z-10 w-full max-h-[calc(100dvh-2.5rem)] max-w-md overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
       >
         <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4 sm:px-6">
           <div>
@@ -221,7 +221,7 @@ function DeleteUserDialog({
   onConfirm: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm sm:items-center">
       <button
         type="button"
         aria-label="Cancel account deletion"
@@ -233,7 +233,7 @@ function DeleteUserDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="delete-user-title"
-        className="relative z-10 w-full max-w-md overflow-hidden rounded-2xl border border-rose-300/15 bg-[#0d1320] shadow-2xl shadow-black/50"
+        className="relative z-10 w-full max-h-[calc(100dvh-2.5rem)] max-w-md overflow-y-auto rounded-2xl border border-rose-300/15 bg-[#0d1320] shadow-2xl shadow-black/50"
       >
         <div className="flex items-start gap-3 border-b border-white/[0.06] px-5 py-4 sm:px-6">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-rose-300/15 bg-rose-400/[0.08] text-rose-300">
@@ -632,8 +632,8 @@ export function AdminUsersPage() {
                 {actionError}
               </p>
             )}
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[980px] border-collapse text-left">
+            <div className="overflow-x-auto admin-table-responsive admin-table-responsive--wide">
+              <table className="w-full min-w-[980px] border-collapse text-left admin-data-table">
                 <thead>
                   <tr className="border-b border-white/[0.06] bg-white/[0.015] text-[9px] font-semibold uppercase tracking-[0.13em] text-slate-500">
                     <th scope="col" className="px-5 py-3.5 font-semibold">
@@ -666,7 +666,7 @@ export function AdminUsersPage() {
                         key={user.email}
                         className="group transition-colors hover:bg-white/[0.02]"
                       >
-                        <td className="px-5 py-3.5">
+                        <td data-label="Username" className="px-5 py-3.5">
                           <div className="flex min-w-0 items-center gap-3">
                             <span
                               className={`flex size-9 shrink-0 items-center justify-center rounded-xl text-[10px] font-semibold ${
@@ -684,7 +684,7 @@ export function AdminUsersPage() {
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 py-3.5">
+                        <td data-label="Email" className="px-4 py-3.5">
                           <span className="inline-flex max-w-[220px] items-center gap-1.5 truncate text-[10px] text-slate-400">
                             <Mail
                               aria-hidden="true"
@@ -694,13 +694,13 @@ export function AdminUsersPage() {
                             {user.email}
                           </span>
                         </td>
-                        <td className="px-4 py-3.5">
+                        <td data-label="Role" className="px-4 py-3.5">
                           <RoleBadge role={user.role} />
                         </td>
-                        <td className="px-4 py-3.5">
+                        <td data-label="Status" className="px-4 py-3.5">
                           <StatusBadge status={user.status} />
                         </td>
-                        <td className="px-4 py-3.5">
+                        <td data-label="Registration date" className="px-4 py-3.5">
                           <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[10px] text-slate-400">
                             <CalendarDays
                               aria-hidden="true"
@@ -710,7 +710,7 @@ export function AdminUsersPage() {
                             {formatRegistrationDate(user.registeredAt)}
                           </span>
                         </td>
-                        <td className="px-5 py-3.5">
+                        <td data-label="Actions" className="admin-cell-actions px-5 py-3.5">
                           <div className="flex items-center justify-end gap-1.5">
                             <button
                               type="button"

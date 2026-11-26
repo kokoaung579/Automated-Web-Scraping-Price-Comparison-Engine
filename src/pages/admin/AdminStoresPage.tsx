@@ -131,7 +131,7 @@ function StoreDialog({
   const storeId = store?.store_id ?? getStoreIdFromName(storeName)
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto sm:items-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
       <button
         type="button"
         aria-label="Close store form"
@@ -143,7 +143,7 @@ function StoreDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="store-form-title"
-        className="relative z-10 my-auto w-full max-w-lg overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
+        className="relative z-10 my-auto w-full max-h-[calc(100dvh-2.5rem)] max-w-lg overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
       >
         <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4 sm:px-6">
           <div>
@@ -309,7 +309,7 @@ function DeleteStoreDialog({
   onConfirmWithOffers: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm sm:items-center">
       <button
         type="button"
         aria-label="Cancel store deletion"
@@ -321,7 +321,7 @@ function DeleteStoreDialog({
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="delete-store-title"
-        className="relative z-10 w-full max-w-sm rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
+        className="relative z-10 w-full max-h-[calc(100dvh-2.5rem)] max-w-sm overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
       >
         <span className="flex size-10 items-center justify-center rounded-xl border border-rose-300/10 bg-rose-400/[0.07] text-rose-300">
           <Trash2 aria-hidden="true" size={17} />
@@ -364,11 +364,11 @@ function DeleteStoreDialog({
           </p>
         )}
 
-        <div className="mt-5 flex justify-end gap-2">
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-xl border border-white/[0.08] px-3.5 py-2 text-[11px] font-medium text-slate-300 transition hover:bg-white/[0.04]"
+            className="inline-flex min-h-10 items-center justify-center rounded-xl border border-white/[0.08] px-3.5 py-2 text-[11px] font-medium text-slate-300 transition hover:bg-white/[0.04]"
           >
             Cancel
           </button>
@@ -377,7 +377,7 @@ function DeleteStoreDialog({
             type="button"
             onClick={onConfirm}
             disabled={productCount > 0 || offerCount > 0}
-            className="rounded-xl bg-rose-500/90 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex min-h-10 items-center justify-center rounded-xl bg-rose-500/90 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Delete store
           </button>
@@ -385,7 +385,7 @@ function DeleteStoreDialog({
             <button
               type="button"
               onClick={onConfirmWithOffers}
-              className="rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3.5 py-2 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-400/[0.14]"
+              className="inline-flex min-h-10 items-center justify-center rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3.5 py-2 text-[11px] font-semibold text-rose-100 transition hover:bg-rose-400/[0.14]"
             >
               Delete store and {offerCount} offers
             </button>
@@ -700,8 +700,8 @@ export function AdminStoresPage() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[880px] border-collapse text-left">
+        <div className="overflow-x-auto admin-table-responsive">
+          <table className="w-full min-w-[880px] border-collapse text-left admin-data-table">
             <thead className="bg-[#111a29]">
               <tr className="border-b border-white/[0.06] text-[9px] font-semibold uppercase tracking-[0.1em] text-slate-500">
                 <th className="px-5 py-3.5">Store Name</th>
@@ -727,7 +727,7 @@ export function AdminStoresPage() {
 
                 return (
                   <tr key={store.store_id} className="align-middle">
-                    <td className="px-5 py-4">
+                    <td data-label="Store Name" className="px-5 py-4">
                       <div className="flex items-center gap-3">
                         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-blue-300/10 bg-blue-400/[0.06] text-xs font-semibold text-blue-200">
                           {initials || (
@@ -750,18 +750,18 @@ export function AdminStoresPage() {
                       </div>
                     </td>
 
-                    <td className="px-4 py-4">
+                    <td data-label="Website URL" className="px-4 py-4">
                       <a
                         href={store.website_url}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-xs text-blue-300 transition hover:text-blue-200"
+                        className="break-all text-xs text-blue-300 transition hover:text-blue-200 [overflow-wrap:anywhere]"
                       >
                         {store.website_url}
                       </a>
                     </td>
 
-                    <td className="px-4 py-4">
+                    <td data-label="Logo" className="px-4 py-4">
                       {store.logo_url ? (
                         <img
                           src={store.logo_url}
@@ -777,7 +777,7 @@ export function AdminStoresPage() {
                       )}
                     </td>
 
-                    <td className="px-4 py-4">
+                    <td data-label="Status" className="px-4 py-4">
                       <span
                         className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-medium ${
                           store.status === 'Active'
@@ -797,13 +797,13 @@ export function AdminStoresPage() {
                       </span>
                     </td>
 
-                    <td className="px-4 py-4">
+                    <td data-label="Product Count" className="px-4 py-4">
                       <span className="text-xs font-medium tabular-nums text-slate-300">
                         {productCount}
                       </span>
                     </td>
 
-                    <td className="px-5 py-4">
+                    <td data-label="Actions" className="admin-cell-actions px-5 py-4">
                       <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"
@@ -851,7 +851,7 @@ export function AdminStoresPage() {
 
               {filteredStores.length === 0 && (
                 <tr>
-                  <td
+                  <td data-label="Store Name"
                     colSpan={6}
                     className="px-5 py-12 text-center"
                   >

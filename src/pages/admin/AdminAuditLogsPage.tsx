@@ -172,7 +172,7 @@ function AuditDetailsDialog({
   ]
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/80 px-3 py-5 backdrop-blur-sm sm:px-5">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto sm:items-center bg-slate-950/80 px-3 py-5 backdrop-blur-sm sm:px-5">
       <button
         type="button"
         aria-label="Close activity details"
@@ -183,7 +183,7 @@ function AuditDetailsDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="audit-details-title"
-        className="relative z-10 my-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
+        className="relative z-10 my-auto w-full max-h-[calc(100dvh-2.5rem)] max-w-2xl overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
       >
         <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4 sm:px-6">
           <div>
@@ -581,8 +581,8 @@ export function AdminAuditLogsPage() {
           </div>
         ) : (
           <>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1180px] border-collapse text-left">
+            <div className="overflow-x-auto admin-table-responsive admin-table-responsive--wide">
+              <table className="w-full min-w-[1180px] border-collapse text-left admin-data-table">
                 <thead className="bg-[#111a29]">
                   <tr className="border-b border-white/[0.06] text-[9px] font-semibold uppercase tracking-[0.1em] text-slate-500">
                     <th scope="col" className="px-5 py-3.5">Timestamp</th>
@@ -598,10 +598,10 @@ export function AdminAuditLogsPage() {
                 <tbody className="divide-y divide-white/[0.05]">
                   {visibleLogs.map((log) => (
                     <tr key={log.id} className="align-middle transition-colors hover:bg-white/[0.02]">
-                      <td className="whitespace-nowrap px-5 py-4 text-[10px] text-slate-400">
+                      <td data-label="Timestamp" className="whitespace-nowrap px-5 py-4 text-[10px] text-slate-400">
                         {formatAuditTimestamp(log.timestamp)}
                       </td>
-                      <td className="px-4 py-4">
+                      <td data-label="Admin / User" className="px-4 py-4">
                         <div className="flex items-center gap-2.5">
                           <span className={`flex size-8 shrink-0 items-center justify-center rounded-lg border ${
                             log.actor_role === 'Admin'
@@ -618,19 +618,19 @@ export function AdminAuditLogsPage() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-4">
+                      <td data-label="Action" className="px-4 py-4">
                         <p className="whitespace-nowrap text-[11px] font-medium text-slate-200">{log.action}</p>
                         <p className="mt-1 text-[9px] text-slate-600">{labelFor(actionLabels, log.action_type)}</p>
                       </td>
-                      <td className="px-4 py-4">
+                      <td data-label="Module" className="px-4 py-4">
                         <span className="whitespace-nowrap rounded-lg border border-white/[0.07] bg-white/[0.025] px-2 py-1 text-[9px] text-slate-400">
                           {labelFor(moduleLabels, log.module)}
                         </span>
                       </td>
-                      <td className="max-w-[260px] px-4 py-4 text-[10px] leading-4 text-slate-400">{log.description}</td>
-                      <td className="whitespace-nowrap px-4 py-4 font-mono text-[10px] text-slate-500">{log.ip_address}</td>
-                      <td className="px-4 py-4"><StatusBadge status={log.status} /></td>
-                      <td className="px-5 py-4 text-right">
+                      <td data-label="Description" className="max-w-[260px] px-4 py-4 text-[10px] leading-4 text-slate-400">{log.description}</td>
+                      <td data-label="IP address" className="whitespace-nowrap px-4 py-4 font-mono text-[10px] text-slate-500">{log.ip_address}</td>
+                      <td data-label="Status" className="px-4 py-4"><StatusBadge status={log.status} /></td>
+                      <td data-label="Details" className="admin-cell-actions px-5 py-4 text-right">
                         <button
                           type="button"
                           onClick={() => setSelectedLog(log)}
@@ -645,7 +645,7 @@ export function AdminAuditLogsPage() {
                   ))}
                   {visibleLogs.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-5 py-12 text-center">
+                      <td data-label="Timestamp" colSpan={8} className="px-5 py-12 text-center">
                         <p className="text-xs font-medium text-slate-300">No audit records found</p>
                         <p className="mt-1 text-[10px] text-slate-500">Change or clear the search and filters.</p>
                       </td>

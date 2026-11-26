@@ -18,7 +18,7 @@ export function AdminLayout({ currentUser }: AdminLayoutProps) {
 
   return (
     <AdminNotificationsProvider>
-      <div className="min-h-screen bg-[#060b16] font-sans text-slate-100">
+      <div className="admin-workspace min-h-screen bg-[#060b16] font-sans text-slate-100">
         <div
           aria-hidden="true"
           className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.08),transparent_28%),radial-gradient(circle_at_top_left,rgba(59,130,246,0.08),transparent_24%)]"

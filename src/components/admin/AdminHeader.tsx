@@ -59,7 +59,7 @@ export function AdminHeader({ currentUser, onMenuClick }: AdminHeaderProps) {
           type="button"
           onClick={onMenuClick}
           aria-label="Toggle admin navigation"
-          className="rounded-xl border border-white/[0.08] p-2.5 text-slate-300 transition hover:border-cyan-400/20 hover:bg-white/[0.04] hover:text-white lg:hidden"
+          className="flex size-11 items-center justify-center rounded-xl border border-white/[0.08] text-slate-300 transition hover:border-cyan-400/20 hover:bg-white/[0.04] hover:text-white sm:size-auto sm:p-2.5 lg:hidden"
         >
           <Menu aria-hidden="true" size={18} />
         </button>
@@ -79,7 +79,7 @@ export function AdminHeader({ currentUser, onMenuClick }: AdminHeaderProps) {
             Admin control center
           </span>
 
-          <div className="relative">
+          <div className="static sm:relative">
             <button
               type="button"
               aria-label={
@@ -92,7 +92,7 @@ export function AdminHeader({ currentUser, onMenuClick }: AdminHeaderProps) {
                 notificationsOpen ? 'admin-notification-menu' : undefined
               }
               onClick={() => setNotificationsOpen((open) => !open)}
-              className="relative rounded-xl border border-white/[0.08] p-2.5 text-slate-300 transition hover:border-cyan-400/20 hover:bg-white/[0.04] hover:text-white"
+              className="relative flex size-11 items-center justify-center rounded-xl border border-white/[0.08] text-slate-300 transition hover:border-cyan-400/20 hover:bg-white/[0.04] hover:text-white sm:size-auto sm:p-2.5"
             >
               <Bell aria-hidden="true" size={17} />
               {unreadCount > 0 && (
@@ -108,7 +108,7 @@ export function AdminHeader({ currentUser, onMenuClick }: AdminHeaderProps) {
               <section
                 id="admin-notification-menu"
                 aria-label="Admin notifications"
-                className="absolute right-0 top-full z-50 mt-3 w-[min(320px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0f1728] shadow-2xl shadow-black/40"
+                className="absolute left-1/2 top-full z-50 mt-3 w-[calc(100vw-1.5rem)] max-w-[320px] -translate-x-1/2 overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0f1728] shadow-2xl shadow-black/40 sm:left-auto sm:right-0 sm:w-[min(320px,calc(100vw-2rem))] sm:translate-x-0"
               >
                 <div className="flex items-center justify-between border-b border-white/[0.07] px-4 py-3">
                   <div>
@@ -125,7 +125,7 @@ export function AdminHeader({ currentUser, onMenuClick }: AdminHeaderProps) {
                     type="button"
                     aria-label="Close admin notifications"
                     onClick={() => setNotificationsOpen(false)}
-                    className="rounded-lg p-1.5 text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-200"
+                    className="flex size-11 items-center justify-center rounded-lg text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-200 sm:size-9"
                   >
                     <X aria-hidden="true" size={14} />
                   </button>
@@ -185,7 +185,7 @@ export function AdminHeader({ currentUser, onMenuClick }: AdminHeaderProps) {
                                       void markAsRead(notification.id)
                                     }
                                     aria-label={`Mark ${notification.title} as read`}
-                                    className="shrink-0 rounded-md px-1.5 py-0.5 text-[9px] font-medium text-cyan-300 transition hover:bg-cyan-400/10 hover:text-cyan-200"
+                                    className="inline-flex min-h-10 shrink-0 items-center rounded-md px-2 text-[10px] font-medium text-cyan-300 transition hover:bg-cyan-400/10 hover:text-cyan-200 sm:min-h-0 sm:py-0.5"
                                   >
                                     Mark as Read
                                   </button>
@@ -218,14 +218,14 @@ export function AdminHeader({ currentUser, onMenuClick }: AdminHeaderProps) {
                     type="button"
                     onClick={() => void markAllAsRead()}
                     disabled={unreadCount === 0}
-                    className="rounded-lg px-2 py-1.5 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.05] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                    className="inline-flex min-h-10 items-center rounded-lg px-2 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.05] hover:text-white disabled:cursor-not-allowed disabled:opacity-40 sm:min-h-0 sm:py-1.5"
                   >
                     Mark All as Read
                   </button>
                   <Link
                     to="/admin/notifications"
                     onClick={() => setNotificationsOpen(false)}
-                    className="rounded-lg px-2 py-1.5 text-[10px] font-medium text-cyan-300 transition hover:bg-cyan-400/[0.07] hover:text-cyan-200"
+                    className="inline-flex min-h-10 items-center rounded-lg px-2 text-[10px] font-medium text-cyan-300 transition hover:bg-cyan-400/[0.07] hover:text-cyan-200 sm:min-h-0 sm:py-1.5"
                   >
                     View All Notifications
                   </Link>
@@ -244,7 +244,7 @@ export function AdminHeader({ currentUser, onMenuClick }: AdminHeaderProps) {
                 setUserMenuOpen((open) => !open)
                 setLogoutError('')
               }}
-              className="flex max-w-[160px] items-center gap-2 rounded-xl border border-transparent py-1.5 pl-1.5 pr-2 text-left transition hover:border-white/[0.08] hover:bg-white/[0.04] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 sm:max-w-[210px] sm:gap-2.5 sm:pl-2"
+              className="flex min-h-11 max-w-[160px] items-center gap-2 rounded-xl border border-transparent py-1.5 pl-1.5 pr-2 text-left transition hover:border-white/[0.08] hover:bg-white/[0.04] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400 sm:max-w-[210px] sm:gap-2.5 sm:pl-2"
             >
               <span className="flex size-8 shrink-0 items-center justify-center rounded-full border border-cyan-300/20 bg-gradient-to-br from-cyan-400/20 to-blue-500/20 text-[10px] font-semibold text-cyan-100">
                 {initials}
@@ -268,7 +268,7 @@ export function AdminHeader({ currentUser, onMenuClick }: AdminHeaderProps) {
                   <p className="truncate text-sm font-semibold text-white">
                     {currentUser.username}
                   </p>
-                  <p className="mt-1 truncate text-xs text-slate-400">
+                  <p className="mt-1 break-words text-xs text-slate-400 [overflow-wrap:anywhere]">
                     {currentUser.email}
                   </p>
                   <span className="mt-3 inline-flex rounded-full border border-cyan-300/15 bg-cyan-400/10 px-2.5 py-1 text-[10px] font-medium text-cyan-200">

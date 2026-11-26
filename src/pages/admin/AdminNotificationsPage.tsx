@@ -487,8 +487,8 @@ export function AdminNotificationsPage() {
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] border-collapse text-left">
+          <div className="overflow-x-auto admin-table-responsive">
+            <table className="w-full min-w-[760px] border-collapse text-left admin-data-table">
               <thead>
                 <tr className="border-b border-white/[0.06] bg-white/[0.015] text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-500">
                   <th className="px-4 py-3 sm:px-5">Notification</th>
@@ -505,7 +505,7 @@ export function AdminNotificationsPage() {
                     key={notification.id}
                     className={notification.isRead ? '' : 'bg-cyan-400/[0.025]'}
                   >
-                    <td className="px-4 py-3.5 sm:px-5">
+                    <td data-label="Notification" className="px-4 py-3.5 sm:px-5">
                       <div className="flex items-start gap-3">
                         <CategoryIcon category={notification.category} />
                         <div className="min-w-0">
@@ -524,15 +524,15 @@ export function AdminNotificationsPage() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-3 py-3.5">
+                    <td data-label="Type" className="px-3 py-3.5">
                       <code className="rounded border border-white/[0.06] bg-white/[0.03] px-1.5 py-1 text-[9px] text-slate-400">
                         {notification.type}
                       </code>
                     </td>
-                    <td className="px-3 py-3.5 text-[10px] text-slate-400">
+                    <td data-label="Category" className="px-3 py-3.5 text-[10px] text-slate-400">
                       {categoryLabel(notification.category)}
                     </td>
-                    <td className="px-3 py-3.5">
+                    <td data-label="Received" className="px-3 py-3.5">
                       <time
                         dateTime={notification.createdAt}
                         className="whitespace-nowrap text-[10px] text-slate-400"
@@ -540,7 +540,7 @@ export function AdminNotificationsPage() {
                         {formatDateTime(notification.createdAt)}
                       </time>
                     </td>
-                    <td className="px-3 py-3.5">
+                    <td data-label="Status" className="px-3 py-3.5">
                       <span
                         className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[9px] font-medium ${
                           notification.isRead
@@ -557,7 +557,7 @@ export function AdminNotificationsPage() {
                         {notification.isRead ? 'Read' : 'Unread'}
                       </span>
                     </td>
-                    <td className="px-4 py-3.5 text-right sm:px-5">
+                    <td data-label="Actions" className="admin-cell-actions px-4 py-3.5 text-right sm:px-5">
                       {notification.isRead ? (
                         <span className="text-[10px] text-slate-600">—</span>
                       ) : (
@@ -728,7 +728,7 @@ export function AdminNotificationsPage() {
       </section>
 
       {confirmMarkAll && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/80 px-4 py-6 backdrop-blur-sm sm:items-center">
           <button
             type="button"
             aria-label="Close mark all confirmation"
@@ -739,7 +739,7 @@ export function AdminNotificationsPage() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="mark-all-notifications-title"
-            className="relative z-10 w-full max-w-md rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
+            className="relative z-10 w-full max-h-[calc(100dvh-2.5rem)] max-w-md overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
           >
             <div className="flex items-start justify-between gap-3">
               <h3
@@ -781,7 +781,7 @@ export function AdminNotificationsPage() {
       )}
 
       {confirmRestore && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/80 px-4 py-6 backdrop-blur-sm sm:items-center">
           <button
             type="button"
             aria-label="Close restore confirmation"
@@ -792,7 +792,7 @@ export function AdminNotificationsPage() {
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="restore-notification-defaults-title"
-            className="relative z-10 w-full max-w-md rounded-2xl border border-amber-300/10 bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
+            className="relative z-10 w-full max-h-[calc(100dvh-2.5rem)] max-w-md overflow-y-auto rounded-2xl border border-amber-300/10 bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
           >
             <div className="flex items-start justify-between gap-3">
               <h3

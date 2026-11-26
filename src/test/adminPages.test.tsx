@@ -3403,4 +3403,44 @@ describe('admin and shared user pages', () => {
       ).disabled,
     ).toBe(true)
   })
+
+  it('keeps responsive card hooks and labelled cells on every admin data table', async () => {
+    seedAccounts('admin@example.test', 'Admin')
+
+    const cases = [
+      { path: '/admin/users', label: 'Username', wide: true },
+      { path: '/admin/products', label: 'Product', wide: true },
+      { path: '/admin/categories', label: 'Category', wide: false },
+      { path: '/admin/stores', label: 'Store Name', wide: false },
+      { path: '/admin/scraping', label: 'Store', wide: true },
+      { path: '/admin/audit-logs', label: 'Timestamp', wide: true },
+    ]
+
+    for (const { path, label, wide } of cases) {
+      const view = renderRoutes(path)
+      let table: HTMLElement
+      try {
+        table = await screen.findByRole('table')
+      } catch {
+        throw new Error(`No admin data table rendered for ${path}`)
+      }
+
+      expect(table.classList.contains('admin-data-table')).toBe(true)
+      const wrapper = table.closest('.admin-table-responsive')
+      expect(wrapper).not.toBeNull()
+      expect(wrapper?.classList.contains('admin-table-responsive--wide')).toBe(
+        wide,
+      )
+
+      const cells = [...table.querySelectorAll('tbody td')]
+      expect(cells.length).toBeGreaterThan(0)
+      expect(cells.every((cell) => cell.hasAttribute('data-label'))).toBe(true)
+      expect(
+        cells.some((cell) => cell.getAttribute('data-label') === label),
+        `${path} should expose a ${label} data-label`,
+      ).toBe(true)
+
+      view.unmount()
+    }
+  })
 })

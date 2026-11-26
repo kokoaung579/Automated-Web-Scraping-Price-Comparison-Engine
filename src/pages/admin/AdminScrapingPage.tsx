@@ -271,7 +271,7 @@ function JobDetailsDialog({
 }) {
   const isRunning = canonicalStatus(job.status) === 'running'
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/80 px-3 py-5 backdrop-blur-sm sm:px-5">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto sm:items-center bg-slate-950/80 px-3 py-5 backdrop-blur-sm sm:px-5">
       <button
         type="button"
         aria-label="Close job details"
@@ -433,9 +433,9 @@ function CreateScrapingJobDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/80 px-3 py-5 backdrop-blur-sm sm:px-5">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto sm:items-center bg-slate-950/80 px-3 py-5 backdrop-blur-sm sm:px-5">
       <button type="button" aria-label="Close create scraping job" onClick={onCancel} className="absolute inset-0 cursor-default" />
-      <section role="dialog" aria-modal="true" aria-labelledby="create-scraping-job-title" className="relative z-10 my-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50">
+      <section role="dialog" aria-modal="true" aria-labelledby="create-scraping-job-title" className="relative z-10 my-auto w-full max-h-[calc(100dvh-2.5rem)] max-w-2xl overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50">
         <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4">
           <div>
             <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-blue-300">Scraping configuration</p>
@@ -535,9 +535,9 @@ function ConfirmJobActionDialog({
 }) {
   const actionName = action === 'start' ? 'Run Now' : action[0].toUpperCase() + action.slice(1)
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/80 px-4 py-6 backdrop-blur-sm sm:items-center">
       <button type="button" aria-label="Close action confirmation" onClick={onCancel} className="absolute inset-0 cursor-default" />
-      <section role="alertdialog" aria-modal="true" aria-labelledby="confirm-job-action-title" className="relative z-10 w-full max-w-md rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50">
+      <section role="alertdialog" aria-modal="true" aria-labelledby="confirm-job-action-title" className="relative z-10 w-full max-h-[calc(100dvh-2.5rem)] max-w-md overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50">
         <span className="flex size-10 items-center justify-center rounded-xl border border-amber-300/10 bg-amber-400/[0.06] text-amber-200">
           <AlertTriangle aria-hidden="true" size={17} />
         </span>
@@ -947,8 +947,8 @@ export function AdminScrapingPage() {
             Loading scraping jobs…
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1460px] border-collapse text-left">
+          <div className="overflow-x-auto admin-table-responsive admin-table-responsive--wide">
+            <table className="w-full min-w-[1460px] border-collapse text-left admin-data-table">
               <thead className="bg-[#111a29]">
                 <tr className="border-b border-white/[0.06] text-[9px] font-semibold uppercase tracking-[0.1em] text-slate-500">
                   <th className="px-5 py-3.5">Store</th>
@@ -979,30 +979,30 @@ export function AdminScrapingPage() {
                   }
                   return (
                     <tr key={job.id} className="align-middle">
-                      <td className="px-5 py-4">
+                      <td data-label="Store" className="px-5 py-4">
                         <p className="text-xs font-medium text-slate-200">{job.store_name}</p>
                         <p className="mt-1 font-mono text-[9px] text-slate-600">{job.store_id}</p>
                       </td>
-                      <td className="px-4 py-4">
+                      <td data-label="Website URL" className="px-4 py-4">
                         <a href={job.website_url} target="_blank" rel="noreferrer" className="inline-flex max-w-[190px] items-center gap-1.5 truncate text-[11px] text-blue-300 transition hover:text-blue-200">
                           <Globe2 aria-hidden="true" size={12} className="shrink-0" />
                           <span className="truncate">{job.website_url}</span>
                         </a>
                       </td>
-                      <td className="px-4 py-4"><JobStatusBadge status={job.status} /></td>
-                      <td className="px-4 py-4 text-[10px] text-slate-400">{isRunning ? 'In progress…' : formatDate(job.last_run)}</td>
-                      <td className="px-4 py-4 text-[10px] text-slate-400">{formatDate(job.next_run)}</td>
-                      <td className="px-4 py-4 text-xs font-medium tabular-nums text-slate-300">{isRunning ? '—' : job.products_found}</td>
-                      <td className="px-4 py-4">
+                      <td data-label="Job Status" className="px-4 py-4"><JobStatusBadge status={job.status} /></td>
+                      <td data-label="Last Run" className="px-4 py-4 text-[10px] text-slate-400">{isRunning ? 'In progress…' : formatDate(job.last_run)}</td>
+                      <td data-label="Next Run" className="px-4 py-4 text-[10px] text-slate-400">{formatDate(job.next_run)}</td>
+                      <td data-label="Products Found" className="px-4 py-4 text-xs font-medium tabular-nums text-slate-300">{isRunning ? '—' : job.products_found}</td>
+                      <td data-label="Success Rate" className="px-4 py-4">
                         <span className={`text-xs font-medium tabular-nums ${job.success_rate >= 90 ? 'text-emerald-300' : job.success_rate > 0 ? 'text-amber-200' : 'text-slate-500'}`}>
                           {isRunning ? '—' : `${job.success_rate.toFixed(1)}%`}
                         </span>
                       </td>
-                      <td className="px-4 py-4 text-[10px] text-slate-400">{isRunning ? 'In progress…' : formatDuration(job)}</td>
-                      <td className="max-w-[260px] px-4 py-4 text-[10px] text-rose-200" title={job.executions[0]?.errors.join('\n') || job.last_error || ''}>
+                      <td data-label="Duration" className="px-4 py-4 text-[10px] text-slate-400">{isRunning ? 'In progress…' : formatDuration(job)}</td>
+                      <td data-label="Error Details" className="max-w-[260px] px-4 py-4 text-[10px] text-rose-200" title={job.executions[0]?.errors.join('\n') || job.last_error || ''}>
                         <span className="line-clamp-2">{isRunning ? 'Current run in progress' : firstError(job)}</span>
                       </td>
-                      <td className="px-5 py-4">
+                      <td data-label="Actions" className="admin-cell-actions px-5 py-4">
                         <div className="flex items-center justify-end gap-1">
                           {canResume && (
                             <button type="button" onClick={() => askToPerform('resume')} aria-label={`Resume ${job.store_name} job`} title="Resume job" disabled={controlsDisabled || actionBusy} className="rounded-lg p-2 text-slate-400 transition hover:bg-emerald-400/[0.08] hover:text-emerald-200 disabled:opacity-40">
@@ -1033,7 +1033,7 @@ export function AdminScrapingPage() {
                   )
                 })}
                 {pageJobs.length === 0 && (
-                  <tr><td colSpan={10} className="px-5 py-12 text-center">
+                  <tr><td data-label="Store" colSpan={10} className="px-5 py-12 text-center">
                     <p className="text-xs font-medium text-slate-300">No live scraping jobs</p>
                     <p className="mt-1 text-[10px] text-slate-500">{jobs.length === 0 ? 'Create a job for the supported target to get started.' : 'Try a different search or status filter.'}</p>
                   </td></tr>

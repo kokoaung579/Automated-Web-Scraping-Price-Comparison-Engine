@@ -122,7 +122,7 @@ export function AdminSidebar({
           type="button"
           onClick={onClose}
           aria-label="Close admin navigation"
-          className="rounded-lg p-2 text-slate-400 transition hover:bg-white/[0.05] hover:text-white lg:hidden"
+          className="flex size-11 items-center justify-center rounded-lg text-slate-400 transition hover:bg-white/[0.05] hover:text-white lg:hidden"
         >
           <X aria-hidden="true" size={18} />
         </button>
@@ -163,7 +163,7 @@ export function AdminSidebar({
                     end={to === '/admin'}
                     onClick={onClose}
                     className={({ isActive }) =>
-                      `group flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium transition duration-200 ${
+                      `group flex min-h-10 items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium transition duration-200 ${
                         isActive
                           ? 'bg-gradient-to-r from-cyan-500/15 to-blue-500/10 text-cyan-100 ring-1 ring-inset ring-cyan-400/20'
                           : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-100'

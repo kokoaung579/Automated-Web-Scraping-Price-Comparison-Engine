@@ -270,7 +270,7 @@ function ProductFormDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto sm:items-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
       <button
         type="button"
         aria-label="Close product form"
@@ -281,7 +281,7 @@ function ProductFormDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="product-form-title"
-        className="relative z-10 my-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
+        className="relative z-10 my-auto w-full max-h-[calc(100dvh-2.5rem)] max-w-2xl overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
       >
         <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4 sm:px-6">
           <div>
@@ -426,7 +426,7 @@ function ProductFormDialog({
                 className={fieldClassName}
               />
             </label>
-            <div className="grid grid-cols-[minmax(0,1fr)_100px] gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_100px]">
               <label>
                 <span className={labelClassName}>Price</span>
                 <input
@@ -553,7 +553,7 @@ function ProductDetailsDialog({
   onClose: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto sm:items-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
       <button
         type="button"
         aria-label="Close product details"
@@ -564,7 +564,7 @@ function ProductDetailsDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="product-details-title"
-        className="relative z-10 my-auto w-full max-w-xl overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
+        className="relative z-10 my-auto w-full max-h-[calc(100dvh-2.5rem)] max-w-xl overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
       >
         <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4">
           <div>
@@ -629,7 +629,7 @@ function DeleteProductDialog({
   onConfirm: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm sm:items-center">
       <button
         type="button"
         aria-label="Cancel delete"
@@ -640,7 +640,7 @@ function DeleteProductDialog({
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="delete-product-title"
-        className="relative z-10 w-full max-w-sm rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
+        className="relative z-10 w-full max-h-[calc(100dvh-2.5rem)] max-w-sm overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
       >
         <span className="flex size-10 items-center justify-center rounded-xl border border-rose-300/10 bg-rose-400/[0.07] text-rose-300">
           <Trash2 aria-hidden="true" size={17} />
@@ -690,7 +690,7 @@ function BulkDeleteDialog({
   onConfirm: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm sm:items-center">
       <button
         type="button"
         aria-label="Cancel bulk delete"
@@ -702,7 +702,7 @@ function BulkDeleteDialog({
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="bulk-delete-title"
-        className="relative z-10 w-full max-w-md rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
+        className="relative z-10 w-full max-h-[calc(100dvh-2.5rem)] max-w-md overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
       >
         <span className="flex size-10 items-center justify-center rounded-xl border border-rose-300/10 bg-rose-400/[0.07] text-rose-300">
           <Trash2 aria-hidden="true" size={17} />
@@ -760,7 +760,7 @@ function ImportPreviewDialog({
   const validCount = results.filter((row) => row.product).length
   const invalidRows = results.filter((row) => row.errors.length > 0)
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/80 px-3 py-5 backdrop-blur-sm sm:px-5">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto sm:items-center bg-slate-950/80 px-3 py-5 backdrop-blur-sm sm:px-5">
       <button
         type="button"
         aria-label="Close import preview"
@@ -816,8 +816,8 @@ function ImportPreviewDialog({
             </button>
           )}
         </div>
-        <div className="min-h-0 flex-1 overflow-auto">
-          <table className="w-full min-w-[760px] border-collapse text-left">
+        <div className="min-h-0 flex-1 overflow-auto admin-table-responsive admin-table-responsive--compact">
+          <table className="w-full min-w-[760px] border-collapse text-left admin-data-table">
             <thead className="sticky top-0 bg-[#111a29]">
               <tr className="border-b border-white/[0.06] text-[9px] font-semibold uppercase tracking-[0.1em] text-slate-500">
                 <th className="px-4 py-3">Row</th>
@@ -831,22 +831,22 @@ function ImportPreviewDialog({
             <tbody className="divide-y divide-white/[0.045]">
               {results.slice(0, 250).map((row) => (
                 <tr key={row.rowNumber} className="align-top">
-                  <td className="px-4 py-3 text-[10px] text-slate-500">
+                  <td data-label="Row" className="px-4 py-3 text-[10px] text-slate-500">
                     {row.rowNumber}
                   </td>
-                  <td className="max-w-32 truncate px-3 py-3 text-[10px] text-slate-300">
+                  <td data-label="Product ID" className="max-w-32 truncate px-3 py-3 text-[10px] text-slate-300">
                     {String(row.values.product_id ?? '—')}
                   </td>
-                  <td className="max-w-48 truncate px-3 py-3 text-[10px] text-slate-300">
+                  <td data-label="Product name" className="max-w-48 truncate px-3 py-3 text-[10px] text-slate-300">
                     {String(row.values.product_name ?? '—')}
                   </td>
-                  <td className="px-3 py-3 text-[10px] text-slate-400">
+                  <td data-label="Category" className="px-3 py-3 text-[10px] text-slate-400">
                     {String(row.values.category ?? '—')}
                   </td>
-                  <td className="px-3 py-3 text-[10px] text-slate-400">
+                  <td data-label="Price" className="px-3 py-3 text-[10px] text-slate-400">
                     {String(row.values.price ?? '—')}
                   </td>
-                  <td className="max-w-[360px] px-3 py-3 text-[10px]">
+                  <td data-label="Validation" className="max-w-[360px] px-3 py-3 text-[10px]">
                     {row.errors.length ? (
                       <ul className="space-y-1 text-rose-200">
                         {row.errors.map((error) => (
@@ -1251,7 +1251,7 @@ function ManualOfferVerificationDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto sm:items-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
       <button
         type="button"
         aria-label="Close manual offer verification"
@@ -1262,7 +1262,7 @@ function ManualOfferVerificationDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="manual-offer-verification-title"
-        className="relative z-10 my-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
+        className="relative z-10 my-auto w-full max-h-[calc(100dvh-2.5rem)] max-w-2xl overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
       >
         <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4">
           <div>
@@ -1394,7 +1394,7 @@ function ManualOfferVerificationDialog({
                     <dt className="text-[10px] text-slate-500">
                       Store website URL (metadata only)
                     </dt>
-                    <dd className="mt-1 text-xs font-medium text-slate-200">
+                    <dd className="mt-1 break-all text-xs font-medium text-slate-200 [overflow-wrap:anywhere]">
                       {selected.store_website_url ||
                         product.store_website_url ||
                         '—'}
@@ -2616,8 +2616,8 @@ export function AdminProductsPage() {
         </div>
 
         {filteredProducts.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1160px] border-collapse text-left">
+          <div className="overflow-x-auto admin-table-responsive admin-table-responsive--wide admin-table-responsive--selection">
+            <table className="w-full min-w-[1160px] border-collapse text-left admin-data-table">
               <thead>
                 <tr className="border-b border-white/[0.06] bg-white/[0.015] text-[9px] font-semibold uppercase tracking-[0.13em] text-slate-500">
                   <th scope="col" className="px-4 py-3.5 font-semibold">
@@ -2664,7 +2664,7 @@ export function AdminProductsPage() {
                     key={product.product_id}
                     className="group transition-colors hover:bg-white/[0.02]"
                   >
-                    <td className="px-4 py-3">
+                    <td data-label="" className="admin-cell-checkbox px-4 py-3">
                       <input
                         type="checkbox"
                         aria-label={`Select ${product.product_id}`}
@@ -2675,10 +2675,10 @@ export function AdminProductsPage() {
                         className="size-3.5 cursor-pointer accent-blue-500"
                       />
                     </td>
-                    <td className="px-5 py-3">
+                    <td data-label="Image" className="px-5 py-3">
                       <ProductThumbnail product={product} />
                     </td>
-                    <td className="max-w-[230px] px-3 py-3">
+                    <td data-label="Product" className="max-w-[230px] px-3 py-3">
                       <p className="truncate text-xs font-medium text-slate-200">
                         {product.product_name}
                       </p>
@@ -2686,7 +2686,7 @@ export function AdminProductsPage() {
                         {product.product_id}
                       </p>
                     </td>
-                    <td className="px-3 py-3">
+                    <td data-label="Category / Brand" className="px-3 py-3">
                       <p className="text-[10px] text-slate-300">
                         {product.category}
                       </p>
@@ -2694,7 +2694,7 @@ export function AdminProductsPage() {
                         {product.brand ?? '—'}
                       </p>
                     </td>
-                    <td className="px-3 py-3">
+                    <td data-label="Store ID" className="px-3 py-3">
                       <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[10px] text-slate-400">
                         <Store
                           aria-hidden="true"
@@ -2706,16 +2706,16 @@ export function AdminProductsPage() {
                           : 'Unassigned'}
                       </span>
                     </td>
-                    <td className="px-3 py-3 text-right text-xs font-semibold text-slate-200">
+                    <td data-label="Price" className="px-3 py-3 text-right text-xs font-semibold text-slate-200">
                       {formatPrice(product.price, product.currency)}
                     </td>
-                    <td className="px-3 py-3">
+                    <td data-label="Source" className="px-3 py-3">
                       <SourceBadge source={product.source_type} />
                     </td>
-                    <td className="px-3 py-3">
+                    <td data-label="Availability" className="px-3 py-3">
                       <AvailabilityBadge availability={product.availability} />
                     </td>
-                    <td className="px-5 py-3">
+                    <td data-label="Actions" className="admin-cell-actions px-5 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"

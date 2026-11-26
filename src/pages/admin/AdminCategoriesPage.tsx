@@ -64,7 +64,7 @@ function CategoryDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto sm:items-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
       <button
         type="button"
         aria-label="Close category form"
@@ -75,7 +75,7 @@ function CategoryDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="category-form-title"
-        className="relative z-10 my-auto w-full max-w-lg overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
+        className="relative z-10 my-auto w-full max-h-[calc(100dvh-2.5rem)] max-w-lg overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
       >
         <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4 sm:px-6">
           <div>
@@ -184,7 +184,7 @@ function DeleteCategoryDialog({
   onConfirm: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm sm:items-center">
       <button
         type="button"
         aria-label="Cancel category deletion"
@@ -195,7 +195,7 @@ function DeleteCategoryDialog({
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="delete-category-title"
-        className="relative z-10 w-full max-w-sm rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
+        className="relative z-10 w-full max-h-[calc(100dvh-2.5rem)] max-w-sm overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0d1320] p-5 shadow-2xl shadow-black/50"
       >
         <span className="flex size-10 items-center justify-center rounded-xl border border-rose-300/10 bg-rose-400/[0.07] text-rose-300">
           <Trash2 aria-hidden="true" size={17} />
@@ -451,8 +451,8 @@ export function AdminCategoriesPage() {
           </label>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[700px] border-collapse text-left">
+        <div className="overflow-x-auto admin-table-responsive">
+          <table className="w-full min-w-[700px] border-collapse text-left admin-data-table">
             <thead className="bg-[#111a29]">
               <tr className="border-b border-white/[0.06] text-[9px] font-semibold uppercase tracking-[0.1em] text-slate-500">
                 <th className="px-5 py-3.5">Category</th>
@@ -468,7 +468,7 @@ export function AdminCategoriesPage() {
                 const inUse = count > 0
                 return (
                   <tr key={category.name} className="align-middle">
-                    <td className="px-5 py-4">
+                    <td data-label="Category" className="px-5 py-4">
                       <div className="flex items-center gap-3">
                         <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-blue-300/10 bg-blue-400/[0.06] text-blue-300">
                           <Tags aria-hidden="true" size={16} />
@@ -478,10 +478,10 @@ export function AdminCategoriesPage() {
                         </span>
                       </div>
                     </td>
-                    <td className="max-w-sm px-4 py-4 text-xs leading-5 text-slate-500">
+                    <td data-label="Description" className="max-w-sm px-4 py-4 text-xs leading-5 text-slate-500">
                       {category.description || '—'}
                     </td>
-                    <td className="px-4 py-4">
+                    <td data-label="Products" className="px-4 py-4">
                       <span className="inline-flex items-center gap-1.5 text-xs text-slate-300">
                         <Package
                           aria-hidden="true"
@@ -491,7 +491,7 @@ export function AdminCategoriesPage() {
                         {count}
                       </span>
                     </td>
-                    <td className="px-4 py-4">
+                    <td data-label="Status" className="px-4 py-4">
                       <span
                         className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-medium ${
                           category.status === 'Active'
@@ -509,7 +509,7 @@ export function AdminCategoriesPage() {
                         {category.status}
                       </span>
                     </td>
-                    <td className="px-5 py-4">
+                    <td data-label="Actions" className="admin-cell-actions px-5 py-4">
                       <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"
@@ -553,7 +553,7 @@ export function AdminCategoriesPage() {
               })}
               {filteredCategories.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-5 py-12 text-center">
+                  <td data-label="Category" colSpan={5} className="px-5 py-12 text-center">
                     <p className="text-xs font-medium text-slate-300">
                       No categories found
                     </p>

@@ -204,7 +204,7 @@ export function AdminSettingsPage() {
   }
 
   return (
-    <div className="space-y-6 sm:space-y-7">
+    <div className="space-y-6 pb-28 sm:space-y-7 sm:pb-24">
       <section className="flex flex-col justify-between gap-4 xl:flex-row xl:items-end">
         <div>
           <div className="mb-2 flex items-center gap-2 text-[9px] font-semibold uppercase tracking-[0.18em] text-blue-300">
@@ -234,7 +234,7 @@ export function AdminSettingsPage() {
           <button
             type="button"
             onClick={reloadSettings}
-            className="rounded-lg border border-rose-200/10 px-3 py-2 text-[10px] font-medium text-rose-100 transition hover:bg-rose-400/[0.07]"
+            className="inline-flex min-h-10 items-center rounded-lg border border-rose-200/10 px-3 py-2 text-[10px] font-medium text-rose-100 transition hover:bg-rose-400/[0.07]"
           >
             Reload
           </button>

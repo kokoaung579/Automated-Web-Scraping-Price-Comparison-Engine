@@ -312,7 +312,7 @@ function StatCard({ label, value, detail, icon: Icon, tone, to }: KpiCard) {
   )
 }
 
-const pairedCardClassName = 'flex h-[360px] min-w-0 flex-col sm:h-[400px]'
+const pairedCardClassName = 'flex min-h-[360px] min-w-0 flex-col sm:h-[400px]'
 
 function SectionCard({
   title,
@@ -1199,7 +1199,7 @@ export function AdminOverviewPage() {
           action={
             <Link
               to="/admin/audit-logs"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-2 text-[11px] font-medium text-slate-300 transition hover:border-cyan-400/20 hover:text-white"
+              className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-2 text-[11px] font-medium text-slate-300 transition hover:border-cyan-400/20 hover:text-white"
             >
               <ClipboardList aria-hidden="true" size={14} />
               Open audit log
