@@ -17,7 +17,6 @@ from app.main import (
 from app.models import (
     AdminProduct,
     PublicProduct,
-    StoreOffer,
     admin_product_to_catalog_document,
 )
 
@@ -95,17 +94,7 @@ class MemoryCollection:
         return SimpleNamespace(deleted_count=len(matching_keys))
 
     async def find_one(self, query, projection=None):
-        document = next(
-            (
-                candidate
-                for candidate in self.documents.values()
-                if all(
-                    candidate.get(field) == value
-                    for field, value in query.items()
-                )
-            ),
-            None,
-        )
+        document = self.documents.get(query["_id"])
         return dict(document) if document else None
 
     def find(self, query=None, projection=None):
@@ -120,19 +109,10 @@ class MemoryCollection:
 
 
 class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
-    def test_store_offer_response_accepts_a_missing_legacy_price(self):
-        offer = StoreOffer.model_validate({
-            "store": "Legacy Store",
-            "price": None,
-        })
-
-        self.assertIsNone(offer.price)
-
     async def test_admin_product_is_stored_in_and_returned_from_public_catalog(self):
         database = SimpleNamespace(
             products=MemoryCollection(),
             admin_products=MemoryCollection(),
-            product_match_reviews=MemoryCollection(),
             offers=MemoryCollection([
                 {
                     "_id": "existing-offer",
@@ -388,40 +368,6 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(history_prices, [89.99] * 4)
 
-    async def test_sync_ignores_legacy_store_fields_in_embedded_admin_product(self):
-        product = AdminProduct(
-            product_id="legacy-store-fields-product",
-            product_name="Legacy Store Fields Product",
-            category="Audio",
-            store_id="zone",
-            price=89.99,
-            currency="USD",
-            availability="in_stock",
-            source_type="manual",
-            created_at="2026-11-17T00:00:00Z",
-            updated_at="2026-11-17T00:00:00Z",
-        )
-        legacy_admin_product = {
-            **product.model_dump(),
-            "store_name": "Zone",
-            "store_website_url": None,
-        }
-        database = SimpleNamespace(
-            products=MemoryCollection([{
-                "_id": product.product_id,
-                **admin_product_to_catalog_document(product),
-                "adminProduct": legacy_admin_product,
-            }]),
-            offers=MemoryCollection(),
-            price_history=MemoryCollection(),
-        )
-
-        await sync_existing_admin_product_prices(database)
-
-        offer = next(iter(database.offers.documents.values()))
-        self.assertEqual(offer["price"], 89.99)
-        self.assertEqual(offer["store"], "Zone")
-
     async def test_admin_product_comparison_uses_catalog_price_not_seeded_offers(self):
         product_id = "admin-product"
         database = SimpleNamespace(
@@ -454,18 +400,25 @@ class SharedProductCatalogTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch("app.main.get_database", return_value=database):
-            offers = await product_offers(product_id)
+            active_offers = await product_offers(product_id)
+            all_offers = await product_offers(product_id, availability="all")
 
-        self.assertEqual(len(offers), 2)
-        walmart_offer = next(
-            offer for offer in offers if offer["store"] == "Walmart"
+        # Offers with missing availability are unknown, never implicitly In
+        # Stock, so they cannot appear in the default active comparison.
+        self.assertEqual(active_offers, [])
+        self.assertEqual(
+            [(offer["store"], offer["price"]) for offer in all_offers],
+            [("Walmart", 99.99), ("best-buy", 89.99)],
         )
-        best_buy_offer = next(
-            offer for offer in offers if offer["store"] == "Best Buy"
+        self.assertTrue(
+            all(offer["availability"] == "unknown" for offer in all_offers)
         )
-        self.assertEqual(walmart_offer["price"], 99.99)
-        self.assertEqual(best_buy_offer["price"], 89.99)
-        self.assertEqual(best_buy_offer["currency"], "USD")
+        self.assertTrue(
+            all(
+                offer["verification_status"] == "unverified_excluded"
+                for offer in all_offers
+            )
+        )
 
     async def test_user_lists_ignore_records_for_deleted_products(self):
         database = SimpleNamespace(

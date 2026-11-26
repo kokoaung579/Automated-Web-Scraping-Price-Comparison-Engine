@@ -12,6 +12,7 @@ export type AuditActionType =
   | 'status-change'
   | 'import'
   | 'export'
+  | 'verify-manual-offer'
   | 'start'
   | 'pause'
   | 'resume'

@@ -6,7 +6,10 @@ import {
   formatLongAuditTimestamp,
   formatShortDate,
   getYangonDayKey,
+  parseAppTimeZoneInputValue,
   parseUtcTimestamp,
+  setAppTimeZone,
+  toAppTimeZoneInputValue,
 } from '../utils/datetime'
 
 describe('Asia/Yangon timestamp handling', () => {
@@ -44,5 +47,13 @@ describe('Asia/Yangon timestamp handling', () => {
     expect(dateRangeUtcIso('2026-11-19', true)).toBe(
       '2026-11-19T17:29:59.999Z',
     )
+  })
+
+  it('round-trips schedule inputs through the app timezone exactly once', () => {
+    setAppTimeZone(APP_TIME_ZONE)
+    const utc = '2026-11-19T17:30:00.000Z'
+    expect(toAppTimeZoneInputValue(utc)).toBe('2026-11-20T00:00')
+    expect(parseAppTimeZoneInputValue('2026-11-20T00:00')).toBe(utc)
+    expect(parseAppTimeZoneInputValue('not-a-date')).toBeNull()
   })
 })

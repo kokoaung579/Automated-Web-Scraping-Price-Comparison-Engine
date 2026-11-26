@@ -10,6 +10,7 @@ import {
   createDemoScrapingJob,
   applyDemoJobAction,
   getSeedScrapingJobs,
+  isScrapingTarget,
   loadScrapingJobs,
   saveScrapingJobs,
   validateScrapingJobInput,
@@ -149,8 +150,9 @@ describe('admin demo data rules', () => {
     const cancelled = applyDemoJobAction(resumed, 'cancel', time)
 
     expect(started.status).toBe('running')
-    expect(paused.status).toBe('paused')
-    expect(resumed.status).toBe('running')
+    expect(paused.status).toBe('pending')
+    expect(resumed.status).toBe('scheduled')
+    expect(resumed.next_run).toBe(seedJob.configuration?.scheduled_at ?? null)
     expect(cancelled.status).toBe('cancelled')
     expect(cancelled.executions[0].logs.at(-1)).toContain(
       'No real scraping was performed',
@@ -175,7 +177,7 @@ describe('admin demo data rules', () => {
     expect(created).toMatchObject({
       store_id: stores[0].store_id,
       store_name: stores[0].store_name,
-      status: 'queued',
+      status: 'pending',
       next_run: input.scheduled_at,
       configuration: {
         interval_minutes: input.interval_minutes,
@@ -188,6 +190,32 @@ describe('admin demo data rules', () => {
       { ...input, interval_minutes: 0, request_timeout_seconds: 301, retry_attempts: 11 },
       stores,
     )).toHaveLength(3)
+  })
+
+  it('validates scraping target metadata and the product limit bounds', () => {
+    const target = {
+      ...amazonStore,
+      store_id: 'webscraper-io',
+      target_url: 'https://webscraper.io/test-sites/e-commerce/static/computers/laptops',
+      default_product_limit: 10,
+      max_product_limit: 15,
+    }
+    const input = {
+      store_id: target.store_id,
+      interval_minutes: 60,
+      scheduled_at: new Date(Date.now() + 120_000).toISOString(),
+      request_timeout_seconds: 30,
+      retry_attempts: 3,
+      product_limit: 15,
+    }
+
+    expect(isScrapingTarget(target)).toBe(true)
+    expect(isScrapingTarget({ ...target, max_product_limit: 20 })).toBe(false)
+    expect(validateScrapingJobInput(input, [target])).toEqual([])
+    expect(validateScrapingJobInput(
+      { ...input, product_limit: 16 },
+      [target],
+    )).toContain('Product limit must be between 1 and 15.')
   })
 
   it('persists settings and resets only the demo setting values', () => {

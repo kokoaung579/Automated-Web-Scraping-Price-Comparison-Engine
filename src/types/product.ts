@@ -8,6 +8,8 @@ export type Product = {
   image_url: string | null
   product_url: string | null
   store_id: string | null
+  store_name?: string | null
+  store_website_url?: string | null
   price: number
   currency: string
   availability: string

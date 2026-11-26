@@ -97,6 +97,7 @@ function makeGroup(index = 0): ProductComparison {
       needs_review: false,
       review_reason: null,
     },
+    catalog_availability: 'in_stock',
     verified: {
       status: index === 0 ? 'verified_offers_available' : 'no_verified_offers',
       currency: index === 0 ? 'USD' : null,
@@ -127,7 +128,7 @@ function makeGroup(index = 0): ProductComparison {
           : null,
       price_difference: index === 0 ? { amount: 0, currency: 'USD' } : null,
       savings_percent_vs_highest: index === 0 ? 0 : null,
-      message: index === 0 ? null : 'No verified in-stock offers are available.',
+      message: index === 0 ? null : 'No verified In-Stock offers available',
     },
     illustrative: {
       offer_count: index === 0 ? 2 : 0,
@@ -255,7 +256,6 @@ type HarnessOptions = {
   context?: AppOutletContext | null
   error?: boolean
   comparisonHandler?: (url: URL) => unknown
-  initialEntry?: string | { pathname: string; state?: unknown }
 }
 
 function renderPage(options: HarnessOptions = {}) {
@@ -324,7 +324,7 @@ function renderPage(options: HarnessOptions = {}) {
   }
 
   render(
-    <MemoryRouter initialEntries={[options.initialEntry ?? '/comparison']}>
+    <MemoryRouter initialEntries={['/comparison']}>
       <Routes>
         {context ? (
           <Route path="/comparison" element={<ContextRoute />}>
@@ -369,6 +369,7 @@ describe('Price Comparison page', () => {
       await screen.findByRole('button', { name: /JBL Tune 530BT/ }),
     ).toBeDefined()
 
+    expect(screen.getAllByText('Catalog In Stock').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Verified · Scraped').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Illustrative · Manual').length).toBeGreaterThan(0)
     const summary = screen.getByLabelText('Verified price summary')
@@ -377,27 +378,222 @@ describe('Price Comparison page', () => {
     expect(screen.getByText('Actual stored product description.')).toBeDefined()
   })
 
-  it('pre-selects the product passed from the Products page', async () => {
+  it('includes a verified manual offer in verified pricing while keeping test-site data illustrative', async () => {
     renderPage({
-      initialEntry: {
-        pathname: '/comparison',
-        state: { productId: 'B0GHY4PR3N', productName: 'JBL Tune 530BT' },
+      comparisonHandler: () => {
+        const response = makeResponse(1)
+        const group = response.items[0]
+        const scraped = offer()
+        const manualVerified = offer({
+          store_id: 'zone',
+          store_name: 'Zone',
+          product_id: 'manual-product-1',
+          offer_id: 'manual-offer-1',
+          source_type: 'manual',
+          verification_status: 'manually_verified',
+          eligibility: 'verified_comparison',
+          verified: true,
+          label: 'Verified manual offer — admin checked the retailer',
+          price: { amount: 39.99, currency: 'USD' },
+          product_url: 'https://zone.example/manual-product-1',
+          exclusion_reasons: [],
+        })
+        const testSite = offer({
+          store_id: 'webscraper-io',
+          store_name: 'WebScraper.io Test Site',
+          product_id: 'webscraper-offer-1',
+          offer_id: 'webscraper-offer-1',
+          source_type: 'manual',
+          verification_status: 'test_site_illustrative',
+          eligibility: 'display_only_illustrative',
+          is_test_site: true,
+          verified: false,
+          price: { amount: 1, currency: 'USD' },
+          exclusion_reasons: [],
+        })
+        group.offers = [scraped, manualVerified, testSite]
+        group.verified = {
+          status: 'verified_offers_available',
+          currency: 'USD',
+          compared_offer_count: 2,
+          lowest: {
+            store_id: manualVerified.store_id,
+            store_name: manualVerified.store_name,
+            product_id: manualVerified.product_id,
+            offer_id: manualVerified.offer_id,
+            amount: manualVerified.price.amount,
+            currency: manualVerified.price.currency,
+            last_updated: manualVerified.last_updated,
+          },
+          highest: {
+            store_id: scraped.store_id,
+            store_name: scraped.store_name,
+            product_id: scraped.product_id,
+            offer_id: scraped.offer_id,
+            amount: scraped.price.amount,
+            currency: scraped.price.currency,
+            last_updated: scraped.last_updated,
+          },
+          price_difference: { amount: 10.04, currency: 'USD' },
+          savings_percent_vs_highest: 33.5,
+          message: null,
+        }
+        group.illustrative = {
+          offer_count: 1,
+          excluded_from_verified_pricing: true,
+          lowest_display_only: {
+            store_id: testSite.store_id,
+            store_name: testSite.store_name,
+            product_id: testSite.product_id,
+            offer_id: testSite.offer_id,
+            amount: testSite.price.amount,
+            currency: testSite.price.currency,
+            last_updated: testSite.last_updated,
+          },
+          highest_display_only: {
+            store_id: testSite.store_id,
+            store_name: testSite.store_name,
+            product_id: testSite.product_id,
+            offer_id: testSite.offer_id,
+            amount: testSite.price.amount,
+            currency: testSite.price.currency,
+            last_updated: testSite.last_updated,
+          },
+          message: 'Practice test-site prices are not real retailer offers.',
+        }
+        group.history.series = [
+          {
+            store_id: manualVerified.store_id,
+            store_name: manualVerified.store_name,
+            product_id: manualVerified.product_id,
+            verification_status: 'manually_verified',
+            points: [{ date: '2026-11-19', amount: 39.99 }],
+          },
+          {
+            store_id: testSite.store_id,
+            store_name: testSite.store_name,
+            product_id: testSite.product_id,
+            verification_status: 'test_site_illustrative',
+            points: [{ date: '2026-11-19', amount: 1 }],
+          },
+        ]
+        return response
       },
     })
 
-    const item = await screen.findByRole('button', { name: /JBL Tune 530BT/ })
-    await waitFor(() => {
-      expect(item).toHaveProperty('aria-pressed', 'true')
-    })
-    expect(
-      screen.getByRole('heading', { name: 'JBL Tune 530BT' }),
-    ).toBeDefined()
-    expect(
-      screen.getByRole('searchbox', {
-        name: /Search products by name, brand, model or ASIN/i,
-      }),
-    ).toHaveProperty('value', 'JBL Tune 530BT')
+    expect((await screen.findAllByText('Verified · Manual')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Verified · Scraped').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Test-site practice data').length).toBeGreaterThan(0)
+    const summary = screen.getByLabelText('Verified price summary')
+    expect(within(summary).getAllByText('$39.99').length).toBeGreaterThan(0)
+    expect(within(summary).getAllByText('$29.95').length).toBeGreaterThan(0)
+    expect(within(summary).queryByText('$1.00')).toBeNull()
   })
+
+  it('labels test-site practice data and keeps it out of verified pricing', async () => {
+    renderPage({
+      comparisonHandler: () => {
+        const response = makeResponse(1)
+        const group = response.items[0]
+        group.identity.is_test_site = true
+        group.offers.push(offer({
+          store_id: 'webscraper-io',
+          store_name: 'WebScraper.io Test Site',
+          product_id: 'webscraper-test-1',
+          offer_id: 'webscraper-offer',
+          price: { amount: 1, currency: 'USD' },
+          source_type: 'scraped',
+          verification_status: 'test_site_illustrative',
+          eligibility: 'display_only_illustrative',
+          verified: false,
+          label: 'Practice test-site price — not a real retailer offer',
+          product_url: 'https://webscraper.io/test-sites/e-commerce/allinone/product/1',
+          is_test_site: true,
+          exclusion_reasons: [],
+        }))
+        group.history.series.push({
+          store_id: 'webscraper-io',
+          store_name: 'WebScraper.io Test Site',
+          product_id: 'webscraper-test-1',
+          verification_status: 'test_site_illustrative',
+          is_test_site: true,
+          points: [{ date: '2026-11-18', amount: 1 }],
+        })
+        group.illustrative.offer_count = 3
+        return response
+      },
+    })
+
+    await screen.findByRole('button', { name: /JBL Tune 530BT/ })
+    expect(screen.getAllByText('Test-site practice data').length).toBeGreaterThan(0)
+    const summary = screen.getByLabelText('Verified price summary')
+    expect(within(summary).queryByText('$1.00')).toBeNull()
+  })
+
+  it('uses the required history verification labels', async () => {
+    renderPage({
+      comparisonHandler: () => {
+        const response = makeResponse(1)
+        response.items[0].history.series = [
+          {
+            store_id: 'amazon',
+            store_name: 'Amazon',
+            product_id: 'B0GHY4PR3N',
+            verification_status: 'verified_scraped',
+            points: [{ date: '2026-11-17', amount: 29.95 }],
+          },
+          {
+            store_id: 'best-buy',
+            store_name: 'Best Buy',
+            product_id: 'B0GHY4PR3N-best-buy',
+            verification_status: 'manual_illustrative',
+            points: [{ date: '2026-11-18', amount: 15.7 }],
+          },
+          {
+            store_id: 'webscraper-io',
+            store_name: 'WebScraper.io Test Site',
+            product_id: 'webscraper-test-1',
+            verification_status: 'test_site_illustrative',
+            is_test_site: true,
+            points: [{ date: '2026-11-18', amount: 1 }],
+          },
+          {
+            store_id: 'zone',
+            store_name: 'Zone',
+            product_id: 'B0GHY4PR3N-zone',
+            verification_status: 'unverified_excluded',
+            points: [{ date: '2026-11-18', amount: 20 }],
+          },
+        ]
+        return response
+      },
+    })
+
+    await screen.findByRole('heading', { name: 'Price history' })
+    expect(screen.getAllByText('Verified scraped').length).toBeGreaterThan(0)
+    expect(screen.getByText('Manual illustrative')).toBeDefined()
+    expect(screen.getAllByText('Test-site practice data').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Excluded / unavailable').length).toBeGreaterThan(0)
+  })
+
+  it.each([
+    ['no_in_stock_offers', 'No In Stock offers match these filters'],
+    ['catalog_in_stock_no_verified_offers', 'No verified In-Stock offers available'],
+    ['only_illustrative_data', 'Only illustrative/test-site data is available'],
+    ['no_offers', 'No offers found'],
+  ] as const)(
+    'shows the exact %s empty state',
+    async (reason, message) => {
+      renderPage({
+        comparisonHandler: () => {
+          const response = makeResponse(0)
+          response.meta.diagnostics.empty_state_reason = reason
+          return response
+        },
+      })
+      expect(await screen.findByText(message)).toBeDefined()
+    },
+  )
 
   it('searches by ASIN, brand or model through the shared API client', async () => {
     const { requests } = renderPage()
@@ -455,8 +651,44 @@ describe('Price Comparison page', () => {
     renderPage({ groupCount: 2 })
     await screen.findByRole('button', { name: /Generic Product 1/ })
     await userEvent.click(screen.getByRole('button', { name: /Generic Product 1/ }))
-    expect(await screen.findByText('No Verified Offers Available')).toBeDefined()
+    expect(
+      (await screen.findAllByText('No verified In-Stock offers available')).length,
+    ).toBeGreaterThan(0)
     expect(screen.queryByText('$0.00')).toBeNull()
+  })
+
+  it('keeps a catalog In Stock product visible with no verified price', async () => {
+    renderPage({
+      comparisonHandler: () => {
+        const response = makeResponse(1)
+        const group = response.items[0]
+        group.catalog_availability = 'in_stock'
+        group.availability_state = 'catalog_in_stock_no_verified_offers'
+        group.verified = {
+          ...group.verified,
+          status: 'no_verified_offers',
+          currency: null,
+          compared_offer_count: 0,
+          lowest: null,
+          highest: null,
+          price_difference: null,
+          savings_percent_vs_highest: null,
+          message: 'No verified In-Stock offers available',
+        }
+        group.offers = []
+        group.illustrative.offer_count = 0
+        return response
+      },
+    })
+
+    expect(
+      await screen.findByRole('button', { name: /JBL Tune 530BT/ }),
+    ).toBeDefined()
+    expect(
+      (await screen.findAllByText('No verified In-Stock offers available')).length,
+    ).toBeGreaterThan(0)
+    expect(screen.queryByLabelText('Verified price summary')).toBeNull()
+    expect(screen.getAllByText('Catalog In Stock').length).toBeGreaterThan(0)
   })
 
   it('switches history period and shows an empty state', async () => {
@@ -476,7 +708,7 @@ describe('Price Comparison page', () => {
       },
     })
     await screen.findByRole('heading', { name: 'Price history' })
-    expect(screen.getByText('Illustrative')).toBeDefined()
+    expect(screen.getByText('Manual illustrative')).toBeDefined()
 
     await userEvent.click(screen.getByRole('button', { name: '7D' }))
     await waitFor(() => {

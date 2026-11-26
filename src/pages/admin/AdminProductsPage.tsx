@@ -8,6 +8,7 @@ import {
   Boxes,
   Check,
   Download,
+  ExternalLink,
   Eye,
   FileSpreadsheet,
   Image,
@@ -15,6 +16,7 @@ import {
   Pencil,
   Plus,
   Search,
+  ShieldCheck,
   Store,
   Trash2,
   Upload,
@@ -25,6 +27,7 @@ import {
   PRODUCT_AVAILABILITIES,
   PRODUCT_REQUIRED_FIELDS,
   PRODUCT_SCHEMA_FIELDS,
+  validHttpUrl,
   validateProductImportRows,
 } from '../../data/adminProducts'
 import type { AdminStore } from '../../data/adminStores'
@@ -34,6 +37,12 @@ import type {
   ProductImportRow,
 } from '../../data/adminProducts'
 import type { Product } from '../../types/product'
+import type {
+  ManualOfferAvailability,
+  ManualOfferEvidenceType,
+  ManualOfferRecord,
+  ManualOfferVerificationRequest,
+} from '../../types/manualOffer'
 import {
   api,
   type BulkDeleteResponse,
@@ -56,7 +65,10 @@ type ProductFormValues = Pick<
   | 'price'
   | 'currency'
   | 'availability'
->
+> & {
+  store_name: string | null
+  store_website_url: string | null
+}
 
 const fieldClassName =
   'h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10'
@@ -140,6 +152,8 @@ function defaultFormValues(
       image_url: product.image_url,
       product_url: product.product_url,
       store_id: product.store_id,
+      store_name: product.store_name ?? null,
+      store_website_url: product.store_website_url ?? null,
       price: product.price,
       currency: product.currency,
       availability: product.availability,
@@ -156,6 +170,8 @@ function defaultFormValues(
     image_url: null,
     product_url: null,
     store_id: null,
+    store_name: null,
+    store_website_url: null,
     price: 0,
     currency: 'USD',
     availability: 'in_stock',
@@ -221,6 +237,8 @@ function ProductFormDialog({
       image_url: values.image_url?.trim() || null,
       product_url: values.product_url?.trim() || null,
       store_id: values.store_id?.trim() || null,
+      store_name: values.store_name?.trim() || null,
+      store_website_url: values.store_website_url?.trim() || null,
       currency: values.currency.trim().toUpperCase(),
       source_type: product?.source_type ?? 'manual',
       created_at: product?.created_at ?? now,
@@ -380,6 +398,33 @@ function ProductFormDialog({
                   </option>
                 ))}
               </select>
+            </label>
+            <label>
+              <span className={labelClassName}>Store name</span>
+              <input
+                value={values.store_name ?? ''}
+                onChange={(event) =>
+                  updateField('store_name', event.currentTarget.value || null)
+                }
+                placeholder="e.g. Zone Retail"
+                className={fieldClassName}
+                required
+              />
+            </label>
+            <label>
+              <span className={labelClassName}>Store website URL (optional)</span>
+              <input
+                type="url"
+                value={values.store_website_url ?? ''}
+                onChange={(event) =>
+                  updateField(
+                    'store_website_url',
+                    event.currentTarget.value || null,
+                  )
+                }
+                placeholder="https://www.zone.example"
+                className={fieldClassName}
+              />
             </label>
             <div className="grid grid-cols-[minmax(0,1fr)_100px] gap-2">
               <label>
@@ -966,6 +1011,611 @@ async function parseImportRows(file: File): Promise<ProductImportRow[]> {
   return rows
 }
 
+function formatManualOfferPrice(price: number, currency: string | null) {
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currency || 'USD',
+    }).format(price)
+  } catch {
+    return `${price.toFixed(2)} ${currency || ''}`.trim()
+  }
+}
+
+function formatManualOfferTimestamp(value: string | null) {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return parsed.toLocaleString()
+}
+
+const blockedEvidenceLabels = new Set([
+  'admin',
+  'dashboard',
+  'dev',
+  'development',
+  'internal',
+  'intranet',
+  'local',
+  'localhost',
+  'preview',
+  'sandbox',
+  'stage',
+  'staging',
+])
+
+function validPublicEvidenceUrl(value: string): boolean {
+  if (!validHttpUrl(value)) return false
+  try {
+    const parsed = new URL(value)
+    const host = parsed.hostname.toLowerCase().replace(/\.$/, '')
+    if (!host || parsed.username || parsed.password) return false
+    if (host === 'localhost' || host.endsWith('.localhost')) return false
+    if (
+      /^(0|10|127)\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^169\.254\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      host === '::1'
+    ) {
+      return false
+    }
+    if (
+      host
+        .split('.')
+        .some((label) => blockedEvidenceLabels.has(label))
+    ) {
+      return false
+    }
+    return !parsed.pathname
+      .split('/')
+      .some((segment) =>
+        ['admin', 'dashboard', 'control-panel'].includes(segment.toLowerCase()),
+      )
+  } catch {
+    return false
+  }
+}
+
+function sameRetailerProductUrl(left: string, right: string | null): boolean {
+  if (!right || !validPublicEvidenceUrl(left) || !validPublicEvidenceUrl(right)) {
+    return false
+  }
+  try {
+    const normalize = (value: string) => {
+      const parsed = new URL(value.trim())
+      const path = parsed.pathname.replace(/\/+$/, '') || '/'
+      return `${parsed.protocol}//${parsed.host.toLowerCase()}${path}${parsed.search}`
+    }
+    return normalize(left) === normalize(right)
+  } catch {
+    return false
+  }
+}
+
+function ManualOfferVerificationDialog({
+  product,
+  offers,
+  loading,
+  error,
+  onClose,
+  onVerify,
+}: {
+  product: Product
+  offers: ManualOfferRecord[]
+  loading: boolean
+  error: string
+  onClose: () => void
+  onVerify: (
+    offerId: string,
+    payload: ManualOfferVerificationRequest,
+  ) => Promise<void>
+}) {
+  const [selectedId, setSelectedId] = useState(
+    () => offers[0]?.offer_id ?? '',
+  )
+  const [availability, setAvailability] =
+    useState<ManualOfferAvailability>('unknown')
+  const [evidenceType, setEvidenceType] =
+    useState<ManualOfferEvidenceType>('product_url')
+  const [productUrlEvidence, setProductUrlEvidence] = useState('')
+  const [storeWebsiteUrl, setStoreWebsiteUrl] = useState('')
+  const [offlineDescription, setOfflineDescription] = useState('')
+  const [offlineReference, setOfflineReference] = useState('')
+  const [matchConfirmed, setMatchConfirmed] = useState(false)
+  const [verificationNote, setVerificationNote] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [formError, setFormError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  const selected = offers.find((offer) => offer.offer_id === selectedId)
+  const selectedOfferId = selected?.offer_id ?? ''
+
+  useEffect(() => {
+    if (!offers.some((offer) => offer.offer_id === selectedId)) {
+      setSelectedId(offers[0]?.offer_id ?? '')
+    }
+  }, [offers, selectedId])
+
+  useEffect(() => {
+    if (!selected) return
+    setAvailability(selected.availability)
+    setEvidenceType(selected.evidence_type ?? 'product_url')
+    setProductUrlEvidence(selected.product_url_evidence ?? '')
+    setStoreWebsiteUrl(
+      selected.store_website_url ?? product.store_website_url ?? '',
+    )
+    setOfflineDescription(selected.offline_description ?? '')
+    setOfflineReference(selected.offline_reference ?? '')
+    setMatchConfirmed(false)
+    setVerificationNote(selected.verification_note ?? '')
+    setFormError('')
+    setSuccess('')
+    // Rehydrate only when a different offer is selected. Later server updates
+    // must not overwrite in-progress edits or the saved confirmation message.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOfferId])
+
+  async function submitVerification(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!selected) return
+
+    const trimmedProductUrl = productUrlEvidence.trim()
+    const trimmedStoreUrl = storeWebsiteUrl.trim()
+    const trimmedDescription = offlineDescription.trim()
+    const trimmedReference = offlineReference.trim()
+    const verificationRequired = availability === 'in_stock'
+
+    if (trimmedStoreUrl && !validPublicEvidenceUrl(trimmedStoreUrl)) {
+      setFormError('Store website URL must be a valid public HTTP or HTTPS URL.')
+      return
+    }
+    if (verificationRequired && evidenceType === 'store_website_url') {
+      setFormError(
+        'A store website URL is not sufficient product-level evidence.',
+      )
+      return
+    }
+    if (evidenceType === 'product_url') {
+      if (trimmedProductUrl && !validPublicEvidenceUrl(trimmedProductUrl)) {
+        setFormError('Evidence URL must be a valid public HTTP or HTTPS URL.')
+        return
+      }
+      if (verificationRequired && !trimmedProductUrl) {
+        setFormError(
+          'A valid HTTP or HTTPS evidence URL is required for In Stock offers.',
+        )
+        return
+      }
+      if (
+        verificationRequired &&
+        !sameRetailerProductUrl(trimmedProductUrl, selected.product_url)
+      ) {
+        setFormError(
+          'Product URL evidence must exactly match the product URL for this offer.',
+        )
+        return
+      }
+    }
+    if (evidenceType === 'offline_document') {
+      if (
+        verificationRequired &&
+        (!trimmedDescription || !trimmedReference)
+      ) {
+        setFormError(
+          'Offline document evidence requires a description and a reference.',
+        )
+        return
+      }
+    }
+    if (
+      verificationRequired &&
+      ['product_url', 'offline_document'].includes(evidenceType) &&
+      !matchConfirmed
+    ) {
+      setFormError(
+        'Confirm that the product, price, currency, and availability match the evidence.',
+      )
+      return
+    }
+
+    setSubmitting(true)
+    setFormError('')
+    setSuccess('')
+    try {
+      await onVerify(selected.offer_id, {
+        availability,
+        evidence_type: evidenceType,
+        evidence_url:
+          evidenceType === 'product_url' ? trimmedProductUrl || null : null,
+        product_url:
+          evidenceType === 'product_url' ? trimmedProductUrl || null : null,
+        store_website_url: trimmedStoreUrl || null,
+        offline_description:
+          evidenceType === 'offline_document' ? trimmedDescription || null : null,
+        offline_reference:
+          evidenceType === 'offline_document' ? trimmedReference || null : null,
+        match_confirmed: verificationRequired && matchConfirmed,
+        verification_note: verificationNote.trim() || null,
+      })
+      setSuccess('Manual offer verification saved.')
+    } catch (verificationError) {
+      setFormError(
+        verificationError instanceof Error
+          ? verificationError.message
+          : 'Could not save manual offer verification.',
+      )
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/75 px-4 py-6 backdrop-blur-sm">
+      <button
+        type="button"
+        aria-label="Close manual offer verification"
+        onClick={onClose}
+        className="absolute inset-0 cursor-default"
+      />
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="manual-offer-verification-title"
+        className="relative z-10 my-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0d1320] shadow-2xl shadow-black/50"
+      >
+        <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4">
+          <div>
+            <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-blue-300">
+              Product Management · manual offer
+            </p>
+            <h2
+              id="manual-offer-verification-title"
+              className="mt-1 text-base font-semibold text-white"
+            >
+              Verify Manual Offer
+            </h2>
+            <p className="mt-1 text-[11px] text-slate-500">
+              {product.product_name} · {product.product_id}
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label="Close manual offer verification"
+            onClick={onClose}
+            disabled={submitting}
+            className="rounded-lg p-2 text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-200 disabled:opacity-40"
+          >
+            <X aria-hidden="true" size={16} />
+          </button>
+        </div>
+
+        {loading ? (
+          <p className="px-5 py-8 text-center text-xs text-slate-400">
+            Loading manual offers…
+          </p>
+        ) : error ? (
+          <p role="alert" className="mx-5 my-5 rounded-lg border border-rose-400/20 bg-rose-400/[0.06] px-3 py-2 text-xs text-rose-200">
+            {error}
+          </p>
+        ) : offers.length === 0 ? (
+          <div className="px-5 py-8 text-center">
+            <p className="text-sm font-medium text-slate-200">
+              No manual offer record exists yet
+            </p>
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              Save this product with a store to create its single linked offer.
+              Verification never creates a duplicate offer.
+            </p>
+          </div>
+        ) : (
+          <form onSubmit={submitVerification} className="px-5 py-5">
+            <div className="mb-5">
+              <label className={labelClassName} htmlFor="manual-offer-select">
+                Manual offer
+              </label>
+              <select
+                id="manual-offer-select"
+                className={fieldClassName}
+                value={selectedId}
+                onChange={(event) => setSelectedId(event.target.value)}
+              >
+                {offers.map((offer) => (
+                  <option key={offer.offer_id} value={offer.offer_id}>
+                    {offer.store} · {formatManualOfferPrice(offer.price, offer.currency)}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {selected && (
+              <>
+                <dl className="mb-5 grid gap-x-5 divide-y divide-white/[0.06] rounded-xl border border-white/[0.06] bg-white/[0.015] px-3.5 sm:grid-cols-2 sm:divide-y-0">
+                  <div className="border-b border-white/[0.06] py-2.5 sm:even:border-b-0">
+                    <dt className="text-[10px] text-slate-500">Store</dt>
+                    <dd className="mt-1 text-xs font-medium text-slate-200">
+                      {selected.store}
+                    </dd>
+                  </div>
+                  <div className="border-b border-white/[0.06] py-2.5 sm:even:border-b-0">
+                    <dt className="text-[10px] text-slate-500">Price</dt>
+                    <dd className="mt-1 text-xs font-medium text-slate-200">
+                      {formatManualOfferPrice(selected.price, selected.currency)}
+                    </dd>
+                  </div>
+                  <div className="border-b border-white/[0.06] py-2.5 sm:even:border-b-0">
+                    <dt className="text-[10px] text-slate-500">Currency</dt>
+                    <dd className="mt-1 text-xs font-medium text-slate-200">
+                      {selected.currency ?? '—'}
+                    </dd>
+                  </div>
+                  <div className="border-b border-white/[0.06] py-2.5 sm:even:border-b-0">
+                    <dt className="text-[10px] text-slate-500">
+                      Current offer availability
+                    </dt>
+                    <dd className="mt-1 text-xs font-medium text-slate-200">
+                      {selected.availability.replaceAll('_', ' ')}
+                    </dd>
+                  </div>
+                  <div className="border-b border-white/[0.06] py-2.5 sm:even:border-b-0">
+                    <dt className="text-[10px] text-slate-500">
+                      Catalog availability (separate)
+                    </dt>
+                    <dd className="mt-1">
+                      <AvailabilityBadge
+                        availability={product.availability}
+                      />
+                    </dd>
+                  </div>
+                  <div className="border-b border-white/[0.06] py-2.5 sm:even:border-b-0">
+                    <dt className="text-[10px] text-slate-500">
+                      Product URL
+                    </dt>
+                    <dd className="mt-1 text-xs font-medium">
+                      {selected.product_url &&
+                      validHttpUrl(selected.product_url) ? (
+                        <a
+                          href={selected.product_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-blue-300 hover:text-blue-200"
+                        >
+                          Open retailer product
+                          <ExternalLink aria-hidden="true" size={11} />
+                        </a>
+                      ) : (
+                        <span className="text-slate-500">
+                          No valid retailer URL
+                        </span>
+                      )}
+                    </dd>
+                  </div>
+                  <div className="border-b border-white/[0.06] py-2.5 sm:even:border-b-0">
+                    <dt className="text-[10px] text-slate-500">
+                      Store website URL (metadata only)
+                    </dt>
+                    <dd className="mt-1 text-xs font-medium text-slate-200">
+                      {selected.store_website_url ||
+                        product.store_website_url ||
+                        '—'}
+                    </dd>
+                  </div>
+                  <div className="border-b border-white/[0.06] py-2.5 sm:even:border-b-0">
+                    <dt className="text-[10px] text-slate-500">Evidence type</dt>
+                    <dd className="mt-1 text-xs font-medium text-slate-200">
+                      {selected.evidence_type?.replaceAll('_', ' ') ?? 'legacy URL'}
+                    </dd>
+                  </div>
+                  <div className="border-b border-white/[0.06] py-2.5 sm:even:border-b-0">
+                    <dt className="text-[10px] text-slate-500">
+                      Verification status
+                    </dt>
+                    <dd className="mt-1 text-xs font-medium text-slate-200">
+                      {selected.verification_status.replaceAll('_', ' ')}
+                    </dd>
+                  </div>
+                  <div className="border-b border-white/[0.06] py-2.5 sm:even:border-b-0">
+                    <dt className="text-[10px] text-slate-500">
+                      Verified by / at
+                    </dt>
+                    <dd className="mt-1 text-xs font-medium text-slate-200">
+                      {selected.verified_by || '—'}
+                      {selected.verified_at
+                        ? ` · ${formatManualOfferTimestamp(selected.verified_at)}`
+                        : ''}
+                    </dd>
+                  </div>
+                </dl>
+
+                <div className="mb-4">
+                  <label className={labelClassName} htmlFor="offer-availability">
+                    Offer availability
+                  </label>
+                  <select
+                    id="offer-availability"
+                    className={fieldClassName}
+                    value={availability}
+                    onChange={(event) =>
+                      setAvailability(
+                        event.target.value as ManualOfferAvailability,
+                      )
+                    }
+                  >
+                    {PRODUCT_AVAILABILITIES.map((value) => (
+                      <option key={value} value={value}>
+                        {value.replaceAll('_', ' ')}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="mb-4">
+                  <label className={labelClassName} htmlFor="evidence-type">
+                    Evidence type
+                  </label>
+                  <select
+                    id="evidence-type"
+                    className={`${fieldClassName} cursor-pointer`}
+                    value={evidenceType}
+                    onChange={(event) =>
+                      setEvidenceType(
+                        event.target.value as ManualOfferEvidenceType,
+                      )
+                    }
+                  >
+                    <option value="product_url">Product URL</option>
+                    <option value="offline_document">Offline document</option>
+                    <option value="store_website_url">
+                      Store website URL (not proof)
+                    </option>
+                  </select>
+                  <p className="mt-1.5 text-[10px] leading-4 text-slate-500">
+                    {evidenceType === 'product_url'
+                      ? 'Enter the exact retailer product page URL shown above.'
+                      : evidenceType === 'offline_document'
+                        ? 'Describe the invoice, receipt, or price list and give its reference. No file upload is available.'
+                        : 'Store website URLs are metadata only and cannot prove a product price or stock.'}
+                  </p>
+                </div>
+
+                {evidenceType === 'product_url' && (
+                  <div className="mb-4">
+                    <label className={labelClassName} htmlFor="evidence-url">
+                      Evidence URL
+                      {availability === 'in_stock' ? ' (required)' : ' (optional)'}
+                    </label>
+                    <input
+                      id="evidence-url"
+                      type="url"
+                      className={fieldClassName}
+                      value={productUrlEvidence}
+                      required={availability === 'in_stock'}
+                      placeholder="https://retailer.example/product"
+                      onChange={(event) =>
+                        setProductUrlEvidence(event.target.value)
+                      }
+                    />
+                  </div>
+                )}
+
+                {evidenceType === 'offline_document' && (
+                  <div className="mb-4 grid gap-3 sm:grid-cols-2">
+                    <label>
+                      <span className={labelClassName}>
+                        Offline evidence description
+                        {availability === 'in_stock' ? ' (required)' : ' (optional)'}
+                      </span>
+                      <input
+                        className={fieldClassName}
+                        maxLength={1000}
+                        value={offlineDescription}
+                        placeholder="Retailer invoice showing the price"
+                        onChange={(event) =>
+                          setOfflineDescription(event.target.value)
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span className={labelClassName}>
+                        Evidence reference
+                        {availability === 'in_stock' ? ' (required)' : ' (optional)'}
+                      </span>
+                      <input
+                        className={fieldClassName}
+                        maxLength={250}
+                        value={offlineReference}
+                        placeholder="INV-2026-001"
+                        onChange={(event) =>
+                          setOfflineReference(event.target.value)
+                        }
+                      />
+                    </label>
+                  </div>
+                )}
+
+                <div className="mb-4">
+                  <label className={labelClassName} htmlFor="store-website-url">
+                    Store website URL (metadata only)
+                  </label>
+                  <input
+                    id="store-website-url"
+                    type="url"
+                    className={fieldClassName}
+                    value={storeWebsiteUrl}
+                    placeholder="https://www.retailer.example"
+                    onChange={(event) => setStoreWebsiteUrl(event.target.value)}
+                  />
+                </div>
+
+                <label className="mb-4 flex items-start gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.02] px-3 py-2.5 text-[11px] leading-5 text-slate-300">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 size-3.5 shrink-0 accent-blue-500"
+                    checked={matchConfirmed}
+                    onChange={(event) => setMatchConfirmed(event.target.checked)}
+                  />
+                  <span>
+                    I confirm that the product, price, currency, and availability
+                    match the evidence.
+                  </span>
+                </label>
+
+                <div className="mb-4">
+                  <label
+                    className={labelClassName}
+                    htmlFor="verification-note"
+                  >
+                    Verification note (optional)
+                  </label>
+                  <textarea
+                    id="verification-note"
+                    rows={3}
+                    maxLength={1000}
+                    className="w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 py-2 text-xs text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10"
+                    value={verificationNote}
+                    placeholder="What did you check on the retailer page?"
+                    onChange={(event) =>
+                      setVerificationNote(event.target.value)
+                    }
+                  />
+                </div>
+
+                {formError && (
+                  <p role="alert" className="mb-3 text-xs text-rose-300">
+                    {formError}
+                  </p>
+                )}
+                {success && (
+                  <p className="mb-3 text-xs text-emerald-300">{success}</p>
+                )}
+
+                <div className="flex items-center justify-end gap-2 border-t border-white/[0.06] pt-4">
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    disabled={submitting}
+                    className="rounded-lg border border-white/[0.08] px-3 py-2 text-[11px] font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:opacity-40"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-blue-500 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <ShieldCheck aria-hidden="true" size={13} />
+                    {submitting ? 'Saving…' : 'Verify Manual Offer'}
+                  </button>
+                </div>
+              </>
+            )}
+          </form>
+        )}
+      </section>
+    </div>
+  )
+}
+
 export function AdminProductsPage() {
   const [catalog, setCatalog] = useState<{
     products: Product[]
@@ -990,6 +1640,12 @@ export function AdminProductsPage() {
   const [deletingProduct, setDeletingProduct] = useState<Product | null>(
     null,
   )
+  const [manualOfferProduct, setManualOfferProduct] = useState<Product | null>(
+    null,
+  )
+  const [manualOffers, setManualOffers] = useState<ManualOfferRecord[]>([])
+  const [manualOffersLoading, setManualOffersLoading] = useState(false)
+  const [manualOffersError, setManualOffersError] = useState('')
   const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(
     () => new Set(),
   )
@@ -1006,6 +1662,7 @@ export function AdminProductsPage() {
   const exportInFlight = useRef(false)
   const bulkExportInFlight = useRef(false)
   const bulkDeleteInFlight = useRef(false)
+  const manualOffersInFlight = useRef(false)
   const selectAllRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -1220,6 +1877,40 @@ export function AdminProductsPage() {
     setEditingProduct(product)
     setFormOpen(true)
     setFeedback('')
+  }
+
+  async function openManualOfferVerification(product: Product) {
+    if (manualOffersInFlight.current) return
+    manualOffersInFlight.current = true
+    setManualOfferProduct(product)
+    setManualOffers([])
+    setManualOffersError('')
+    setManualOffersLoading(true)
+    try {
+      const offers = await api.adminManualOffers(product.product_id)
+      setManualOffers(offers)
+    } catch (error) {
+      setManualOffersError(
+        error instanceof Error
+          ? `Could not load manual offers: ${error.message}`
+          : 'Could not load manual offers.',
+      )
+    } finally {
+      setManualOffersLoading(false)
+      manualOffersInFlight.current = false
+    }
+  }
+
+  async function submitManualOfferVerification(
+    offerId: string,
+    payload: ManualOfferVerificationRequest,
+  ) {
+    const verified = await api.verifyManualOffer(offerId, payload)
+    setManualOffers((previous) =>
+      previous.map((offer) =>
+        offer.offer_id === verified.offer_id ? verified : offer,
+      ),
+    )
   }
 
   async function saveProduct(product: Product) {
@@ -2057,6 +2748,19 @@ export function AdminProductsPage() {
                         >
                           <Pencil aria-hidden="true" size={14} />
                         </button>
+                        {product.source_type === 'manual' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void openManualOfferVerification(product)
+                            }
+                            aria-label={`Verify manual offer for ${product.product_name}`}
+                            title="Verify manual offer"
+                            className="rounded-lg p-2 text-slate-500 transition hover:bg-emerald-400/[0.07] hover:text-emerald-200"
+                          >
+                            <ShieldCheck aria-hidden="true" size={14} />
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => setDeletingProduct(product)}
@@ -2179,6 +2883,16 @@ export function AdminProductsPage() {
           product={deletingProduct}
           onCancel={() => setDeletingProduct(null)}
           onConfirm={confirmDelete}
+        />
+      )}
+      {manualOfferProduct && (
+        <ManualOfferVerificationDialog
+          product={manualOfferProduct}
+          offers={manualOffers}
+          loading={manualOffersLoading}
+          error={manualOffersError}
+          onClose={() => setManualOfferProduct(null)}
+          onVerify={submitManualOfferVerification}
         />
       )}
       {bulkDeleteOpen && (

@@ -17,7 +17,7 @@ import { useSystemSettings } from '../../context/SystemSettingsContext'
 const navigation: { label: string; to: string; icon: LucideIcon }[] = [
   { label: 'Dashboard', to: '/', icon: LayoutDashboard },
   { label: 'Products', to: '/products', icon: Boxes },
-  { label: 'Price comparison', to: '/comparison', icon: ChartNoAxesCombined },
+  { label: 'Price comparison', to: '/price-comparison', icon: ChartNoAxesCombined },
   { label: 'Price history', to: '/price-history', icon: History },
   { label: 'Watchlist', to: '/watchlist', icon: Activity },
   { label: 'Alerts', to: '/alerts', icon: BellRing },

@@ -1,6 +1,9 @@
 ﻿from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.services.manual_offer_verification import valid_public_http_url
+from app.services.scraping_schedule import parse_utc_timestamp
 
 
 class APIModel(BaseModel):
@@ -48,10 +51,10 @@ class AdminProduct(APIModel):
     image_url: str | None = None
     product_url: str | None = None
     store_id: str | None = None
+    store_name: str | None = None
+    store_website_url: str | None = None
     price: float = Field(gt=0)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
-    shipping_fee: float | None = Field(default=None, ge=0)
-    sku: str | None = None
     availability: Literal[
         "in_stock",
         "out_of_stock",
@@ -63,6 +66,26 @@ class AdminProduct(APIModel):
     updated_at: str = Field(min_length=1)
     sku: str | None = None
     shipping_fee: float | None = None
+
+    @field_validator("store_name")
+    @classmethod
+    def normalize_store_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        return text or None
+
+    @field_validator("store_website_url")
+    @classmethod
+    def validate_store_website_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        if valid_public_http_url(text) is None:
+            raise ValueError(
+                "store_website_url must be a valid public HTTP or HTTPS URL."
+            )
+        return text
 
 
 def admin_product_to_catalog_document(
@@ -117,12 +140,7 @@ def admin_product_to_catalog_document(
 def catalog_document_to_admin_product(document: dict) -> AdminProduct:
     admin_product = document.get("adminProduct")
     if isinstance(admin_product, dict):
-        known_fields = AdminProduct.model_fields
-        return AdminProduct.model_validate({
-            key: value
-            for key, value in admin_product.items()
-            if key in known_fields
-        })
+        return AdminProduct.model_validate(admin_product)
 
     product_id = str(document.get("_id", document.get("id", "")))
     product = Product.model_validate({
@@ -188,7 +206,13 @@ def catalog_document_to_public_product(document: dict) -> dict:
 
 class StoreOffer(APIModel):
     store: str
-    price: float | None = Field(default=None, ge=0)
+    price: float = Field(ge=0)
+    availability: str | None = None
+    source_type: str | None = None
+    verification_status: str | None = None
+    is_test_site: bool = False
+    product_url: str | None = None
+    updated_at: str | None = None
 
 
 class PriceHistoryPoint(APIModel):
@@ -199,6 +223,9 @@ class PriceHistoryPoint(APIModel):
 class StoreHistory(APIModel):
     store: str
     points: list[PriceHistoryPoint]
+    availability: str | None = None
+    verification_status: str | None = None
+    is_test_site: bool = False
 
 
 class PriceAlert(APIModel):
@@ -209,6 +236,8 @@ class PriceAlert(APIModel):
     targetPrice: float = Field(gt=0)
     status: Literal["active", "triggered"]
     createdAt: str = Field(min_length=1)
+    user_id: str | None = None
+    emailNotifiedPrice: float | None = None
 
 
 class WatchlistEntry(APIModel):
@@ -239,6 +268,108 @@ class ScrapingLog(APIModel):
     status: Literal["success", "failure"]
     error: str
 
+
+class ScrapingJobConfiguration(APIModel):
+    interval_minutes: int = Field(ge=1, le=10080)
+    scheduled_at: str = Field(min_length=1)
+    request_timeout_seconds: int = Field(ge=1, le=300)
+    retry_attempts: int = Field(ge=0, le=10)
+    product_limit: int = Field(default=10, ge=1, le=15)
+    recurring: bool = True
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def validate_scheduled_at(cls, value: str) -> str:
+        parse_utc_timestamp(value, "scheduled_at")
+        return value
+
+
+class CreateScrapingJobInput(APIModel):
+    store_id: str = Field(min_length=1)
+    interval_minutes: int = Field(ge=1, le=10080)
+    scheduled_at: str = Field(min_length=1)
+    request_timeout_seconds: int = Field(ge=1, le=300)
+    retry_attempts: int = Field(ge=0, le=10)
+    product_limit: int = Field(default=10, ge=1, le=15)
+    recurring: bool = True
+    allow_past_schedule: bool = False
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def validate_scheduled_at(cls, value: str) -> str:
+        parse_utc_timestamp(value, "scheduled_at")
+        return value
+
+
+ScrapingStatus = Literal[
+    "pending",
+    "scheduled",
+    "running",
+    "completed",
+    "failed",
+    "cancelled",
+    "queued",
+    "paused",
+]
+
+
+class ScrapingExecution(APIModel):
+    id: str
+    job_id: str
+    started_at: str
+    finished_at: str | None = None
+    status: ScrapingStatus
+    products_found: int = Field(ge=0)
+    success_count: int = Field(ge=0)
+    failure_count: int = Field(ge=0)
+    products_created: int = Field(ge=0)
+    products_refreshed: int = Field(ge=0)
+    success_rate: float = Field(ge=0, le=100)
+    duration_seconds: float = Field(ge=0)
+    errors: list[str]
+    logs: list[str]
+    target_url: str
+    product_limit: int = Field(default=10, ge=1, le=15)
+    run_token: str | None = None
+    trigger: Literal["manual", "scheduled", "recovery"] | None = None
+    attempts: int = Field(default=0, ge=0)
+    cancelled_at: str | None = None
+
+
+class ScrapingJob(APIModel):
+    id: str
+    store_id: str
+    store_name: str
+    website_url: str
+    configuration: ScrapingJobConfiguration
+    status: ScrapingStatus
+    last_run: str | None = None
+    next_run: str | None = None
+    products_found: int = Field(ge=0)
+    success_rate: float = Field(ge=0, le=100)
+    executions: list[ScrapingExecution]
+    updated_at: str
+    cancel_requested: bool = False
+    active_execution_id: str | None = None
+    lease_expires_at: str | None = None
+    last_error: str | None = None
+    duration_seconds: float | None = Field(default=None, ge=0)
+    attempts: int = Field(default=0, ge=0)
+    trigger: Literal["manual", "scheduled", "recovery"] | None = None
+
+
+class ScrapingTarget(APIModel):
+    store_id: str
+    store_name: str
+    website_url: str
+    logo_url: str | None = None
+    status: Literal["Active", "Inactive"]
+    created_at: str
+    updated_at: str
+    target_url: str
+    default_product_limit: int
+    max_product_limit: int
+
 class Store(APIModel):
     store_id: str = Field(
         min_length=1,
@@ -255,82 +386,63 @@ class Store(APIModel):
 
 class StoreOffer(APIModel):
     store: str
-    store_id: str | None = None
-    offer_id: str | None = None
-    source_product_id: str | None = None
-    store_product_name: str | None = None
-    store_brand: str | None = None
-    store_model: str | None = None
-    store_category: str | None = None
-    sku: str | None = None
-    price: float | None = Field(default=None, ge=0)
-    currency: str = "USD"
-    availability: str = "unknown"
-    shipping_fee: float | None = Field(default=None, ge=0)
+    price: float = Field(ge=0)
+    availability: str | None = None
+    source_type: str | None = None
+    verification_status: str | None = None
+    is_test_site: bool = False
     product_url: str | None = None
     updated_at: str | None = None
-    source_type: Literal["scraped", "manual"] | None = None
 
 
-class ProductMatchStoreOffer(APIModel):
-    store: str
-    store_product_name: str | None = None
+class ManualOfferVerificationRequest(APIModel):
+    availability: Literal[
+        "in_stock",
+        "out_of_stock",
+        "preorder",
+        "unknown",
+    ]
+    evidence_type: Literal[
+        "product_url",
+        "offline_document",
+        "store_website_url",
+    ] | None = None
+    evidence_url: str | None = None
     product_url: str | None = None
+    store_website_url: str | None = None
+    offline_description: str | None = Field(default=None, max_length=1000)
+    offline_reference: str | None = Field(default=None, max_length=250)
+    match_confirmed: bool = False
+    verification_note: str | None = Field(default=None, max_length=1000)
 
 
-class ProductMatchCandidate(APIModel):
+class ManualOfferRecord(APIModel):
+    offer_id: str
     product_id: str
-    product_name: str
-    brand: str | None = None
-    model: str | None = None
-    sku: str | None = None
-    category: str | None = None
-    image_url: str | None = None
+    store: str
+    store_id: str | None = None
+    store_name: str | None = None
+    price: float = Field(ge=0)
+    currency: str | None = None
     product_url: str | None = None
-    similarity: float = Field(ge=0, le=1)
-    reasons: list[str]
-    store_offers: list[ProductMatchStoreOffer] = Field(default_factory=list)
-
-
-class ProductMatchReview(APIModel):
-    id: str
-    status: Literal[
-        "pending",
-        "processing",
-        "rejected",
-        "confirmed",
-        "separate",
-    ]
-    incoming: AdminProduct
-    incoming_store_name: str | None = None
-    classification: Literal[
-        "potential",
-        "insufficient_information",
-    ] = "potential"
-    candidates: list[ProductMatchCandidate]
-    created_at: str
-    updated_at: str
-    resolved_product_id: str | None = None
-    decision_history: list[dict] = Field(default_factory=list)
-    audit_warning: str | None = None
-
-
-class ProductMatchDecision(APIModel):
-    action: Literal[
-        "confirm",
-        "reject",
-        "manual_match",
-        "create_separate",
-    ]
-    product_id: str | None = None
-    reason: str | None = Field(default=None, max_length=1000)
-
-
-class AdminProductIngestionResult(APIModel):
-    status: Literal["created", "matched", "review", "rejected"]
-    product: AdminProduct
-    shared_product_id: str | None = None
-    review_id: str | None = None
+    availability: str
+    catalog_availability: str | None = None
+    source_type: str
+    verification_status: str
+    verified: bool = False
+    verified_by: str | None = None
+    verified_at: str | None = None
+    evidence_url: str | None = None
+    evidence_type: str | None = None
+    product_url_evidence: str | None = None
+    store_website_url: str | None = None
+    offline_description: str | None = None
+    offline_reference: str | None = None
+    match_confirmed: bool = False
+    verification_note: str | None = None
+    last_checked_at: str | None = None
+    updated_at: str | None = None
+    is_test_site: bool = False
 
 
 class PriceHistoryPoint(APIModel):
@@ -341,6 +453,9 @@ class PriceHistoryPoint(APIModel):
 class StoreHistory(APIModel):
     store: str
     points: list[PriceHistoryPoint]
+    availability: str | None = None
+    verification_status: str | None = None
+    is_test_site: bool = False
 
 
 class PriceAlert(APIModel):
@@ -351,6 +466,8 @@ class PriceAlert(APIModel):
     targetPrice: float = Field(gt=0)
     status: Literal["active", "triggered"]
     createdAt: str = Field(min_length=1)
+    user_id: str | None = None
+    emailNotifiedPrice: float | None = None
 
 
 class WatchlistEntry(APIModel):

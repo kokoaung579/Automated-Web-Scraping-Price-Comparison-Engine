@@ -15,7 +15,15 @@ import type { AuditLogsQuery, AuditLogsResponse } from '../data/adminAuditLogs'
 import type { AdminCategory } from '../data/adminCategories'
 import type { AdminStore } from '../data/adminStores'
 import type { DashboardResponse } from '../types/dashboard'
-import type { ComparisonQuery, ComparisonResponse } from '../types/comparison'
+import type {
+  ComparisonAvailability,
+  ComparisonQuery,
+  ComparisonResponse,
+} from '../types/comparison'
+import type {
+  ManualOfferRecord,
+  ManualOfferVerificationRequest,
+} from '../types/manualOffer'
 
 export type HealthResponse = {
   status: string
@@ -69,17 +77,6 @@ export type AdminConnectionEpisodePayload = {
 
 type ProductRecord = Omit<DemoProduct, 'icon'> & {
   image_url?: string | null
-}
-
-export type AdminProductIngestionResult = {
-  status: 'created' | 'matched' | 'review' | 'rejected'
-  product: Product
-  shared_product_id: string | null
-  review_id: string | null
-}
-
-export type AdminCatalogProduct = Product & {
-  sku: string | null
 }
 
 export type StoreWithProductCount = AdminStore & {
@@ -183,12 +180,9 @@ export class ApiConnectionError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response
-  const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), 10_000)
   try {
     response = await fetch(`/api${path}`, {
       ...init,
-      signal: controller.signal,
       credentials: init?.credentials ?? 'include',
       headers: {
         'Content-Type': 'application/json',
@@ -196,19 +190,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     })
   } catch (error) {
-    clearTimeout(timeoutId)
     // Normal HTTP error responses are handled below; only a failed fetch is a
     // real connection loss.
-    if (controller.signal.aborted) {
-      throw new ApiConnectionError(
-        'The backend did not respond within 10 seconds.',
-      )
-    }
     throw new ApiConnectionError(
       error instanceof Error ? error.message : 'Unable to reach the backend.',
     )
   }
-  clearTimeout(timeoutId)
 
   if (!response.ok) {
     const body = await response.json().catch(() => null) as
@@ -561,10 +548,10 @@ export const api = {
     ),
 
   // Admin Products CRUD
-  adminProducts: () => request<AdminCatalogProduct[]>('/admin/products'),
+  adminProducts: () => request<Product[]>('/admin/products'),
 
   createAdminProduct: (product: Product) =>
-    request<AdminProductIngestionResult>('/admin/products', {
+    request<Product>('/admin/products', {
       method: 'POST',
       body: JSON.stringify(product),
     }),
@@ -589,6 +576,25 @@ export const api = {
         confirm: payload.confirm,
       }),
     }),
+
+  adminManualOffers: (productId?: string) => {
+    const suffix = productId
+      ? `?product_id=${encodeURIComponent(productId)}`
+      : ''
+    return request<ManualOfferRecord[]>(`/admin/manual-offers${suffix}`)
+  },
+
+  verifyManualOffer: (
+    offerId: string,
+    payload: ManualOfferVerificationRequest,
+  ) =>
+    request<ManualOfferRecord>(
+      `/admin/manual-offers/${encodeURIComponent(offerId)}/verify`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    ),
 
   comparisonProducts: (query: ComparisonQuery = {}) => {
     const params = new URLSearchParams()
@@ -691,17 +697,21 @@ export const api = {
 
   scrapingLogs: () => request<ScrapingLog[]>('/scraping-logs'),
 
-  offers: (productId: string) =>
-    request<StoreOffer[]>(`/products/${encodeURIComponent(productId)}/offers`),
-
-  comparisons: (productId: string) =>
+  offers: (
+    productId: string,
+    availability: ComparisonAvailability = 'in_stock',
+  ) =>
     request<StoreOffer[]>(
-      `/products/${encodeURIComponent(productId)}/comparisons`,
+      `/products/${encodeURIComponent(productId)}/offers?availability=${availability}`,
     ),
 
-  priceHistory: (productId: string, period: PriceHistoryPeriod) =>
+  priceHistory: (
+    productId: string,
+    period: PriceHistoryPeriod,
+    availability: ComparisonAvailability = 'in_stock',
+  ) =>
     request<StoreHistory[]>(
-      `/products/${encodeURIComponent(productId)}/history?period=${period}`,
+      `/products/${encodeURIComponent(productId)}/history?period=${period}&availability=${availability}`,
     ),
 
   systemSettings: () =>

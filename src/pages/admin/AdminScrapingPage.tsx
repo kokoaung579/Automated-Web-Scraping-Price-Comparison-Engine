@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import {
   Activity,
   AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
   CalendarClock,
   CheckCircle2,
   CircleX,
@@ -21,10 +23,7 @@ import {
   X,
 } from 'lucide-react'
 import {
-  applyDemoJobAction,
-  createDemoScrapingJob,
-  loadScrapingJobs,
-  saveScrapingJobs,
+  normalizeScrapingJobStatus,
   validateScrapingJobInput,
 } from '../../data/adminScraping'
 import type {
@@ -33,54 +32,77 @@ import type {
   ScrapingExecution,
   ScrapingJob,
   ScrapingJobStatus,
+  ScrapingTarget,
 } from '../../data/adminScraping'
-import type { AdminStore } from '../../data/adminStores'
-import { getStores } from '../../services/storesApi'
 import { getScrapingApiMode } from '../../services/scrapingApi'
+import {
+  formatDateTime,
+  getAppTimeZone,
+  parseAppTimeZoneInputValue,
+  toAppTimeZoneInputValue,
+} from '../../utils/datetime'
+
+const SCRAPING_JOBS_PER_PAGE = 10
 
 const statusLabels: Record<ScrapingJobStatus, string> = {
-  queued: 'Queued',
+  pending: 'Pending',
+  scheduled: 'Scheduled',
   running: 'Running',
-  paused: 'Paused',
   completed: 'Completed',
   failed: 'Failed',
   cancelled: 'Cancelled',
+  queued: 'Pending',
+  paused: 'Scheduled',
 }
 
 const statusStyles: Record<ScrapingJobStatus, string> = {
-  queued: 'border-blue-300/10 bg-blue-400/[0.06] text-blue-200',
+  pending: 'border-amber-300/10 bg-amber-400/[0.07] text-amber-200',
+  scheduled: 'border-blue-300/10 bg-blue-400/[0.06] text-blue-200',
   running: 'border-emerald-300/10 bg-emerald-400/[0.07] text-emerald-200',
-  paused: 'border-amber-300/10 bg-amber-400/[0.07] text-amber-200',
   completed: 'border-cyan-300/10 bg-cyan-400/[0.06] text-cyan-200',
   failed: 'border-rose-300/10 bg-rose-400/[0.07] text-rose-200',
   cancelled: 'border-slate-400/10 bg-slate-400/[0.06] text-slate-400',
+  queued: 'border-amber-300/10 bg-amber-400/[0.07] text-amber-200',
+  paused: 'border-blue-300/10 bg-blue-400/[0.06] text-blue-200',
 }
 
 const filterOptions: { value: 'all' | ScrapingJobStatus; label: string }[] = [
   { value: 'all', label: 'All statuses' },
-  { value: 'queued', label: 'Queued' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'scheduled', label: 'Scheduled' },
   { value: 'running', label: 'Running' },
-  { value: 'paused', label: 'Paused' },
   { value: 'completed', label: 'Completed' },
   { value: 'failed', label: 'Failed' },
   { value: 'cancelled', label: 'Cancelled' },
 ]
 
-function formatDate(value: string | null): string {
-  if (!value) return '—'
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(value))
+function canonicalStatus(status: ScrapingJobStatus): ScrapingJobStatus {
+  return normalizeScrapingJobStatus(status) ?? status
 }
 
-function formatDuration(execution: ScrapingExecution | undefined): string {
-  if (!execution) return '—'
-  const end = execution.finished_at ? Date.parse(execution.finished_at) : Date.now()
-  const start = Date.parse(execution.started_at)
+function formatDate(value: string | null): string {
+  return formatDateTime(value)
+}
+
+function formatDuration(value: {
+  duration_seconds?: number | null
+  started_at?: string
+  finished_at?: string | null
+}): string {
+  if (typeof value.duration_seconds === 'number') {
+    const seconds = Math.max(0, Math.floor(value.duration_seconds))
+    const hours = Math.floor(seconds / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+    const remainingSeconds = seconds % 60
+    return hours > 0
+      ? `${hours}h ${minutes}m`
+      : minutes > 0
+        ? `${minutes}m ${remainingSeconds}s`
+        : `${remainingSeconds}s`
+  }
+  if (!value.started_at) return '—'
+  const end = value.finished_at ? Date.parse(value.finished_at) : Date.now()
+  const start = Date.parse(value.started_at)
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return '—'
   const seconds = Math.floor((end - start) / 1000)
   const hours = Math.floor(seconds / 3600)
@@ -93,43 +115,39 @@ function formatDuration(execution: ScrapingExecution | undefined): string {
       : `${remainingSeconds}s`
 }
 
-function toLocalDateTime(value: string): string {
-  const date = new Date(value)
-  if (!Number.isFinite(date.getTime())) return ''
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-  return local.toISOString().slice(0, 16)
-}
-
 function getDefaultSchedule(): string {
   const date = new Date(Date.now() + 60 * 60 * 1000)
   date.setSeconds(0, 0)
   return date.toISOString()
 }
 
+function firstError(job: ScrapingJob): string {
+  return job.executions[0]?.errors[0] || job.last_error || '—'
+}
+
 function JobStatusBadge({ status }: { status: ScrapingJobStatus }) {
+  const value = canonicalStatus(status)
   const StatusIcon =
-    status === 'completed'
+    value === 'completed'
       ? CheckCircle2
-      : status === 'failed'
+      : value === 'failed'
         ? CircleX
-        : status === 'running'
+        : value === 'running'
           ? Activity
-          : status === 'queued'
+          : value === 'pending' || value === 'scheduled'
             ? Clock3
-            : status === 'paused'
-              ? Pause
-              : Square
+            : Square
 
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-medium ${statusStyles[status]}`}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-medium ${statusStyles[value]}`}
     >
       <StatusIcon
         aria-hidden="true"
         size={12}
-        className={status === 'running' ? 'animate-pulse' : ''}
+        className={value === 'running' ? 'animate-pulse' : ''}
       />
-      {statusLabels[status]}
+      {statusLabels[value]}
     </span>
   )
 }
@@ -187,6 +205,8 @@ function ExecutionDetails({ execution }: { execution: ScrapingExecution }) {
       </div>
       <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-slate-400">
         <span>{execution.products_found} products found</span>
+        <span>{execution.success_count ?? 0} succeeded</span>
+        <span>{execution.failure_count ?? 0} failed</span>
         <span>{execution.success_rate.toFixed(1)}% success rate</span>
         <span>Duration {formatDuration(execution)}</span>
       </div>
@@ -194,7 +214,7 @@ function ExecutionDetails({ execution }: { execution: ScrapingExecution }) {
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <div>
           <h4 className="text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-            Errors
+            Error details
           </h4>
           {execution.errors.length ? (
             <ul className="mt-2 space-y-1.5">
@@ -242,15 +262,14 @@ function ExecutionDetails({ execution }: { execution: ScrapingExecution }) {
 
 function JobDetailsDialog({
   job,
-  mode,
   loading,
   onClose,
 }: {
   job: ScrapingJob
-  mode: 'demo' | 'live'
   loading: boolean
   onClose: () => void
 }) {
+  const isRunning = canonicalStatus(job.status) === 'running'
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/80 px-3 py-5 backdrop-blur-sm sm:px-5">
       <button
@@ -268,7 +287,7 @@ function JobDetailsDialog({
         <div className="flex items-start justify-between border-b border-white/[0.06] px-5 py-4 sm:px-6">
           <div className="min-w-0">
             <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-blue-300">
-              {mode === 'demo' ? 'Demo job details' : 'Live backend job details'}
+              Live backend job details
             </p>
             <h2
               id="job-details-title"
@@ -301,29 +320,32 @@ function JobDetailsDialog({
             </div>
             <JobStatusBadge status={job.status} />
           </div>
-          {mode === 'demo' ? (
-            <div className="rounded-xl border border-amber-300/10 bg-amber-400/[0.05] px-3.5 py-3 text-[10px] leading-5 text-amber-100/90">
-              Demo history only. Job controls update local demo state and do not
-              connect to the store or execute scraping.
-            </div>
-          ) : (
-            <div className="rounded-xl border border-emerald-300/10 bg-emerald-400/[0.04] px-3.5 py-3 text-[10px] leading-5 text-emerald-100/90">
-              Live backend data. Scraping execution is owned by the configured
-              backend service.
-            </div>
-          )}
+          <div className="rounded-xl border border-emerald-300/10 bg-emerald-400/[0.04] px-3.5 py-3 text-[10px] leading-5 text-emerald-100/90">
+            Execution statistics below come from real backend job records and the
+            shared product catalog. No demo results are shown here.
+          </div>
           {job.configuration && (
             <dl className="grid gap-2 rounded-xl border border-white/[0.07] bg-[#090e18]/70 p-4 text-[10px] sm:grid-cols-2">
               <div><dt className="text-slate-500">Interval</dt><dd className="mt-1 text-slate-200">{job.configuration.interval_minutes} minutes</dd></div>
-              <div><dt className="text-slate-500">Next scheduled run</dt><dd className="mt-1 text-slate-200">{formatDate(job.configuration.scheduled_at)}</dd></div>
+              <div><dt className="text-slate-500">Recurring</dt><dd className="mt-1 text-slate-200">{job.configuration.recurring === false ? 'No' : 'Yes'}</dd></div>
+              <div><dt className="text-slate-500">Last run</dt><dd className="mt-1 text-slate-200">{formatDate(job.last_run)}</dd></div>
+              <div><dt className="text-slate-500">Next scheduled run</dt><dd className="mt-1 text-slate-200">{formatDate(job.next_run)}</dd></div>
               <div><dt className="text-slate-500">Request timeout</dt><dd className="mt-1 text-slate-200">{job.configuration.request_timeout_seconds} seconds</dd></div>
               <div><dt className="text-slate-500">Retry attempts</dt><dd className="mt-1 text-slate-200">{job.configuration.retry_attempts}</dd></div>
+              <div><dt className="text-slate-500">Product limit</dt><dd className="mt-1 text-slate-200">{job.configuration.product_limit ?? 10}</dd></div>
+              <div><dt className="text-slate-500">Duration</dt><dd className="mt-1 text-slate-200">{isRunning ? 'In progress…' : formatDuration(job)}</dd></div>
+              {!isRunning && job.last_error && <div className="sm:col-span-2"><dt className="text-slate-500">Last error</dt><dd className="mt-1 break-words text-rose-200">{job.last_error}</dd></div>}
             </dl>
           )}
           {loading ? (
             <div role="status" className="flex items-center justify-center gap-2 py-10 text-xs text-slate-400">
               <LoaderCircle aria-hidden="true" size={15} className="animate-spin" />
               Loading live execution history…
+            </div>
+          ) : isRunning ? (
+            <div className="rounded-xl border border-emerald-300/10 bg-emerald-400/[0.04] px-5 py-10 text-center text-[11px] text-emerald-100/90">
+              The current execution is still in progress. Final metrics and logs will
+              appear here when it finishes.
             </div>
           ) : job.executions.length ? (
             <div className="space-y-3">
@@ -359,33 +381,34 @@ function JobDetailsDialog({
 }
 
 function CreateScrapingJobDialog({
-  stores,
+  targets,
   saving,
   onCancel,
   onSubmit,
 }: {
-  stores: AdminStore[]
+  targets: ScrapingTarget[]
   saving: boolean
   onCancel: () => void
   onSubmit: (input: CreateScrapingJobInput) => Promise<void>
 }) {
   const [input, setInput] = useState<CreateScrapingJobInput>(() => ({
-    store_id: stores[0]?.store_id ?? '',
+    store_id: targets[0]?.store_id ?? '',
     interval_minutes: 60,
     scheduled_at: getDefaultSchedule(),
     request_timeout_seconds: 30,
     retry_attempts: 3,
+    product_limit: targets[0]?.default_product_limit ?? 10,
+    recurring: true,
   }))
   const [error, setError] = useState('')
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const errors = validateScrapingJobInput(input, stores)
+    const errors = validateScrapingJobInput(input, targets)
     if (errors.length > 0) {
       setError(errors.join(' '))
       return
     }
-
     try {
       await onSubmit(input)
     } catch (submitError) {
@@ -398,7 +421,11 @@ function CreateScrapingJobDialog({
   }
 
   function updateNumber(
-    field: 'interval_minutes' | 'request_timeout_seconds' | 'retry_attempts',
+    field:
+      | 'interval_minutes'
+      | 'request_timeout_seconds'
+      | 'retry_attempts'
+      | 'product_limit',
     value: string,
   ) {
     setInput((current) => ({ ...current, [field]: Number(value) }))
@@ -421,47 +448,66 @@ function CreateScrapingJobDialog({
         <form onSubmit={(event) => void handleSubmit(event)} className="space-y-4 px-5 py-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="block sm:col-span-2">
-              <span className="mb-1.5 block text-[11px] font-medium text-slate-300">Managed store</span>
-              <select aria-label="Managed store" required value={input.store_id} onChange={(event) => setInput((current) => ({ ...current, store_id: event.currentTarget.value }))} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none focus:border-blue-400/40">
-                {stores.map((store) => <option key={store.store_id} value={store.store_id}>{store.store_name} · {store.website_url}</option>)}
+              <span className="mb-1.5 block text-[11px] font-medium text-slate-300">Scraping target</span>
+              <select aria-label="Scraping target" required value={input.store_id} onChange={(event) => {
+                const target = targets.find((item) => item.store_id === event.currentTarget.value)
+                setInput((current) => ({
+                  ...current,
+                  store_id: event.currentTarget.value,
+                  product_limit: target?.default_product_limit ?? current.product_limit,
+                }))
+              }} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none focus:border-blue-400/40">
+                {targets.map((target) => <option key={target.store_id} value={target.store_id}>{target.store_name} · {target.target_url}</option>)}
               </select>
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-[11px] font-medium text-slate-300">Product limit</span>
+              <input aria-label="Product limit" type="number" min={1} max={15} step={1} required value={input.product_limit ?? 10} onChange={(event) => updateNumber('product_limit', event.currentTarget.value)} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none focus:border-blue-400/40" />
+              <span className="mt-1 block text-[9px] text-slate-600">Default 10, maximum 15 products per run.</span>
             </label>
             <label className="block">
               <span className="mb-1.5 block text-[11px] font-medium text-slate-300">Scraping interval (minutes)</span>
               <input aria-label="Scraping interval (minutes)" type="number" min={1} max={10080} step={1} required value={input.interval_minutes} onChange={(event) => updateNumber('interval_minutes', event.currentTarget.value)} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none focus:border-blue-400/40" />
-              <span className="mt-1 block text-[9px] text-slate-600">Between 1 and 10,080 minutes.</span>
             </label>
             <label className="block">
-              <span className="mb-1.5 block text-[11px] font-medium text-slate-300">First run schedule</span>
-              <input aria-label="First run schedule" type="datetime-local" required value={toLocalDateTime(input.scheduled_at)} onChange={(event) => {
+              <span className="mb-1.5 block text-[11px] font-medium text-slate-300">First run schedule ({getAppTimeZone()})</span>
+              <input aria-label="First run schedule" type="datetime-local" required value={toAppTimeZoneInputValue(input.scheduled_at)} onChange={(event) => {
                 const value = event.currentTarget.value
-                const date = value ? new Date(value) : null
+                const scheduledAt = value
+                  ? parseAppTimeZoneInputValue(value)
+                  : null
                 setInput((current) => ({
                   ...current,
-                  scheduled_at: date && Number.isFinite(date.getTime()) ? date.toISOString() : value,
+                  scheduled_at: scheduledAt ?? value,
                 }))
                 setError('')
               }} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none [color-scheme:dark] focus:border-blue-400/40" />
-              <span className="mt-1 block text-[9px] text-slate-600">Must be a future date and time.</span>
             </label>
             <label className="block">
               <span className="mb-1.5 block text-[11px] font-medium text-slate-300">Request timeout (seconds)</span>
               <input aria-label="Request timeout (seconds)" type="number" min={1} max={300} step={1} required value={input.request_timeout_seconds} onChange={(event) => updateNumber('request_timeout_seconds', event.currentTarget.value)} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none focus:border-blue-400/40" />
-              <span className="mt-1 block text-[9px] text-slate-600">Between 1 and 300 seconds.</span>
             </label>
             <label className="block">
               <span className="mb-1.5 block text-[11px] font-medium text-slate-300">Retry attempts</span>
               <input aria-label="Retry attempts" type="number" min={0} max={10} step={1} required value={input.retry_attempts} onChange={(event) => updateNumber('retry_attempts', event.currentTarget.value)} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none focus:border-blue-400/40" />
-              <span className="mt-1 block text-[9px] text-slate-600">Between 0 and 10 attempts.</span>
+            </label>
+            <label className="flex items-center gap-2 sm:col-span-2">
+              <input aria-label="Recurring job" type="checkbox" checked={input.recurring !== false} onChange={(event) => {
+                setInput((current) => ({ ...current, recurring: event.currentTarget.checked }))
+                setError('')
+              }} className="size-4 rounded border-white/[0.08] bg-[#090e18] text-blue-500" />
+              <span className="text-[11px] font-medium text-slate-300">Repeat this job at the configured interval</span>
             </label>
           </div>
           {error && <p role="alert" className="rounded-lg border border-rose-300/10 bg-rose-400/[0.06] px-3 py-2 text-[10px] leading-4 text-rose-200">{error}</p>}
           <p className="rounded-lg border border-blue-300/10 bg-blue-400/[0.04] px-3 py-2.5 text-[10px] leading-4 text-blue-100/80">
-            This frontend sends configuration to the selected mode only. In demo mode, the job is queued locally and no request is sent to a store.
+            The backend stores this job in MongoDB. Run Now performs a real HTTP
+            request to the WebScraper.io test site and writes real results to the
+            shared catalog.
           </p>
           <div className="flex flex-col-reverse gap-2 border-t border-white/[0.06] pt-4 sm:flex-row sm:justify-end">
             <button type="button" onClick={onCancel} disabled={saving} className="rounded-xl border border-white/[0.08] px-4 py-2.5 text-xs font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:opacity-50">Cancel</button>
-            <button type="submit" disabled={saving || stores.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50">
+            <button type="submit" disabled={saving || targets.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50">
               {saving ? <LoaderCircle aria-hidden="true" size={14} className="animate-spin" /> : <CalendarClock aria-hidden="true" size={14} />}
               {saving ? 'Creating…' : 'Create job'}
             </button>
@@ -475,19 +521,19 @@ function CreateScrapingJobDialog({
 function ConfirmJobActionDialog({
   job,
   action,
-  mode,
   saving,
+  error,
   onCancel,
   onConfirm,
 }: {
   job: ScrapingJob
   action: DemoJobAction
-  mode: 'demo' | 'live'
   saving: boolean
+  error: string
   onCancel: () => void
   onConfirm: () => void
 }) {
-  const actionName = action[0].toUpperCase() + action.slice(1)
+  const actionName = action === 'start' ? 'Run Now' : action[0].toUpperCase() + action.slice(1)
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 px-4 py-6 backdrop-blur-sm">
       <button type="button" aria-label="Close action confirmation" onClick={onCancel} className="absolute inset-0 cursor-default" />
@@ -495,16 +541,21 @@ function ConfirmJobActionDialog({
         <span className="flex size-10 items-center justify-center rounded-xl border border-amber-300/10 bg-amber-400/[0.06] text-amber-200">
           <AlertTriangle aria-hidden="true" size={17} />
         </span>
-        <h2 id="confirm-job-action-title" className="mt-4 text-sm font-semibold text-white">Confirm {actionName.toLowerCase()} job?</h2>
+        <h2 id="confirm-job-action-title" className="mt-4 text-sm font-semibold text-white">Confirm {actionName.toLowerCase()}?</h2>
         <p className="mt-1.5 text-xs leading-5 text-slate-400">
-          {actionName} the scraping job for <span className="font-medium text-slate-200">{job.store_name}</span>.
-          {mode === 'demo' ? ' This records a simulated demo action only.' : ' The configured backend will receive this action.'}
+          {actionName} for <span className="font-medium text-slate-200">{job.store_name}</span>.
+          {' '}The backend will perform the action and record the real outcome.
         </p>
+        {error && (
+          <p role="alert" className="mt-4 rounded-lg border border-rose-300/10 bg-rose-400/[0.06] px-3 py-2 text-[10px] leading-4 text-rose-200">
+            {error}
+          </p>
+        )}
         <div className="mt-5 flex justify-end gap-2">
           <button type="button" onClick={onCancel} disabled={saving} className="rounded-xl border border-white/[0.08] px-3.5 py-2 text-[11px] font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:opacity-50">Keep job</button>
           <button type="button" onClick={onConfirm} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-blue-500 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-blue-400 disabled:opacity-50">
             {saving && <LoaderCircle aria-hidden="true" size={13} className="animate-spin" />}
-            {saving ? 'Working…' : `${actionName} job`}
+            {saving ? 'Working…' : action === 'start' ? 'Run Now' : `${actionName} job`}
           </button>
         </div>
       </section>
@@ -519,15 +570,21 @@ export function AdminScrapingPage() {
     jobs: [] as ScrapingJob[],
     error: '',
   }))
-  const [managedStores, setManagedStores] = useState<AdminStore[]>([])
-  const [storeError, setStoreError] = useState('')
+  const [targets, setTargets] = useState<ScrapingTarget[]>([])
+  const [targetError, setTargetError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
-  const [statusFilter, setStatusFilter] = useState<
-    'all' | ScrapingJobStatus
-  >('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | ScrapingJobStatus>('all')
+  const [page, setPage] = useState(1)
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null)
-  const [detailJob, setDetailJob] = useState<ScrapingJob | null>(null)
+  const [details, setDetails] = useState<{
+    jobId: string
+    job: ScrapingJob
+    executions: ScrapingExecution[]
+  } | null>(null)
   const [detailsLoading, setDetailsLoading] = useState(false)
+  const detailsRequestRef = useRef(0)
+  const [actionError, setActionError] = useState('')
+  const [targetsVersion, setTargetsVersion] = useState(0)
   const [feedback, setFeedback] = useState('')
   const [pageError, setPageError] = useState(
     apiMode.mode === 'error' ? apiMode.message : '',
@@ -542,50 +599,46 @@ export function AdminScrapingPage() {
     action: DemoJobAction
   } | null>(null)
   const jobs = catalog.jobs
-  const activeStores = managedStores.filter(
-    (store) => store.status === 'Active',
-  )
+  const activeTargets = targets.filter((target) => target.status === 'Active')
+  // Derive dialog data from the live list on every poll, keeping only the
+  // separately fetched execution history in state. This prevents a stale
+  // details snapshot from reappearing after close or overwriting a refresh.
+  const selectedJob = useMemo(() => {
+    if (!selectedJobId) return null
+    const liveJob = jobs.find((job) => job.id === selectedJobId)
+    if (details?.jobId === selectedJobId) {
+      const baseJob = liveJob ?? details.job
+      return {
+        ...baseJob,
+        executions: details.executions.length
+          ? details.executions
+          : baseJob.executions,
+      }
+    }
+    return liveJob ?? null
+  }, [jobs, selectedJobId, details])
 
   useEffect(() => {
+    if (!apiClient) return
     let active = true
-
-    getStores()
-      .then((stores) => {
+    apiClient.getTargets()
+      .then((liveTargets) => {
         if (!active) return
-        setManagedStores(stores)
-        setStoreError('')
-
-        if (apiMode.mode === 'demo') {
-          try {
-            setCatalog({ jobs: loadScrapingJobs(stores), error: '' })
-          } catch (error) {
-            setCatalog({
-              jobs: [],
-              error:
-                error instanceof Error
-                  ? error.message
-                  : 'Could not load scraping demo data.',
-            })
-          }
-        }
+        setTargets(liveTargets)
+        setTargetError('')
       })
       .catch((error: unknown) => {
         if (!active) return
-        setStoreError(
+        setTargetError(
           error instanceof Error
             ? error.message
-            : 'Could not load managed stores.',
+            : 'Could not load real scraping targets.',
         )
       })
-
     return () => {
       active = false
     }
-  }, [apiMode.mode])
-  const selectedJob =
-    detailJob?.id === selectedJobId
-      ? detailJob
-      : jobs.find((job) => job.id === selectedJobId) ?? null
+  }, [apiClient, targetsVersion])
 
   const refreshLiveJobs = useCallback(async (showLoading = false) => {
     if (!apiClient) return
@@ -645,10 +698,31 @@ export function AdminScrapingPage() {
         job.website_url.toLocaleLowerCase().includes(query)
       return (
         matchesSearch &&
-        (statusFilter === 'all' || job.status === statusFilter)
+        (statusFilter === 'all' || canonicalStatus(job.status) === statusFilter)
       )
     })
   }, [jobs, searchQuery, statusFilter])
+
+  // Pagination is derived from the live, already-filtered job list, so refreshes
+  // and job changes update the page count without extra API requests.
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredJobs.length / SCRAPING_JOBS_PER_PAGE),
+  )
+  const currentPage = Math.min(page, totalPages)
+  const pageStartIndex = (currentPage - 1) * SCRAPING_JOBS_PER_PAGE
+  const pageEndIndex = Math.min(
+    pageStartIndex + SCRAPING_JOBS_PER_PAGE,
+    filteredJobs.length,
+  )
+  const pageJobs = filteredJobs.slice(
+    pageStartIndex,
+    pageStartIndex + SCRAPING_JOBS_PER_PAGE,
+  )
+  const pageNumbers = Array.from({ length: totalPages }, (_, index) => index + 1)
+
+  // `currentPage` is clamped here rather than in an effect, so a refresh that
+  // removes jobs immediately falls back to the last page that still has jobs.
 
   const summary = useMemo(
     () => ({
@@ -661,27 +735,16 @@ export function AdminScrapingPage() {
   )
 
   async function createJob(input: CreateScrapingJobInput) {
+    if (!apiClient) throw new Error('The scraping backend is unavailable.')
     setCreating(true)
     setPageError('')
     try {
-      let job: ScrapingJob
-      if (apiClient) {
-        job = await apiClient.createJob(input)
-        setCatalog((current) => ({
-          jobs: [job, ...current.jobs.filter((item) => item.id !== job.id)],
-          error: '',
-        }))
-      } else {
-        job = createDemoScrapingJob(input, activeStores)
-        const nextJobs = [job, ...jobs]
-        saveScrapingJobs(nextJobs)
-        setCatalog({ jobs: nextJobs, error: '' })
-      }
-      setFeedback(
-        apiClient
-          ? `Live scraping job created for ${job.store_name}.`
-          : `Demo job queued for ${job.store_name}; no scraping was executed.`,
-      )
+      const job = await apiClient.createJob(input)
+      setCatalog((current) => ({
+        jobs: [job, ...current.jobs.filter((item) => item.id !== job.id)],
+        error: '',
+      }))
+      setFeedback(`Live scraping job created for ${job.store_name}.`)
       setShowCreateDialog(false)
     } catch (error) {
       const message =
@@ -694,52 +757,62 @@ export function AdminScrapingPage() {
   }
 
   async function confirmAction() {
-    if (!pendingAction) return
+    if (!pendingAction || !apiClient) return
     const { job, action } = pendingAction
     setBusyJobId(job.id)
     setPageError('')
+    setActionError('')
     try {
-      let updatedJob: ScrapingJob
-      if (apiClient) {
-        const apiActions: Record<DemoJobAction, (jobId: string) => Promise<ScrapingJob>> = {
-          start: apiClient.startJob,
-          pause: apiClient.pauseJob,
-          resume: apiClient.resumeJob,
-          cancel: apiClient.cancelJob,
-        }
-        updatedJob = await apiActions[action](job.id)
-      } else {
-        updatedJob = applyDemoJobAction(job, action)
+      const apiActions: Record<DemoJobAction, (jobId: string) => Promise<ScrapingJob>> = {
+        start: apiClient.startJob,
+        pause: apiClient.pauseJob,
+        resume: apiClient.resumeJob,
+        cancel: apiClient.cancelJob,
       }
-
-      const nextJobs = jobs.map((item) =>
-        item.id === updatedJob.id ? updatedJob : item,
-      )
-      if (!apiClient) saveScrapingJobs(nextJobs)
-      setCatalog({ jobs: nextJobs, error: '' })
-      if (selectedJobId === updatedJob.id) setDetailJob(updatedJob)
+      const updatedJob = await apiActions[action](job.id)
+      setCatalog((current) => ({
+        jobs: current.jobs.map((item) =>
+          item.id === updatedJob.id ? updatedJob : item,
+        ),
+        error: '',
+      }))
+      if (selectedJobId === updatedJob.id) {
+        setDetails((current) =>
+          current?.jobId === updatedJob.id
+            ? {
+                ...current,
+                job: updatedJob,
+                executions: updatedJob.executions.length
+                  ? updatedJob.executions
+                  : current.executions,
+              }
+            : null,
+        )
+      }
       setFeedback(
-        apiClient
-          ? `${action[0].toUpperCase()}${action.slice(1)} request accepted for ${job.store_name}.`
-          : `${action[0].toUpperCase()}${action.slice(1)} demo action recorded for ${job.store_name}; no scraping was executed.`,
+        action === 'start'
+          ? `Real scraping run finished for ${job.store_name}.`
+          : `${action[0].toUpperCase()}${action.slice(1)} request accepted for ${job.store_name}.`,
       )
       setPendingAction(null)
     } catch (error) {
-      setPageError(
+      const message =
         error instanceof Error
           ? error.message
-          : `Could not ${action} the scraping job.`,
-      )
+          : `Could not ${action} the scraping job.`
+      setPageError(message)
+      setActionError(message)
     } finally {
       setBusyJobId(null)
     }
   }
 
   async function openJobDetails(job: ScrapingJob) {
-    setSelectedJobId(job.id)
-    setDetailJob(job)
     if (!apiClient) return
-
+    const requestId = detailsRequestRef.current + 1
+    detailsRequestRef.current = requestId
+    setSelectedJobId(job.id)
+    setDetails(null)
     setDetailsLoading(true)
     setPageError('')
     try {
@@ -747,25 +820,24 @@ export function AdminScrapingPage() {
         apiClient.getJobDetails(job.id),
         apiClient.getExecutionHistory(job.id),
       ])
-      setDetailJob({ ...liveJob, executions })
+      if (requestId === detailsRequestRef.current) {
+        setDetails({ jobId: job.id, job: liveJob, executions })
+      }
     } catch (error) {
-      setPageError(
-        error instanceof Error
-          ? error.message
-          : 'Could not load live job details and execution history.',
-      )
+      if (requestId === detailsRequestRef.current) {
+        setPageError(
+          error instanceof Error
+            ? error.message
+            : 'Could not load live job details and execution history.',
+        )
+      }
     } finally {
-      setDetailsLoading(false)
+      if (requestId === detailsRequestRef.current) setDetailsLoading(false)
     }
   }
 
   const controlsDisabled =
-    apiMode.mode === 'error' || Boolean(catalog.error) || Boolean(storeError)
-  const modeName = apiMode.mode === 'live'
-    ? 'LIVE BACKEND MODE'
-    : apiMode.mode === 'demo'
-      ? 'DEMO MODE'
-      : 'API CONFIGURATION ERROR'
+    apiMode.mode === 'error' || Boolean(catalog.error) || Boolean(targetError)
 
   return (
     <div className="space-y-6 sm:space-y-7">
@@ -781,24 +853,23 @@ export function AdminScrapingPage() {
             Scraping Management
           </h2>
           <p className="mt-1.5 max-w-2xl text-xs leading-5 text-slate-500 sm:text-[13px]">
-            Configure managed-store jobs, monitor execution status, and review run history.
+            Configure a real WebScraper.io job, run it on demand, and inspect
+            MongoDB-backed execution results.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 self-start">
           <span className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-[10px] font-semibold ${
             apiMode.mode === 'live'
               ? 'border-emerald-300/10 bg-emerald-400/[0.05] text-emerald-100'
-              : apiMode.mode === 'demo'
-                ? 'border-amber-300/10 bg-amber-400/[0.05] text-amber-100'
-                : 'border-rose-300/10 bg-rose-400/[0.05] text-rose-100'
+              : 'border-rose-300/10 bg-rose-400/[0.05] text-rose-100'
           }`}>
             {apiMode.mode === 'live' ? <Activity aria-hidden="true" size={13} /> : <AlertTriangle aria-hidden="true" size={13} />}
-            {modeName}
+            {apiMode.mode === 'live' ? 'LIVE BACKEND MODE' : 'API CONFIGURATION ERROR'}
           </span>
           <button
             type="button"
             onClick={() => setShowCreateDialog(true)}
-            disabled={controlsDisabled || activeStores.length === 0}
+            disabled={controlsDisabled || activeTargets.length === 0}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-500 px-4 py-2.5 text-xs font-semibold text-white shadow-lg shadow-blue-950/20 transition hover:bg-blue-400 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Plus aria-hidden="true" size={15} />
@@ -807,21 +878,15 @@ export function AdminScrapingPage() {
         </div>
       </section>
 
-      {apiMode.mode === 'demo' && (
-        <p className="rounded-xl border border-amber-300/10 bg-amber-400/[0.04] px-4 py-3 text-[10px] leading-5 text-amber-100/90">
-          Demo mode: jobs and controls use browser-local demo data. No store requests are made and no scraping executes.
-        </p>
-      )}
-      {apiMode.mode === 'live' && (
-        <p className="rounded-xl border border-emerald-300/10 bg-emerald-400/[0.04] px-4 py-3 text-[10px] leading-5 text-emerald-100/90">
-          Live backend mode: job state is loaded from the configured API and refreshed every 10 seconds. Scraping execution remains a backend responsibility.
-        </p>
-      )}
-      {(catalog.error || storeError || pageError) && (
+      <p className="rounded-xl border border-emerald-300/10 bg-emerald-400/[0.04] px-4 py-3 text-[10px] leading-5 text-emerald-100/90">
+        Live backend mode: jobs and execution history are stored in MongoDB and
+        refreshed every 10 seconds. Run Now performs a real, low-rate HTTP scrape.
+      </p>
+      {(catalog.error || targetError || pageError) && (
         <div role="alert" className="flex flex-col gap-3 rounded-xl border border-rose-300/10 bg-rose-400/[0.06] px-4 py-3 text-xs leading-5 text-rose-200 sm:flex-row sm:items-center sm:justify-between">
-          <span>{catalog.error || storeError || pageError}</span>
+          <span>{catalog.error || targetError || pageError}</span>
           {apiClient && (
-            <button type="button" onClick={() => void refreshLiveJobs(true)} disabled={refreshing} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-rose-200/10 px-3 py-2 text-[10px] font-medium text-rose-100 transition hover:bg-rose-400/[0.07] disabled:opacity-50">
+            <button type="button" onClick={() => { setTargetsVersion((version) => version + 1); void refreshLiveJobs(true) }} disabled={refreshing} className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-rose-200/10 px-3 py-2 text-[10px] font-medium text-rose-100 transition hover:bg-rose-400/[0.07] disabled:opacity-50">
               <RefreshCw aria-hidden="true" size={12} className={refreshing ? 'animate-spin' : ''} />
               Retry
             </button>
@@ -849,7 +914,7 @@ export function AdminScrapingPage() {
             <div>
               <h3 className="text-sm font-semibold text-white">Scraping jobs</h3>
               <p className="mt-1 text-[10px] text-slate-500">
-                Showing {filteredJobs.length} of {jobs.length} {apiMode.mode === 'live' ? 'live' : 'demo'} jobs
+                Showing {filteredJobs.length} of {jobs.length} live jobs
               </p>
             </div>
             <button type="button" onClick={() => void refreshLiveJobs(true)} disabled={!apiClient || refreshing || loading} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl border border-white/[0.08] px-3 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-40">
@@ -861,13 +926,14 @@ export function AdminScrapingPage() {
             <label className="relative block min-w-0">
               <span className="sr-only">Search scraping jobs</span>
               <Search aria-hidden="true" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-              <input type="search" value={searchQuery} onChange={(event) => setSearchQuery(event.currentTarget.value)} placeholder="Search store or website" className="h-10 w-full rounded-xl border border-white/[0.07] bg-[#090e18] pl-9 pr-3 text-xs text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10" />
+              <input type="search" value={searchQuery} onChange={(event) => { setSearchQuery(event.currentTarget.value); setPage(1) }} placeholder="Search store or website" className="h-10 w-full rounded-xl border border-white/[0.07] bg-[#090e18] pl-9 pr-3 text-xs text-slate-200 outline-none transition placeholder:text-slate-600 focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10" />
             </label>
             <label>
               <span className="sr-only">Filter jobs by status</span>
               <select value={statusFilter} onChange={(event) => {
                 const value = event.currentTarget.value
                 setStatusFilter(filterOptions.some((option) => option.value === value) ? value as 'all' | ScrapingJobStatus : 'all')
+                setPage(1)
               }} className="h-10 w-full rounded-xl border border-white/[0.08] bg-[#090e18] px-3 text-xs text-slate-100 outline-none transition focus:border-blue-400/40 focus:ring-2 focus:ring-blue-400/10">
                 {filterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
@@ -882,7 +948,7 @@ export function AdminScrapingPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1240px] border-collapse text-left">
+            <table className="w-full min-w-[1460px] border-collapse text-left">
               <thead className="bg-[#111a29]">
                 <tr className="border-b border-white/[0.06] text-[9px] font-semibold uppercase tracking-[0.1em] text-slate-500">
                   <th className="px-5 py-3.5">Store</th>
@@ -893,13 +959,24 @@ export function AdminScrapingPage() {
                   <th className="px-4 py-3.5">Products Found</th>
                   <th className="px-4 py-3.5">Success Rate</th>
                   <th className="px-4 py-3.5">Duration</th>
+                  <th className="px-4 py-3.5">Error Details</th>
                   <th className="px-5 py-3.5 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.05]">
-                {filteredJobs.map((job) => {
+                {pageJobs.map((job) => {
                   const actionBusy = busyJobId === job.id
-                  const askToPerform = (action: DemoJobAction) => setPendingAction({ job, action })
+                  const status = canonicalStatus(job.status)
+                  const isRunning = status === 'running'
+                  const canStart = status !== 'running' && status !== 'cancelled'
+                  const canPause = status === 'scheduled'
+                  const canResume = status === 'pending'
+                  const canCancel =
+                    status === 'pending' || status === 'scheduled' || status === 'running'
+                  const askToPerform = (action: DemoJobAction) => {
+                    setActionError('')
+                    setPendingAction({ job, action })
+                  }
                   return (
                     <tr key={job.id} className="align-middle">
                       <td className="px-5 py-4">
@@ -913,31 +990,36 @@ export function AdminScrapingPage() {
                         </a>
                       </td>
                       <td className="px-4 py-4"><JobStatusBadge status={job.status} /></td>
-                      <td className="px-4 py-4 text-[10px] text-slate-400">{formatDate(job.last_run)}</td>
+                      <td className="px-4 py-4 text-[10px] text-slate-400">{isRunning ? 'In progress…' : formatDate(job.last_run)}</td>
                       <td className="px-4 py-4 text-[10px] text-slate-400">{formatDate(job.next_run)}</td>
-                      <td className="px-4 py-4 text-xs font-medium tabular-nums text-slate-300">{job.products_found}</td>
+                      <td className="px-4 py-4 text-xs font-medium tabular-nums text-slate-300">{isRunning ? '—' : job.products_found}</td>
                       <td className="px-4 py-4">
                         <span className={`text-xs font-medium tabular-nums ${job.success_rate >= 90 ? 'text-emerald-300' : job.success_rate > 0 ? 'text-amber-200' : 'text-slate-500'}`}>
-                          {job.success_rate.toFixed(1)}%
+                          {isRunning ? '—' : `${job.success_rate.toFixed(1)}%`}
                         </span>
                       </td>
-                      <td className="px-4 py-4 text-[10px] text-slate-400">{formatDuration(job.executions[0])}</td>
+                      <td className="px-4 py-4 text-[10px] text-slate-400">{isRunning ? 'In progress…' : formatDuration(job)}</td>
+                      <td className="max-w-[260px] px-4 py-4 text-[10px] text-rose-200" title={job.executions[0]?.errors.join('\n') || job.last_error || ''}>
+                        <span className="line-clamp-2">{isRunning ? 'Current run in progress' : firstError(job)}</span>
+                      </td>
                       <td className="px-5 py-4">
                         <div className="flex items-center justify-end gap-1">
-                          {job.status === 'running' ? (
-                            <button type="button" onClick={() => askToPerform('pause')} aria-label={`Pause ${job.store_name} job`} title="Pause job" disabled={controlsDisabled || actionBusy} className="rounded-lg p-2 text-slate-400 transition hover:bg-amber-400/[0.08] hover:text-amber-200 disabled:opacity-40">
-                              <Pause aria-hidden="true" size={14} />
-                            </button>
-                          ) : job.status === 'paused' ? (
+                          {canResume && (
                             <button type="button" onClick={() => askToPerform('resume')} aria-label={`Resume ${job.store_name} job`} title="Resume job" disabled={controlsDisabled || actionBusy} className="rounded-lg p-2 text-slate-400 transition hover:bg-emerald-400/[0.08] hover:text-emerald-200 disabled:opacity-40">
                               <RotateCcw aria-hidden="true" size={14} />
                             </button>
-                          ) : (
-                            <button type="button" onClick={() => askToPerform('start')} aria-label={`Start ${job.store_name} job`} title="Start job" disabled={controlsDisabled || actionBusy} className="rounded-lg p-2 text-slate-400 transition hover:bg-emerald-400/[0.08] hover:text-emerald-200 disabled:opacity-40">
+                          )}
+                          {canPause && (
+                            <button type="button" onClick={() => askToPerform('pause')} aria-label={`Pause ${job.store_name} job`} title="Pause job" disabled={controlsDisabled || actionBusy} className="rounded-lg p-2 text-slate-400 transition hover:bg-amber-400/[0.08] hover:text-amber-200 disabled:opacity-40">
+                              <Pause aria-hidden="true" size={14} />
+                            </button>
+                          )}
+                          {canStart && (
+                            <button type="button" onClick={() => askToPerform('start')} aria-label={`Run Now ${job.store_name} job now`} title="Run Now" disabled={controlsDisabled || actionBusy} className="rounded-lg p-2 text-slate-400 transition hover:bg-emerald-400/[0.08] hover:text-emerald-200 disabled:opacity-40">
                               {actionBusy ? <LoaderCircle aria-hidden="true" size={14} className="animate-spin" /> : <Play aria-hidden="true" size={14} />}
                             </button>
                           )}
-                          {(job.status === 'running' || job.status === 'paused' || job.status === 'queued') && (
+                          {canCancel && (
                             <button type="button" onClick={() => askToPerform('cancel')} aria-label={`Cancel ${job.store_name} job`} title="Cancel job" disabled={controlsDisabled || actionBusy} className="rounded-lg p-2 text-slate-400 transition hover:bg-rose-400/[0.08] hover:text-rose-200 disabled:opacity-40">
                               <Square aria-hidden="true" size={13} />
                             </button>
@@ -950,10 +1032,10 @@ export function AdminScrapingPage() {
                     </tr>
                   )
                 })}
-                {filteredJobs.length === 0 && (
-                  <tr><td colSpan={9} className="px-5 py-12 text-center">
-                    <p className="text-xs font-medium text-slate-300">{apiMode.mode === 'live' ? 'No live scraping jobs' : 'No scraping jobs found'}</p>
-                    <p className="mt-1 text-[10px] text-slate-500">{jobs.length === 0 ? 'Create a job for a managed store to get started.' : 'Try a different search or status filter.'}</p>
+                {pageJobs.length === 0 && (
+                  <tr><td colSpan={10} className="px-5 py-12 text-center">
+                    <p className="text-xs font-medium text-slate-300">No live scraping jobs</p>
+                    <p className="mt-1 text-[10px] text-slate-500">{jobs.length === 0 ? 'Create a job for the supported target to get started.' : 'Try a different search or status filter.'}</p>
                   </td></tr>
                 )}
               </tbody>
@@ -961,20 +1043,65 @@ export function AdminScrapingPage() {
           </div>
         )}
 
+        <nav
+          aria-label="Scraping jobs pagination"
+          className="flex flex-col gap-3 border-t border-white/[0.06] px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5"
+        >
+          <p className="text-[10px] text-slate-500">
+            {`Showing ${filteredJobs.length === 0 ? 0 : pageStartIndex + 1}–${pageEndIndex} of ${filteredJobs.length} scraping jobs`}
+          </p>
+          <div className="flex items-center gap-1.5 self-end sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setPage(currentPage - 1)}
+              disabled={currentPage <= 1}
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-white/[0.07] px-2.5 text-[10px] font-medium text-slate-400 transition hover:bg-white/[0.04] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ArrowLeft aria-hidden="true" size={12} />
+              Previous
+            </button>
+            <div className="flex max-w-[15rem] items-center gap-1 overflow-x-auto sm:max-w-none">
+              {pageNumbers.map((pageNumber) => (
+                <button
+                  key={pageNumber}
+                  type="button"
+                  onClick={() => setPage(pageNumber)}
+                  aria-label={`Page ${pageNumber}`}
+                  aria-current={pageNumber === currentPage ? 'page' : undefined}
+                  className={`min-w-7 rounded-lg border px-2 py-1.5 text-[10px] font-medium transition ${
+                    pageNumber === currentPage
+                      ? 'border-blue-400/40 bg-blue-500 text-white'
+                      : 'border-white/[0.08] text-slate-400 hover:bg-white/[0.04] hover:text-white'
+                  }`}
+                >
+                  {pageNumber}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setPage(currentPage + 1)}
+              disabled={currentPage >= totalPages}
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-white/[0.07] px-2.5 text-[10px] font-medium text-slate-400 transition hover:bg-white/[0.04] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next
+              <ArrowRight aria-hidden="true" size={12} />
+            </button>
+          </div>
+        </nav>
+
         <div className="flex flex-col gap-2 border-t border-white/[0.06] px-5 py-3.5 text-[10px] text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-          <span>{apiMode.mode === 'live' ? 'Live job status refreshes every 10 seconds.' : 'Demo job state is persisted in this browser.'}</span>
-          {apiMode.mode === 'demo' && (
-            <span className="inline-flex items-center gap-1.5 text-amber-200/80">
-              <AlertTriangle aria-hidden="true" size={12} />
-              Controls are simulated only; no scraper or network worker is invoked.
-            </span>
-          )}
+          <span>Live job status refreshes every 10 seconds.</span>
+          <span className="inline-flex items-center gap-1.5 text-emerald-200/80">
+            <Activity aria-hidden="true" size={12} />
+            Real scraping statistics only.
+          </span>
         </div>
       </section>
 
       {showCreateDialog && (
         <CreateScrapingJobDialog
-          stores={activeStores}
+          targets={activeTargets}
           saving={creating}
           onCancel={() => setShowCreateDialog(false)}
           onSubmit={createJob}
@@ -984,20 +1111,24 @@ export function AdminScrapingPage() {
         <ConfirmJobActionDialog
           job={pendingAction.job}
           action={pendingAction.action}
-          mode={apiClient ? 'live' : 'demo'}
           saving={busyJobId === pendingAction.job.id}
-          onCancel={() => setPendingAction(null)}
+          error={actionError}
+          onCancel={() => {
+            setActionError('')
+            setPendingAction(null)
+          }}
           onConfirm={() => void confirmAction()}
         />
       )}
       {selectedJob && (
         <JobDetailsDialog
           job={selectedJob}
-          mode={apiClient ? 'live' : 'demo'}
           loading={detailsLoading}
           onClose={() => {
+            detailsRequestRef.current += 1
             setSelectedJobId(null)
-            setDetailJob(null)
+            setDetails(null)
+            setDetailsLoading(false)
           }}
         />
       )}

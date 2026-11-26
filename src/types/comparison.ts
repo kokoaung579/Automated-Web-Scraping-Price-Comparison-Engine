@@ -2,8 +2,17 @@
 
 export type VerificationStatus =
   | 'verified_scraped'
+  | 'manually_verified'
   | 'manual_illustrative'
+  | 'test_site_illustrative'
   | 'unverified_excluded'
+
+export type AvailabilityState =
+  | 'in_stock_offers_available'
+  | 'catalog_in_stock_no_verified_offers'
+  | 'no_in_stock_offers'
+  | 'only_illustrative_data'
+  | 'no_offers'
 
 export type Eligibility =
   | 'verified_comparison'
@@ -48,6 +57,7 @@ export type ComparisonIdentity = {
   evidence: IdentityEvidence[]
   needs_review: boolean
   review_reason: string | null
+  is_test_site?: boolean
 }
 
 export type StoreOffer = {
@@ -64,6 +74,7 @@ export type StoreOffer = {
   label: string
   last_updated: string | null
   product_url: string | null
+  is_test_site?: boolean
   exclusion_reasons: string[]
 }
 
@@ -103,6 +114,7 @@ export type HistorySeries = {
   store_name: string
   product_id: string
   verification_status: VerificationStatus
+  is_test_site?: boolean
   points: HistoryPoint[]
 }
 
@@ -132,6 +144,7 @@ export type ExcludedOffer = {
 
 export type ProductComparison = {
   identity: ComparisonIdentity
+  catalog_availability: Availability
   verified: VerifiedSummary
   illustrative: IllustrativeSummary
   offers: StoreOffer[]
@@ -139,6 +152,7 @@ export type ProductComparison = {
   coverage: StoreCoverage
   excluded_offers: ExcludedOffer[]
   latest_verified_update: string | null
+  availability_state?: AvailabilityState
 }
 
 export type ComparisonPeriod = '7D' | '30D' | '90D' | '1Y'
@@ -169,7 +183,9 @@ export type ComparisonDiagnostics = {
   unmatched_product_count: number
   needs_review_group_count: number
   illustrative_offer_count: number
+  excluded_offers?: ExcludedOffer[]
   excluded_orphan_offers: ExcludedOffer[]
+  empty_state_reason?: AvailabilityState | null
 }
 
 export type ComparisonMeta = {
