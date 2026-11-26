@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://automated-web-scraping-price-comparison.onrender.com/api/$1"
+    }
+  ]
+}
