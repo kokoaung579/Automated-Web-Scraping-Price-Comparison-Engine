@@ -225,9 +225,7 @@ export function AdminSettingsPage() {
            Backend security
         </span>
       </section>
-
       
-
       {pageState.error && (
         <div role="alert" className="flex flex-col gap-3 rounded-xl border border-rose-300/10 bg-rose-400/[0.05] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs leading-5 text-rose-200">{pageState.error}</p>
