@@ -7,11 +7,16 @@ from app.services.comparison import resolve_offer_availability
 HISTORY_PERIODS = ("7D", "30D", "90D", "1Y")
 
 
+def _session_kwargs(session):
+    """Keep non-transactional calls compatible with simple collection doubles."""
+    return {} if session is None else {"session": session}
+
+
 def _normalize_store_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
 
 
-async def upsert_admin_product_offer(database, product: AdminProduct) -> None:
+async def upsert_admin_product_offer(database, product: AdminProduct, session=None) -> None:
     if not product.store_id:
         return
 
@@ -27,6 +32,7 @@ async def upsert_admin_product_offer(database, product: AdminProduct) -> None:
             "productUrl": 1,
             "updatedAt": 1,
         },
+        **_session_kwargs(session),
     ).to_list(length=None)
     store_id = _normalize_store_name(product.store_id)
     existing_offer = next(
@@ -64,12 +70,15 @@ async def upsert_admin_product_offer(database, product: AdminProduct) -> None:
                 "availability": offer_availability,
                 "sourceType": product.source_type,
                 "storeId": product.store_id,
+                "storeName": product.store_name or store_name,
+                "storeWebsiteUrl": product.store_website_url,
                 "currency": product.currency,
                 "productUrl": product.product_url,
                 "updatedAt": product.updated_at,
             }
         },
         upsert=True,
+        **_session_kwargs(session),
     )
 
     if existing_offer and existing_offer.get("price") == product.price:
@@ -85,10 +94,12 @@ async def upsert_admin_product_offer(database, product: AdminProduct) -> None:
         history = await database.price_history.update_one(
             {**history_filter, "points.date": today},
             {"$set": {"points.$.price": product.price}},
+            **_session_kwargs(session),
         )
         if history.matched_count == 0:
             await database.price_history.update_one(
                 history_filter,
                 {"$push": {"points": {"date": today, "price": product.price}}},
                 upsert=True,
+                **_session_kwargs(session),
             )

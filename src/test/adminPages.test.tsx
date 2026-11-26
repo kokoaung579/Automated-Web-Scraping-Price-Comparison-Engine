@@ -28,7 +28,10 @@ import type {
 } from '../data/adminScraping'
 import type { AuditLog } from '../data/adminAuditLogs'
 import type { Product } from '../types/product'
-import type { ManualOfferRecord } from '../types/manualOffer'
+import type {
+  ManualOfferRecord,
+  ManualOfferVerificationRequest,
+} from '../types/manualOffer'
 import type { AuthUser, BrowserAccountImport } from '../types/auth'
 import { AuthProvider } from '../auth/AuthProvider'
 
@@ -49,6 +52,7 @@ let backendManualOffers: ManualOfferRecord[] = []
 let manualVerificationError: { status: number; detail: string } | null = null
 let backendAuditLogs: AuditLog[] = []
 let backendScrapingJobs: ScrapingJob[] = []
+let scrapingStatusError = ''
 let backendUsers: AuthUser[] = []
 let backendSession: AuthUser | null = null
 let failNextUserDelete = false
@@ -270,6 +274,8 @@ function manualOfferRecord(
     product_id: 'manual-verification-1',
     store: 'Zone',
     store_id: 'zone',
+    store_name: 'Zone',
+    store_website_url: 'https://www.zone.example',
     price: 120,
     currency: 'USD',
     product_url: 'https://www.zone.example/manual-verification-1',
@@ -281,6 +287,11 @@ function manualOfferRecord(
     verified_by: null,
     verified_at: null,
     evidence_url: null,
+    evidence_type: null,
+    product_url_evidence: null,
+    offline_description: null,
+    offline_reference: null,
+    match_confirmed: false,
     verification_note: null,
     last_checked_at: null,
     updated_at: null,
@@ -428,11 +439,9 @@ async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
       return jsonResponse({ detail: error.detail }, error.status)
     }
     const offerId = decodeURIComponent(manualVerifyMatch[1])
-    const body = JSON.parse(String(init?.body)) as {
-      availability: ManualOfferRecord['availability']
-      evidence_url?: string | null
-      verification_note?: string | null
-    }
+    const body = JSON.parse(
+      String(init?.body),
+    ) as ManualOfferVerificationRequest
     const offer = backendManualOffers.find((item) => item.offer_id === offerId)
     if (!offer) return jsonResponse({ detail: 'Manual offer not found.' }, 404)
     if (offer.source_type !== 'manual') {
@@ -441,27 +450,174 @@ async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
         400,
       )
     }
-    const evidence =
-      typeof body.evidence_url === 'string' ? body.evidence_url.trim() : ''
-    const validEvidence = /^https?:\/\/[^\s]+$/i.test(evidence)
-    if (evidence && !validEvidence) {
+
+    const blockedHostLabels = new Set([
+      'admin',
+      'dashboard',
+      'dev',
+      'development',
+      'internal',
+      'intranet',
+      'local',
+      'localhost',
+      'preview',
+      'sandbox',
+      'stage',
+      'staging',
+    ])
+    const validPublicUrl = (value: string | null | undefined): value is string => {
+      if (!value) return false
+      try {
+        const parsed = new URL(value.trim())
+        const host = parsed.hostname.toLowerCase().replace(/\.$/, '')
+        return (
+          ['http:', 'https:'].includes(parsed.protocol) &&
+          !parsed.username &&
+          !parsed.password &&
+          Boolean(host) &&
+          host !== 'localhost' &&
+          !host.endsWith('.localhost') &&
+          !/^(0|10|127)\./.test(host) &&
+          !/^192\.168\./.test(host) &&
+          !/^169\.254\./.test(host) &&
+          !/^172\.(1[6-9]|2\d|3[01])\./.test(host) &&
+          host !== '::1' &&
+          !host.split('.').some((label) => blockedHostLabels.has(label))
+        )
+      } catch {
+        return false
+      }
+    }
+    const sameOfferUrl = (left: string, right: string | null) => {
+      if (!right || !validPublicUrl(left) || !validPublicUrl(right)) return false
+      const normalize = (value: string) => {
+        const parsed = new URL(value.trim())
+        const path = parsed.pathname.replace(/\/+$/, '') || '/'
+        return `${parsed.protocol}//${parsed.host.toLowerCase()}${path}${parsed.search}`
+      }
+      return normalize(left) === normalize(right)
+    }
+
+    const inStock = body.availability === 'in_stock'
+    const evidenceType = body.evidence_type ?? null
+    const evidenceUrl =
+      typeof body.evidence_url === 'string' ? body.evidence_url.trim() : null
+    const productEvidence =
+      typeof body.product_url === 'string' ? body.product_url.trim() : null
+    const storeWebsiteUrl =
+      typeof body.store_website_url === 'string'
+        ? body.store_website_url.trim()
+        : null
+    const offlineDescription =
+      typeof body.offline_description === 'string'
+        ? body.offline_description.trim()
+        : null
+    const offlineReference =
+      typeof body.offline_reference === 'string'
+        ? body.offline_reference.trim()
+        : null
+
+    if (evidenceType === 'product_url') {
+      const candidate = productEvidence || evidenceUrl
+      if (!candidate && inStock) {
+        return jsonResponse(
+          { detail: 'Product URL evidence is required to verify In Stock.' },
+          400,
+        )
+      }
+      if (candidate && !validPublicUrl(candidate)) {
+        return jsonResponse(
+          { detail: 'Product URL must be a valid public HTTP or HTTPS URL.' },
+          400,
+        )
+      }
+      if (candidate && !sameOfferUrl(candidate, offer.product_url)) {
+        return jsonResponse(
+          {
+            detail:
+              'Product URL evidence must exactly match the offer product URL.',
+          },
+          400,
+        )
+      }
+      if (
+        candidate &&
+        storeWebsiteUrl &&
+        sameOfferUrl(candidate, storeWebsiteUrl)
+      ) {
+        return jsonResponse(
+          {
+            detail:
+              'A store website URL is not sufficient product-level evidence.',
+          },
+          400,
+        )
+      }
+    } else if (evidenceType === 'offline_document') {
+      if (
+        inStock &&
+        (!offlineDescription || !offlineReference)
+      ) {
+        return jsonResponse(
+          {
+            detail:
+              'Offline document evidence requires a description and a reference.',
+          },
+          400,
+        )
+      }
+    } else if (evidenceType === 'store_website_url') {
+      if (inStock) {
+        return jsonResponse(
+          {
+            detail:
+              'A store website URL is not sufficient product-level evidence.',
+          },
+          400,
+        )
+      }
+    } else if (evidenceUrl && !validPublicUrl(evidenceUrl)) {
       return jsonResponse(
-        { detail: 'Evidence URL must be a valid HTTP or HTTPS URL.' },
+        { detail: 'Evidence URL must be a valid public HTTP or HTTPS URL.' },
         400,
       )
-    }
-    if (body.availability === 'in_stock' && !validEvidence) {
+    } else if (inStock && !evidenceUrl) {
       return jsonResponse(
         { detail: 'A valid HTTP or HTTPS evidence URL is required.' },
         400,
       )
     }
 
-    const verified = body.availability === 'in_stock'
+    if (
+      inStock &&
+      ['product_url', 'offline_document'].includes(evidenceType ?? '') &&
+      body.match_confirmed !== true
+    ) {
+      return jsonResponse(
+        {
+          detail:
+            'Confirm that the product, price, currency, and availability match the evidence.',
+        },
+        400,
+      )
+    }
+
+    const verified = inStock && evidenceType !== 'store_website_url'
+    const storedEvidenceUrl =
+      evidenceType === 'product_url' ? productEvidence || evidenceUrl : evidenceUrl
     const updated: ManualOfferRecord = {
       ...offer,
       availability: body.availability,
-      evidence_url: evidence || null,
+      evidence_type: evidenceType,
+      evidence_url: storedEvidenceUrl || null,
+      product_url_evidence:
+        evidenceType === 'product_url' ? storedEvidenceUrl || null : null,
+      store_website_url: storeWebsiteUrl || null,
+      offline_description:
+        evidenceType === 'offline_document' ? offlineDescription : null,
+      offline_reference:
+        evidenceType === 'offline_document' ? offlineReference : null,
+      match_confirmed: verified && body.match_confirmed === true,
       verification_note: body.verification_note?.trim() || null,
       verification_status: verified ? 'manually_verified' : 'unverified_excluded',
       verified,
@@ -965,8 +1121,9 @@ async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
         request_timeout_seconds: input.request_timeout_seconds,
         retry_attempts: input.retry_attempts,
         product_limit: input.product_limit ?? 10,
+        recurring: input.recurring ?? true,
       },
-      status: 'queued',
+      status: 'pending',
       last_run: null,
       products_found: 0,
       success_rate: 0,
@@ -1017,11 +1174,14 @@ async function mockBackendFetch(input: RequestInfo | URL, init?: RequestInit) {
       (candidate) => candidate.id === decodeURIComponent(statusMatch[1]),
     )
     if (index < 0) return jsonResponse({ detail: 'Scraping job not found.' }, 404)
+    if (scrapingStatusError) {
+      return jsonResponse({ detail: scrapingStatusError }, 409)
+    }
     const nextStatus: ScrapingJobStatus =
       action === 'pause'
-        ? 'paused'
+        ? 'pending'
         : action === 'resume'
-          ? 'running'
+          ? 'scheduled'
           : 'cancelled'
     const job = makeScrapingJob({
       ...backendScrapingJobs[index],
@@ -1123,6 +1283,7 @@ describe('admin and shared user pages', () => {
       backendAuditLog(index),
     )
     backendScrapingJobs = [makeScrapingJob()]
+    scrapingStatusError = ''
     backendUsers = []
     backendSession = null
     failNextUserDelete = false
@@ -1880,7 +2041,12 @@ describe('admin and shared user pages', () => {
     )
     await user.type(
       within(dialog).getByLabelText('Evidence URL (required)'),
-      'https://www.zone.example/proof/manual-offer-1',
+      'https://www.zone.example/manual-verification-1',
+    )
+    await user.click(
+      within(dialog).getByRole('checkbox', {
+        name: /I confirm that the product, price, currency, and availability/,
+      }),
     )
     await user.type(
       within(dialog).getByLabelText('Verification note (optional)'),
@@ -1895,7 +2061,11 @@ describe('admin and shared user pages', () => {
     expect(productAuditCalls[0].payload).toMatchObject({
       offer_id: 'manual-offer-1',
       availability: 'in_stock',
-      evidence_url: 'https://www.zone.example/proof/manual-offer-1',
+      evidence_type: 'product_url',
+      evidence_url: 'https://www.zone.example/manual-verification-1',
+      product_url: 'https://www.zone.example/manual-verification-1',
+      store_website_url: 'https://www.zone.example',
+      match_confirmed: true,
       verification_note: 'Checked the retailer product page.',
     })
     expect(backendManualOffers[0]).toMatchObject({
@@ -1955,7 +2125,19 @@ describe('admin and shared user pages', () => {
     fireEvent.submit(form as HTMLFormElement)
     await waitFor(() => {
       expect(within(dialog).getByRole('alert').textContent).toContain(
-        'Evidence URL must be a valid HTTP or HTTPS URL.',
+        'Evidence URL must be a valid public HTTP or HTTPS URL.',
+      )
+    })
+
+    await user.clear(within(dialog).getByLabelText('Evidence URL (required)'))
+    await user.type(
+      within(dialog).getByLabelText('Evidence URL (required)'),
+      'http://localhost/product',
+    )
+    fireEvent.submit(form as HTMLFormElement)
+    await waitFor(() => {
+      expect(within(dialog).getByRole('alert').textContent).toContain(
+        'Evidence URL must be a valid public HTTP or HTTPS URL.',
       )
     })
 
@@ -1966,6 +2148,169 @@ describe('admin and shared user pages', () => {
           String(input).includes('/verify') && init?.method === 'POST',
       ),
     ).toBe(false)
+    expect(productAuditCalls).toHaveLength(0)
+    expect(backendManualOffers[0].verified).toBe(false)
+  })
+
+  it('verifies an in-stock offer with offline document evidence', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = [manualVerificationProduct()]
+    backendManualOffers = [manualOfferRecord()]
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Verify manual offer for Manual Verification Product',
+      }),
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Verify Manual Offer',
+    })
+    await user.selectOptions(
+      within(dialog).getByLabelText('Offer availability'),
+      'in_stock',
+    )
+    await user.selectOptions(
+      within(dialog).getByLabelText('Evidence type'),
+      'offline_document',
+    )
+    await user.type(
+      within(dialog).getByLabelText('Offline evidence description (required)'),
+      'Printed retailer invoice showing the listed price.',
+    )
+    await user.type(
+      within(dialog).getByLabelText('Evidence reference (required)'),
+      'INV-2026-001',
+    )
+    await user.click(
+      within(dialog).getByRole('checkbox', {
+        name: /I confirm that the product, price, currency, and availability/,
+      }),
+    )
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Verify Manual Offer' }),
+    )
+
+    await waitFor(() => expect(productAuditCalls).toHaveLength(1))
+    expect(productAuditCalls[0].payload).toMatchObject({
+      availability: 'in_stock',
+      evidence_type: 'offline_document',
+      evidence_url: null,
+      offline_description: 'Printed retailer invoice showing the listed price.',
+      offline_reference: 'INV-2026-001',
+      match_confirmed: true,
+    })
+    expect(backendManualOffers[0]).toMatchObject({
+      verification_status: 'manually_verified',
+      verified: true,
+      verified_by: 'admin@example.test',
+    })
+  })
+
+  it('rejects a store website URL as proof for an in-stock offer', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = [manualVerificationProduct()]
+    backendManualOffers = [manualOfferRecord()]
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Verify manual offer for Manual Verification Product',
+      }),
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Verify Manual Offer',
+    })
+    await user.selectOptions(
+      within(dialog).getByLabelText('Offer availability'),
+      'in_stock',
+    )
+    await user.selectOptions(
+      within(dialog).getByLabelText('Evidence type'),
+      'store_website_url',
+    )
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Verify Manual Offer' }),
+    )
+
+    expect((await within(dialog).findByRole('alert')).textContent).toContain(
+      'A store website URL is not sufficient product-level evidence.',
+    )
+    expect(productAuditCalls).toHaveLength(0)
+    expect(backendManualOffers[0].verified).toBe(false)
+  })
+
+  it('requires product URL evidence to exactly match the offer URL', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = [manualVerificationProduct()]
+    backendManualOffers = [manualOfferRecord()]
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Verify manual offer for Manual Verification Product',
+      }),
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Verify Manual Offer',
+    })
+    await user.selectOptions(
+      within(dialog).getByLabelText('Offer availability'),
+      'in_stock',
+    )
+    await user.type(
+      within(dialog).getByLabelText('Evidence URL (required)'),
+      'https://www.zone.example/different-product',
+    )
+    await user.click(
+      within(dialog).getByRole('checkbox', {
+        name: /I confirm that the product, price, currency, and availability/,
+      }),
+    )
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Verify Manual Offer' }),
+    )
+
+    expect((await within(dialog).findByRole('alert')).textContent).toContain(
+      'Product URL evidence must exactly match the product URL for this offer.',
+    )
+    expect(productAuditCalls).toHaveLength(0)
+    expect(backendManualOffers[0].verified).toBe(false)
+  })
+
+  it('requires explicit match confirmation for product URL evidence', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = [manualVerificationProduct()]
+    backendManualOffers = [manualOfferRecord()]
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Verify manual offer for Manual Verification Product',
+      }),
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Verify Manual Offer',
+    })
+    await user.selectOptions(
+      within(dialog).getByLabelText('Offer availability'),
+      'in_stock',
+    )
+    await user.type(
+      within(dialog).getByLabelText('Evidence URL (required)'),
+      'https://www.zone.example/manual-verification-1',
+    )
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Verify Manual Offer' }),
+    )
+
+    expect((await within(dialog).findByRole('alert')).textContent).toContain(
+      'Confirm that the product, price, currency, and availability match the evidence.',
+    )
     expect(productAuditCalls).toHaveLength(0)
     expect(backendManualOffers[0].verified).toBe(false)
   })
@@ -2036,7 +2381,12 @@ describe('admin and shared user pages', () => {
     )
     await user.type(
       within(dialog).getByLabelText('Evidence URL (required)'),
-      'https://www.zone.example/proof/manual-offer-1',
+      'https://www.zone.example/manual-verification-1',
+    )
+    await user.click(
+      within(dialog).getByRole('checkbox', {
+        name: /I confirm that the product, price, currency, and availability/,
+      }),
     )
     await user.click(
       within(dialog).getByRole('button', { name: 'Verify Manual Offer' }),
@@ -2072,7 +2422,12 @@ describe('admin and shared user pages', () => {
     )
     await user.type(
       within(dialog).getByLabelText('Evidence URL (required)'),
-      'https://www.zone.example/proof/scraped-offer-1',
+      'https://www.zone.example/manual-verification-1',
+    )
+    await user.click(
+      within(dialog).getByRole('checkbox', {
+        name: /I confirm that the product, price, currency, and availability/,
+      }),
     )
     await user.click(
       within(dialog).getByRole('button', { name: 'Verify Manual Offer' }),
@@ -2244,7 +2599,7 @@ describe('admin and shared user pages', () => {
     await waitFor(() => {
       expect(backendScrapingJobs.some((job) =>
         job.store_id === webScraperTarget.store_id &&
-        job.status === 'queued' &&
+        job.status === 'pending' &&
         job.configuration?.product_limit === 15,
       )).toBe(true)
     })
@@ -2264,6 +2619,124 @@ describe('admin and shared user pages', () => {
         'Live scraping job created',
       )
     })
+  })
+
+  it('presents canonical statuses and only offers valid job actions', async () => {
+    backendScrapingJobs = [
+      makeScrapingJob({ id: 'job-scheduled', store_name: 'Scheduled Store', status: 'scheduled' }),
+      makeScrapingJob({ id: 'job-pending', store_name: 'Pending Store', status: 'pending', next_run: null }),
+      makeScrapingJob({ id: 'job-running', store_name: 'Running Store', status: 'running', next_run: null }),
+      makeScrapingJob({ id: 'job-cancelled', store_name: 'Cancelled Store', status: 'cancelled' }),
+    ]
+    render(<AdminScrapingPage />)
+
+    await screen.findByRole('button', { name: 'Create Scraping Job' })
+    const table = screen.getByRole('table')
+    expect(within(table).getByText('Pending')).toBeDefined()
+    expect(within(table).getByText('Scheduled')).toBeDefined()
+    expect(within(table).getByText('Running')).toBeDefined()
+    expect(within(table).getByText('Cancelled')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Resume Pending Store job' })).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Pause Scheduled Store job' })).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Pause Running Store job' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Cancel Running Store job' })).toBeDefined()
+    expect(screen.queryByRole('button', { name: /Run Now Cancelled Store/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Cancel Cancelled Store job' })).toBeNull()
+  })
+
+  it('searches, filters, and paginates live scraping jobs', async () => {
+    backendScrapingJobs = Array.from({ length: 12 }, (_, index) =>
+      makeScrapingJob({
+        id: `job-${index}`,
+        store_name: `Store ${index}`,
+        status: index === 0 ? 'cancelled' : 'completed',
+      }),
+    )
+    const user = userEvent.setup()
+    render(<AdminScrapingPage />)
+
+    await screen.findByRole('button', { name: 'Create Scraping Job' })
+    const table = screen.getByRole('table')
+    expect(within(table).getAllByRole('row')).toHaveLength(11)
+    expect(screen.getByText('Showing 1–10 of 12 scraping jobs')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Page 2' }))
+    expect(within(table).getAllByRole('row')).toHaveLength(3)
+    expect(screen.getByText('Showing 11–12 of 12 scraping jobs')).toBeDefined()
+
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Filter jobs by status' }),
+      'cancelled',
+    )
+    expect(within(table).getAllByRole('row')).toHaveLength(2)
+    expect(screen.getByText('Showing 1–1 of 1 scraping jobs')).toBeDefined()
+
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Filter jobs by status' }),
+      'all',
+    )
+    await user.type(screen.getByRole('searchbox', { name: 'Search scraping jobs' }), 'Store 11')
+    expect(within(table).getAllByRole('row')).toHaveLength(2)
+    expect(within(table).getByText('Store 11')).toBeDefined()
+  })
+
+  it('displays UTC timestamps in the app timezone and converts schedule input once', async () => {
+    backendScrapingJobs = [
+      makeScrapingJob({
+        last_run: '2026-11-19T17:30:00.000Z',
+        next_run: null,
+      }),
+    ]
+    const user = userEvent.setup()
+    render(<AdminScrapingPage />)
+
+    await screen.findByRole('button', { name: 'Create Scraping Job' })
+    expect(within(screen.getByRole('table')).getByText('Nov 20, 2026, 12:00 AM')).toBeDefined()
+
+    await user.click(screen.getByRole('button', { name: 'Create Scraping Job' }))
+    const dialog = screen.getByRole('dialog')
+    const scheduleInput = within(dialog).getByLabelText('First run schedule')
+    expect(scheduleInput.closest('label')?.textContent).toContain('Asia/Yangon')
+    await user.clear(scheduleInput)
+    await user.type(scheduleInput, '2026-12-01T08:00')
+    await user.click(within(dialog).getByRole('button', { name: 'Create job' }))
+
+    await waitFor(() => {
+      const createCall = vi.mocked(globalThis.fetch).mock.calls.find(
+        ([input, init]) =>
+          String(input) === '/api/admin/scraping/jobs' && init?.method === 'POST',
+      )
+      expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+        scheduled_at: '2026-12-01T01:30:00.000Z',
+        recurring: true,
+      })
+    })
+  })
+
+  it('keeps an action error visible inside the confirmation dialog', async () => {
+    backendScrapingJobs = [
+      makeScrapingJob({
+        id: 'job-running-error',
+        store_name: 'Running Store',
+        status: 'running',
+        next_run: null,
+      }),
+    ]
+    scrapingStatusError = 'The live run is no longer cancellable.'
+    const user = userEvent.setup()
+    render(<AdminScrapingPage />)
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Cancel Running Store job' }),
+    )
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel job' }),
+    )
+
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByRole('alert').textContent).toContain(
+      'The live run is no longer cancellable.',
+    )
   })
 
   it('filters audit records, paginates, and presents details as read-only', async () => {
@@ -2502,6 +2975,44 @@ describe('admin and shared user pages', () => {
     )
   })
 
+  it('stores store metadata separately from the product URL on manual entry', async () => {
+    const user = userEvent.setup()
+    seedAccounts('admin@example.test', 'Admin')
+    backendProducts = []
+
+    render(<AdminProductsPage />)
+    await user.click(
+      await screen.findByRole('button', { name: 'Add manual product' }),
+    )
+    const form = await screen.findByRole('dialog')
+    await user.clear(within(form).getByLabelText('Product ID'))
+    await user.type(within(form).getByLabelText('Product ID'), 'store-metadata-1')
+    await user.type(
+      within(form).getByLabelText('Product name'),
+      'Store Metadata Product',
+    )
+    await user.type(within(form).getByLabelText('Store name'), 'Zone Retail')
+    await user.type(
+      within(form).getByLabelText('Store website URL (optional)'),
+      'https://www.zone.example',
+    )
+    await user.type(
+      within(form).getByLabelText('Product URL (optional)'),
+      'https://www.zone.example/products/store-metadata-1',
+    )
+    await user.type(within(form).getByLabelText('Price'), '99.99')
+    await user.click(
+      within(form).getByRole('button', { name: 'Add manual product' }),
+    )
+
+    await waitFor(() => expect(backendProducts).toHaveLength(1))
+    expect(backendProducts[0]).toMatchObject({
+      store_name: 'Zone Retail',
+      store_website_url: 'https://www.zone.example',
+      product_url: 'https://www.zone.example/products/store-metadata-1',
+    })
+  })
+
   it('refreshes pagination after adding and deleting products', async () => {
     const user = userEvent.setup()
     seedAccounts('admin@example.test', 'Admin')
@@ -2517,6 +3028,7 @@ describe('admin and shared user pages', () => {
     await user.clear(within(form).getByLabelText('Product ID'))
     await user.type(within(form).getByLabelText('Product ID'), 'page-product-19')
     await user.type(within(form).getByLabelText('Product name'), 'Page Product 19')
+    await user.type(within(form).getByLabelText('Store name'), 'Page Store')
     await user.type(within(form).getByLabelText('Price'), '59.99')
     await user.click(
       within(form).getByRole('button', { name: 'Add manual product' }),
@@ -2734,6 +3246,7 @@ describe('admin and shared user pages', () => {
     )
     const form = await screen.findByRole('dialog')
     await user.type(within(form).getByLabelText('Product name'), 'Smart Band')
+    await user.type(within(form).getByLabelText('Store name'), 'Band Store')
     await user.selectOptions(
       within(form).getByLabelText('Category'),
       'Uncategorized',
@@ -2804,6 +3317,7 @@ describe('admin and shared user pages', () => {
       await screen.findByRole('button', { name: 'Edit Audio Item 2' }),
     )
     const form = await screen.findByRole('dialog')
+    await user.type(within(form).getByLabelText('Store name'), 'Audio Store')
     await user.selectOptions(within(form).getByLabelText('Category'), 'Phone')
     await user.click(within(form).getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(backendProducts[0].category).toBe('Phone'))

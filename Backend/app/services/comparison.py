@@ -12,7 +12,6 @@ import math
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse
 
 from app.config import get_database_name
 from app.services.comparison_contracts import (
@@ -45,8 +44,11 @@ from app.services.product_identity import (
     normalize_identifier,
 )
 from app.services.manual_offer_verification import (
+    has_complete_offline_document_evidence,
+    has_sufficient_evidence,
     is_manually_verified_offer,
-    valid_http_url,
+    product_url_belongs_to_store,
+    valid_public_http_url,
 )
 from app.services.test_site_detection import (
     TEST_SITE_STORE_IDS,
@@ -187,27 +189,13 @@ def _positive_price(value):
 
 
 def _valid_http_url(value):
-    if not isinstance(value, str) or not value.strip():
-        return None
-    parsed = urlparse(value.strip())
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return None
-    return value.strip()
+    # Product URLs used for retailer matching must follow the same public-URL
+    # rules as product-level verification evidence.
+    return valid_public_http_url(value)
 
 
 def _retailer_url_matches(url, store_document):
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower().removeprefix("www.")
-    if not host:
-        return False
-    website = urlparse(str(store_document.get("website_url") or ""))
-    website_host = (website.hostname or "").lower().removeprefix("www.")
-    if website_host and (host == website_host or host.endswith(f".{website_host}")):
-        return True
-    store_token = _store_key(
-        store_document.get("store_id") or store_document.get("_id") or ""
-    ).replace("-", "")
-    return bool(store_token) and store_token in re.sub(r"[^a-z0-9]", "", host)
+    return product_url_belongs_to_store(url, store_document)
 
 
 def classify_offer(offer, *, product_by_id, stores_by_id, all_store_ids,
@@ -270,10 +258,19 @@ def classify_offer(offer, *, product_by_id, stores_by_id, all_store_ids,
     if needs_review:
         reasons.append("IDENTITY_CONFLICT")
 
+    # A complete offline-document verification may omit productUrl entirely.
+    # Any productUrl that is present must still belong to the registered
+    # retailer, including on the offline-document path.
+    offline_document_ready = (
+        source_type == "manual"
+        and availability == "in_stock"
+        and has_complete_offline_document_evidence(offer)
+    )
     product_url = _valid_http_url(offer.get("productUrl"))
     if store_document is not None:
         if not product_url:
-            reasons.append("MISSING_PRODUCT_URL")
+            if not offline_document_ready:
+                reasons.append("MISSING_PRODUCT_URL")
         elif not _retailer_url_matches(product_url, store_document):
             reasons.append("RETAILER_URL_MISSING")
 
@@ -300,7 +297,7 @@ def classify_offer(offer, *, product_by_id, stores_by_id, all_store_ids,
             for reason in reasons
         )
         and is_manually_verified_offer(offer)
-        and valid_http_url(offer.get("evidenceUrl")) is not None
+        and has_sufficient_evidence(offer)
     )
 
     if is_test_site and illustrative_structural_ok:

@@ -1,12 +1,15 @@
 import type { AdminStore } from './adminStores'
 
 export type ScrapingJobStatus =
-  | 'queued'
+  | 'pending'
+  | 'scheduled'
   | 'running'
-  | 'paused'
   | 'completed'
   | 'failed'
   | 'cancelled'
+  // Legacy documents are normalized at the API boundary.
+  | 'queued'
+  | 'paused'
 
 export type ScrapingExecution = {
   id: string
@@ -25,6 +28,10 @@ export type ScrapingExecution = {
   logs: string[]
   target_url?: string
   product_limit?: number
+  run_token?: string | null
+  trigger?: 'manual' | 'scheduled' | 'recovery' | null
+  attempts?: number
+  cancelled_at?: string | null
 }
 
 export type ScrapingJobConfiguration = {
@@ -33,6 +40,7 @@ export type ScrapingJobConfiguration = {
   request_timeout_seconds: number
   retry_attempts: number
   product_limit?: number
+  recurring?: boolean
 }
 
 export type CreateScrapingJobInput = ScrapingJobConfiguration & {
@@ -58,19 +66,69 @@ export type ScrapingJob = {
   success_rate: number
   executions: ScrapingExecution[]
   updated_at: string
+  cancel_requested?: boolean
+  active_execution_id?: string | null
+  lease_expires_at?: string | null
+  last_error?: string | null
+  duration_seconds?: number | null
+  attempts?: number
+  trigger?: 'manual' | 'scheduled' | 'recovery' | null
 }
 
 export type DemoJobAction = 'start' | 'pause' | 'resume' | 'cancel'
 
 const scrapingStorageKey = 'pricepilot-admin-scraping-jobs'
 const statuses: readonly ScrapingJobStatus[] = [
-  'queued',
+  'pending',
+  'scheduled',
   'running',
-  'paused',
   'completed',
   'failed',
   'cancelled',
+  'queued',
+  'paused',
 ]
+
+const statusAliases: Partial<Record<ScrapingJobStatus, ScrapingJobStatus>> = {
+  queued: 'pending',
+  paused: 'scheduled',
+}
+
+export function normalizeScrapingJobStatus(
+  status: unknown,
+): ScrapingJobStatus | null {
+  if (typeof status !== 'string' || !statuses.includes(status as ScrapingJobStatus)) {
+    return null
+  }
+  return statusAliases[status as ScrapingJobStatus] ?? (status as ScrapingJobStatus)
+}
+
+export function normalizeScrapingExecution(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return value
+  }
+  const execution = value as Record<string, unknown>
+  return {
+    ...execution,
+    status: normalizeScrapingJobStatus(execution.status) ?? execution.status,
+  }
+}
+
+export function normalizeScrapingJob(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return value
+  }
+  const job = value as Record<string, unknown>
+  const status = normalizeScrapingJobStatus(job.status) ?? job.status
+  return {
+    ...job,
+    status,
+    next_run: status === 'cancelled' ? null : job.next_run,
+    executions: Array.isArray(job.executions)
+      ? job.executions.map(normalizeScrapingExecution)
+      : job.executions,
+  }
+}
 
 export function isScrapingExecution(value: unknown): value is ScrapingExecution {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -122,7 +180,9 @@ function isScrapingJobConfiguration(
     (configuration.product_limit === undefined ||
       (Number.isInteger(configuration.product_limit) &&
         Number(configuration.product_limit) >= 1 &&
-        Number(configuration.product_limit) <= 15))
+        Number(configuration.product_limit) <= 15)) &&
+    (configuration.recurring === undefined ||
+      typeof configuration.recurring === 'boolean')
   )
 }
 
@@ -194,7 +254,7 @@ function makeExecution(
 ): ScrapingExecution {
   const startedAt = getDemoDate(index * 3 + 1)
   const finishedAt =
-    status === 'running' || status === 'paused' || status === 'queued'
+    status === 'running' || status === 'pending' || status === 'scheduled'
       ? null
       : getDemoDate(index * 3 + 0.8)
   const failed = status === 'failed'
@@ -238,8 +298,8 @@ export function getSeedScrapingJobs(
     'running',
     'completed',
     'failed',
-    'paused',
-    'queued',
+    'scheduled',
+    'pending',
     'completed',
   ]
 
@@ -247,7 +307,7 @@ export function getSeedScrapingJobs(
     const status = seedStatuses[index % seedStatuses.length]
     const execution = makeExecution(store.store_name, index, status)
     const nextRun =
-      status === 'queued' || status === 'completed'
+      status === 'scheduled' || status === 'completed'
         ? getDemoDate(-index - 1)
         : null
     return {
@@ -349,6 +409,9 @@ export function validateScrapingJobInput(
   ) {
     errors.push('Product limit must be between 1 and 15.')
   }
+  if (input.recurring !== undefined && typeof input.recurring !== 'boolean') {
+    errors.push('Recurring must be enabled or disabled.')
+  }
   return errors
 }
 
@@ -374,8 +437,9 @@ export function createDemoScrapingJob(
       request_timeout_seconds: input.request_timeout_seconds,
       retry_attempts: input.retry_attempts,
       product_limit: input.product_limit ?? 10,
+      recurring: input.recurring !== false,
     },
-    status: 'queued',
+    status: 'pending',
     last_run: null,
     next_run: input.scheduled_at,
     products_found: 0,
@@ -426,11 +490,14 @@ export function applyDemoJobAction(
 
   const nextStatus: ScrapingJobStatus =
     action === 'pause'
-      ? 'paused'
+      ? 'pending'
       : action === 'resume'
-        ? 'running'
+        ? 'scheduled'
         : 'cancelled'
-  const finishedAt = action === 'cancel' ? now : currentExecution.finished_at
+  const finishedAt =
+    action === 'cancel' || action === 'resume'
+      ? now
+      : currentExecution.finished_at
   const updatedExecution: ScrapingExecution = {
     ...currentExecution,
     status: nextStatus,
@@ -441,7 +508,10 @@ export function applyDemoJobAction(
   return {
     ...job,
     status: nextStatus,
-    next_run: null,
+    next_run:
+      action === 'resume'
+        ? (job.configuration?.scheduled_at ?? null)
+        : null,
     executions: [updatedExecution, ...job.executions.slice(1)],
     updated_at: now,
   }

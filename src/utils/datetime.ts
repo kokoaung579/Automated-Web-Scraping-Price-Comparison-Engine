@@ -17,6 +17,27 @@ function getTimeZoneOffsetMs(timeZone: string, date: Date) {
   const tzString = date.toLocaleString('en-US', { timeZone })
   return new Date(tzString).getTime() - new Date(utcString).getTime()
 }
+
+function getAppWallClockParts(date: Date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: currentAppTimeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date)
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? '00'
+  return {
+    year: Number(value('year')),
+    month: Number(value('month')),
+    day: Number(value('day')),
+    hour: Number(value('hour')),
+    minute: Number(value('minute')),
+  }
+}
 const HAS_TIMEZONE = /(?:Z|[+-]\d{2}:?\d{2})$/i
 
 /**
@@ -43,6 +64,38 @@ export function parseUtcTimestamp(
 
   const date = new Date(normalized)
   return Number.isFinite(date.getTime()) ? date : null
+}
+
+/** Wall-clock value for a `datetime-local` input in the configured timezone. */
+export function toAppTimeZoneInputValue(
+  value: string | null | undefined,
+): string {
+  const date = parseUtcTimestamp(value)
+  if (!date) return ''
+  const { year, month, day, hour, minute } = getAppWallClockParts(date)
+  const pad = (number: number) => String(number).padStart(2, '0')
+  return `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}`
+}
+
+/** Convert a `datetime-local` wall-clock value in the configured timezone to UTC. */
+export function parseAppTimeZoneInputValue(value: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value.trim())
+  if (!match) return null
+
+  const [, year, month, day, hour, minute] = match
+  const wallClockAsUtc = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+  )
+  const offset = getTimeZoneOffsetMs(
+    currentAppTimeZone,
+    new Date(wallClockAsUtc),
+  )
+  const instant = new Date(wallClockAsUtc - offset)
+  return Number.isFinite(instant.getTime()) ? instant.toISOString() : null
 }
 
 function formatInAppTimeZone(

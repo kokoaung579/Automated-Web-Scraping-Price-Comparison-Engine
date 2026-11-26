@@ -150,8 +150,9 @@ describe('admin demo data rules', () => {
     const cancelled = applyDemoJobAction(resumed, 'cancel', time)
 
     expect(started.status).toBe('running')
-    expect(paused.status).toBe('paused')
-    expect(resumed.status).toBe('running')
+    expect(paused.status).toBe('pending')
+    expect(resumed.status).toBe('scheduled')
+    expect(resumed.next_run).toBe(seedJob.configuration?.scheduled_at ?? null)
     expect(cancelled.status).toBe('cancelled')
     expect(cancelled.executions[0].logs.at(-1)).toContain(
       'No real scraping was performed',
@@ -176,7 +177,7 @@ describe('admin demo data rules', () => {
     expect(created).toMatchObject({
       store_id: stores[0].store_id,
       store_name: stores[0].store_name,
-      status: 'queued',
+      status: 'pending',
       next_run: input.scheduled_at,
       configuration: {
         interval_minutes: input.interval_minutes,
