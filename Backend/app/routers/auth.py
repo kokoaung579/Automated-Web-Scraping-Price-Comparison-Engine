@@ -1073,6 +1073,32 @@ def _parse_datetime(value) -> datetime | None:
     return None
 
 
+def _smtp_status_code(error: Exception) -> int | None:
+    code = getattr(error, "smtp_code", None)
+    if isinstance(code, bool):
+        return None
+    if isinstance(code, int):
+        return code
+    if isinstance(code, (str, bytes, bytearray)):
+        text = (
+            code.decode("ascii", "ignore")
+            if isinstance(code, (bytes, bytearray))
+            else code
+        ).strip()
+        if text.isdigit():
+            return int(text)
+    return None
+
+
+def _log_smtp_failure(stage: str, error: Exception) -> None:
+    logger.warning(
+        "SMTP failure: stage=%s exception=%s smtp_code=%s",
+        stage,
+        type(error).__name__,
+        _smtp_status_code(error),
+    )
+
+
 def _send_email(recipient: str, subject: str, body: str) -> None:
     sender = get_gmail_smtp_email()
     password = get_gmail_app_password()
@@ -1090,17 +1116,24 @@ def _send_email(recipient: str, subject: str, body: str) -> None:
     message["To"] = recipient
     message.set_content(body)
 
+    stage = "connection"
     try:
         if port == 465:
             with smtplib.SMTP_SSL(host, port, timeout=20) as server:
+                stage = "authentication"
                 server.login(sender, password)
+                stage = "sending"
                 server.send_message(message)
         else:
             with smtplib.SMTP(host, port, timeout=20) as server:
+                stage = "starttls"
                 server.starttls()
+                stage = "authentication"
                 server.login(sender, password)
+                stage = "sending"
                 server.send_message(message)
     except Exception as error:
+        _log_smtp_failure(stage, error)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not send the email.",

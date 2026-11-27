@@ -1,12 +1,13 @@
 import hashlib
 import os
+import smtplib
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pymongo.errors import DuplicateKeyError
 
@@ -883,6 +884,153 @@ class AuthAPITests(unittest.TestCase):
         self.assertEqual(
             upgraded["passwordIterations"],
             auth.PASSWORD_ITERATIONS,
+        )
+
+
+class SmtpDiagnosticLoggingTests(unittest.TestCase):
+    def setUp(self):
+        self.sender = "sender@example.test"
+        self.password = "app-password-not-real"
+        self.host = "smtp.example.test"
+        self.recipient = "recipient@example.test"
+        self.subject = "subject-not-logged"
+        self.body = "otp-123456 body-secret"
+
+        config_patches = [
+            patch.object(auth, "get_gmail_smtp_email", return_value=self.sender),
+            patch.object(auth, "get_gmail_app_password", return_value=self.password),
+            patch.object(auth, "get_gmail_smtp_host", return_value=self.host),
+            patch.object(auth, "get_gmail_smtp_port", return_value=587),
+        ]
+        for config_patch in config_patches:
+            config_patch.start()
+            self.addCleanup(config_patch.stop)
+
+    def _smtp_server(self):
+        server = MagicMock()
+        server.__enter__.return_value = server
+        server.__exit__.return_value = False
+        return server
+
+    def _assert_smtp_failure(
+        self,
+        raised,
+        error,
+        log_output,
+        *,
+        stage,
+        exception_name,
+        smtp_code,
+    ):
+        message = "\n".join(log_output)
+        self.assertIn(f"stage={stage}", message)
+        self.assertIn(f"exception={exception_name}", message)
+        self.assertIn(f"smtp_code={smtp_code}", message)
+        self.assertEqual(raised.exception.status_code, 500)
+        self.assertEqual(raised.exception.detail, "Could not send the email.")
+        self.assertIs(raised.exception.__cause__, error)
+        for sensitive_value in (
+            self.sender,
+            self.password,
+            self.recipient,
+            self.subject,
+            self.body,
+            "123456",
+        ):
+            self.assertNotIn(sensitive_value, message)
+
+    def test_authentication_failure_is_logged_without_pii(self):
+        error = smtplib.SMTPAuthenticationError(
+            535,
+            b"Authentication credentials invalid",
+        )
+        server = self._smtp_server()
+        server.login.side_effect = error
+
+        with patch.object(auth.smtplib, "SMTP", return_value=server) as smtp:
+            with self.assertLogs(auth.logger, level="WARNING") as logs:
+                with self.assertRaises(HTTPException) as raised:
+                    auth._send_email(self.recipient, self.subject, self.body)
+
+        smtp.assert_called_once_with(self.host, 587, timeout=20)
+        server.starttls.assert_called_once_with()
+        server.login.assert_called_once_with(self.sender, self.password)
+        server.send_message.assert_not_called()
+        self._assert_smtp_failure(
+            raised,
+            error,
+            logs.output,
+            stage="authentication",
+            exception_name="SMTPAuthenticationError",
+            smtp_code=535,
+        )
+
+    def test_tls_failure_is_logged_without_pii(self):
+        error = smtplib.SMTPNotSupportedError("STARTTLS unavailable")
+        server = self._smtp_server()
+        server.starttls.side_effect = error
+
+        with patch.object(auth.smtplib, "SMTP", return_value=server) as smtp:
+            with self.assertLogs(auth.logger, level="WARNING") as logs:
+                with self.assertRaises(HTTPException) as raised:
+                    auth._send_email(self.recipient, self.subject, self.body)
+
+        smtp.assert_called_once_with(self.host, 587, timeout=20)
+        server.starttls.assert_called_once_with()
+        server.login.assert_not_called()
+        server.send_message.assert_not_called()
+        self._assert_smtp_failure(
+            raised,
+            error,
+            logs.output,
+            stage="starttls",
+            exception_name="SMTPNotSupportedError",
+            smtp_code=None,
+        )
+
+    def test_connection_failure_is_logged_without_pii(self):
+        error = smtplib.SMTPConnectError(421, b"Service unavailable")
+
+        with patch.object(auth.smtplib, "SMTP", side_effect=error) as smtp:
+            with self.assertLogs(auth.logger, level="WARNING") as logs:
+                with self.assertRaises(HTTPException) as raised:
+                    auth._send_email(self.recipient, self.subject, self.body)
+
+        smtp.assert_called_once_with(self.host, 587, timeout=20)
+        self._assert_smtp_failure(
+            raised,
+            error,
+            logs.output,
+            stage="connection",
+            exception_name="SMTPConnectError",
+            smtp_code=421,
+        )
+
+    def test_send_failure_is_logged_without_pii(self):
+        error = smtplib.SMTPSenderRefused(
+            550,
+            b"Sender refused",
+            self.sender,
+        )
+        server = self._smtp_server()
+        server.send_message.side_effect = error
+
+        with patch.object(auth.smtplib, "SMTP", return_value=server) as smtp:
+            with self.assertLogs(auth.logger, level="WARNING") as logs:
+                with self.assertRaises(HTTPException) as raised:
+                    auth._send_email(self.recipient, self.subject, self.body)
+
+        smtp.assert_called_once_with(self.host, 587, timeout=20)
+        server.starttls.assert_called_once_with()
+        server.login.assert_called_once_with(self.sender, self.password)
+        server.send_message.assert_called_once()
+        self._assert_smtp_failure(
+            raised,
+            error,
+            logs.output,
+            stage="sending",
+            exception_name="SMTPSenderRefused",
+            smtp_code=550,
         )
 
 
