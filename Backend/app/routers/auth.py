@@ -1090,12 +1090,26 @@ def _smtp_status_code(error: Exception) -> int | None:
     return None
 
 
-def _log_smtp_failure(stage: str, error: Exception) -> None:
+def _smtp_os_error(error: Exception) -> tuple[int | None, str | None]:
+    errno = getattr(error, "errno", None)
+    if isinstance(errno, bool) or not isinstance(errno, int):
+        return None, None
+    try:
+        return errno, os.strerror(errno)
+    except (OverflowError, ValueError):
+        return errno, None
+
+
+def _log_smtp_failure(stage: str, error: Exception, port: int) -> None:
+    errno, os_error = _smtp_os_error(error)
     logger.warning(
-        "SMTP failure: stage=%s exception=%s smtp_code=%s",
+        "SMTP failure: stage=%s exception=%s smtp_code=%s errno=%s os_error=%s port=%s",
         stage,
         type(error).__name__,
         _smtp_status_code(error),
+        errno,
+        os_error,
+        port,
     )
 
 
@@ -1133,7 +1147,7 @@ def _send_email(recipient: str, subject: str, body: str) -> None:
                 stage = "sending"
                 server.send_message(message)
     except Exception as error:
-        _log_smtp_failure(stage, error)
+        _log_smtp_failure(stage, error, port)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not send the email.",

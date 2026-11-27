@@ -921,11 +921,17 @@ class SmtpDiagnosticLoggingTests(unittest.TestCase):
         stage,
         exception_name,
         smtp_code,
+        errno=None,
+        os_error=None,
+        port=587,
     ):
         message = "\n".join(log_output)
         self.assertIn(f"stage={stage}", message)
         self.assertIn(f"exception={exception_name}", message)
         self.assertIn(f"smtp_code={smtp_code}", message)
+        self.assertIn(f"errno={errno}", message)
+        self.assertIn(f"os_error={os_error}", message)
+        self.assertIn(f"port={port}", message)
         self.assertEqual(raised.exception.status_code, 500)
         self.assertEqual(raised.exception.detail, "Could not send the email.")
         self.assertIs(raised.exception.__cause__, error)
@@ -963,6 +969,9 @@ class SmtpDiagnosticLoggingTests(unittest.TestCase):
             stage="authentication",
             exception_name="SMTPAuthenticationError",
             smtp_code=535,
+            errno=None,
+            os_error=None,
+            port=587,
         )
 
     def test_tls_failure_is_logged_without_pii(self):
@@ -986,6 +995,9 @@ class SmtpDiagnosticLoggingTests(unittest.TestCase):
             stage="starttls",
             exception_name="SMTPNotSupportedError",
             smtp_code=None,
+            errno=None,
+            os_error=None,
+            port=587,
         )
 
     def test_connection_failure_is_logged_without_pii(self):
@@ -1004,7 +1016,33 @@ class SmtpDiagnosticLoggingTests(unittest.TestCase):
             stage="connection",
             exception_name="SMTPConnectError",
             smtp_code=421,
+            errno=None,
+            os_error=None,
+            port=587,
         )
+
+    def test_connection_oserror_logs_errno_and_generic_description_without_raw_exception(self):
+        raw_marker = "RAW-OS-ERROR-MUST-NOT-APPEAR"
+        error = OSError(101, raw_marker)
+
+        with patch.object(auth.smtplib, "SMTP", side_effect=error) as smtp:
+            with self.assertLogs(auth.logger, level="WARNING") as logs:
+                with self.assertRaises(HTTPException) as raised:
+                    auth._send_email(self.recipient, self.subject, self.body)
+
+        smtp.assert_called_once_with(self.host, 587, timeout=20)
+        self._assert_smtp_failure(
+            raised,
+            error,
+            logs.output,
+            stage="connection",
+            exception_name="OSError",
+            smtp_code=None,
+            errno=error.errno,
+            os_error=os.strerror(error.errno),
+            port=587,
+        )
+        self.assertNotIn(raw_marker, "\n".join(logs.output))
 
     def test_send_failure_is_logged_without_pii(self):
         error = smtplib.SMTPSenderRefused(
@@ -1031,6 +1069,9 @@ class SmtpDiagnosticLoggingTests(unittest.TestCase):
             stage="sending",
             exception_name="SMTPSenderRefused",
             smtp_code=550,
+            errno=None,
+            os_error=None,
+            port=587,
         )
 
 
